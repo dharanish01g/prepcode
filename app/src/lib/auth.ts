@@ -10,3 +10,7 @@ export function register(regNo: string, dob: string) {
 export function login(regNo: string, dob: string) {
   return invoke<Session>("login", { regNo, dob });
 }
+
+export function logout() {
+  return invoke<void>("logout");
+}

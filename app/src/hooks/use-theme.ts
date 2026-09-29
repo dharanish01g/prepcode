@@ -51,3 +51,20 @@ export function useTheme() {
 
   return { theme, setTheme, toggleTheme };
 }
+
+/**
+ * Read-only: whether dark mode is currently applied. Watches the `dark` class on
+ * <html>, so it stays in sync with whichever component toggles the theme.
+ */
+export function useIsDark() {
+  const root = document.documentElement;
+  const [isDark, setIsDark] = useState(() => root.classList.contains("dark"));
+
+  useEffect(() => {
+    const observer = new MutationObserver(() => setIsDark(root.classList.contains("dark")));
+    observer.observe(root, { attributes: true, attributeFilter: ["class"] });
+    return () => observer.disconnect();
+  }, [root]);
+
+  return isDark;
+}

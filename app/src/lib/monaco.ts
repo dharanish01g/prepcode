@@ -1,0 +1,22 @@
+// Bundle Monaco with the app instead of letting @monaco-editor/react fetch it
+// from a CDN, so the editor works on offline lab machines.
+import { loader } from "@monaco-editor/react";
+import * as monaco from "monaco-editor";
+import EditorWorker from "monaco-editor/editor/editor.worker?worker";
+
+self.MonacoEnvironment = {
+  // Monaco 0.57+ bundles its language workers (TypeScript, JSON, ...) itself via
+  // `new URL(..., import.meta.url)`, but not the base editor worker. Returning
+  // undefined for other labels falls back to Monaco's own loading.
+  getWorker(_workerId, label) {
+    if (label === "editorWorkerService") return new EditorWorker();
+    return undefined as unknown as Worker;
+  },
+};
+
+loader.config({ monaco });
+
+/** Frees every open file's text, cursor and undo history (on logout). */
+export function disposeEditorModels() {
+  for (const model of monaco.editor.getModels()) model.dispose();
+}

@@ -9,6 +9,25 @@ use tauri::{AppHandle, Manager, State};
 #[derive(Default)]
 pub struct AuthLock(Mutex<()>);
 
+/// The logged-in student. File commands read this instead of trusting a
+/// register number sent from the frontend.
+#[derive(Default)]
+pub struct CurrentUser(Mutex<Option<String>>);
+
+impl CurrentUser {
+    fn set(&self, reg_no: Option<String>) {
+        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = reg_no;
+    }
+
+    pub fn get(&self) -> Result<String, String> {
+        self.0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+            .ok_or_else(|| "You're not logged in.".into())
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 struct User {
     reg_no: String,
@@ -85,6 +104,7 @@ fn validate_dob(dob: &str) -> Result<(), String> {
 pub fn register(
     app: AppHandle,
     lock: State<AuthLock>,
+    current: State<CurrentUser>,
     reg_no: String,
     dob: String,
 ) -> Result<Session, String> {
@@ -102,6 +122,7 @@ pub fn register(
     users.push(User { reg_no: reg_no.clone(), dob });
     save_users(&app, &users)?;
 
+    current.set(Some(reg_no.clone()));
     Ok(Session { reg_no })
 }
 
@@ -109,6 +130,7 @@ pub fn register(
 pub fn login(
     app: AppHandle,
     lock: State<AuthLock>,
+    current: State<CurrentUser>,
     reg_no: String,
     dob: String,
 ) -> Result<Session, String> {
@@ -129,5 +151,11 @@ pub fn login(
     fs::create_dir_all(workspace_dir(&app, &reg_no)?)
         .map_err(|e| format!("Could not open your workspace: {e}"))?;
 
+    current.set(Some(reg_no.clone()));
     Ok(Session { reg_no })
+}
+
+#[tauri::command]
+pub fn logout(current: State<CurrentUser>) {
+    current.set(None);
 }
