@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { flushSync } from "react-dom";
+import { AuthFooter } from "@/components/auth-footer";
 import { LoginScreen } from "@/components/login-screen";
 import { RegisterScreen } from "@/components/register-screen";
 import { ThemeToggle } from "@/components/theme-toggle";
@@ -50,6 +51,8 @@ function App() {
           onShowLogin={() => setAuthScreen("login")}
         />
       )}
+
+      <AuthFooter />
     </main>
   );
 }
