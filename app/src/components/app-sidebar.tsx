@@ -29,10 +29,6 @@ import { extensionOf, LANGUAGES } from "@/lib/files"
 import { useFilesQuery } from "@/lib/queries"
 import {
   InboxIcon,
-  FileIcon,
-  SendIcon,
-  ArchiveXIcon,
-  Trash2Icon,
   PlusIcon,
   ChevronRightIcon,
   FileCodeIcon,
@@ -42,7 +38,6 @@ import {
 import { useTheme } from "@/hooks/use-theme"
 import logo from "@/assets/logo.png"
 
-// This is sample data
 const data = {
   navMain: [
     {
@@ -53,42 +48,6 @@ const data = {
         />
       ),
       isActive: true,
-    },
-    {
-      title: "Drafts",
-      url: "#",
-      icon: (
-        <FileIcon
-        />
-      ),
-      isActive: false,
-    },
-    {
-      title: "Sent",
-      url: "#",
-      icon: (
-        <SendIcon
-        />
-      ),
-      isActive: false,
-    },
-    {
-      title: "Junk",
-      url: "#",
-      icon: (
-        <ArchiveXIcon
-        />
-      ),
-      isActive: false,
-    },
-    {
-      title: "Trash",
-      url: "#",
-      icon: (
-        <Trash2Icon
-        />
-      ),
-      isActive: false,
     },
   ],
 }

@@ -61,7 +61,10 @@ export function WorkspaceScreen({
         selectedFile={selectedFile}
         onSelectFile={setSelectedFile}
       />
-      <SidebarInset className="min-h-0">
+      {/* min-w-0: let the main area shrink when the sidebar expands. Without it,
+          Monaco's pixel width (set while collapsed) holds it wide and pushes
+          the header, including Run, off screen. */}
+      <SidebarInset className="min-h-0 min-w-0">
         <header className="flex shrink-0 items-center gap-2 border-b bg-background p-4">
           <SidebarTrigger className="-ml-1" />
           <Separator
