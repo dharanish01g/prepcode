@@ -16,13 +16,10 @@ export function CodeEditor({
   flushRef,
 }: {
   regNo: string;
-  filename: string | null;
+  filename: string;
   /** Set to a function that saves pending edits immediately (used before logout). */
   flushRef: FlushRef;
 }) {
-  if (!filename) {
-    return <EditorMessage>Create or select a file to start coding.</EditorMessage>;
-  }
   // Not keyed by file on purpose: like VS Code, one editor stays mounted and
   // switching files just swaps its model, so there's no reload.
   return <FileEditor regNo={regNo} filename={filename} flushRef={flushRef} />;

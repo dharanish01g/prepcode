@@ -18,10 +18,18 @@ import {
   ResizablePanel,
   ResizablePanelGroup,
 } from "@/components/ui/resizable";
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty";
 import { Separator } from "@/components/ui/separator";
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import type { Session } from "@/lib/auth";
 import { whenSavesSettled } from "@/lib/files";
+import logo from "@/assets/logo.png";
 
 export function WorkspaceScreen({
   session,
@@ -102,24 +110,41 @@ export function WorkspaceScreen({
           )}
         </header>
 
-        <ResizablePanelGroup orientation="vertical" className="min-h-0 flex-1">
-          <ResizablePanel defaultSize="70%" minSize="20%">
-            <CodeEditor
-              regNo={session.reg_no}
-              filename={selectedFile}
-              flushRef={flushEditorRef}
-            />
-          </ResizablePanel>
-          <ResizableHandle withHandle />
-          <ResizablePanel defaultSize="30%" minSize="10%">
-            <ConsolePanel
-              entries={runner.entries}
-              acceptingInput={runner.acceptingInput}
-              onSend={runner.send}
-              onClear={runner.clear}
-            />
-          </ResizablePanel>
-        </ResizablePanelGroup>
+        {selectedFile ? (
+          <ResizablePanelGroup orientation="vertical" className="min-h-0 flex-1">
+            <ResizablePanel defaultSize="70%" minSize="20%">
+              <CodeEditor
+                regNo={session.reg_no}
+                filename={selectedFile}
+                flushRef={flushEditorRef}
+              />
+            </ResizablePanel>
+            <ResizableHandle withHandle />
+            <ResizablePanel defaultSize="30%" minSize="10%">
+              <ConsolePanel
+                entries={runner.entries}
+                acceptingInput={runner.acceptingInput}
+                onSend={runner.send}
+                onClear={runner.clear}
+              />
+            </ResizablePanel>
+          </ResizablePanelGroup>
+        ) : (
+          // Like VS Code's watermark: nothing to edit or run until a file is open.
+          <Empty>
+            <EmptyHeader>
+              <EmptyMedia>
+                <img src={logo} alt="" className="size-32 opacity-40 grayscale" />
+              </EmptyMedia>
+              <EmptyTitle className="text-3xl font-semibold text-muted-foreground">
+                prepcode
+              </EmptyTitle>
+              <EmptyDescription className="text-sm">
+                Create or select a file to start coding.
+              </EmptyDescription>
+            </EmptyHeader>
+          </Empty>
+        )}
       </SidebarInset>
     </SidebarProvider>
   );

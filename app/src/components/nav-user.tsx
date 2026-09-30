@@ -1,23 +1,9 @@
 import {
-  Avatar,
-  AvatarFallback,
-} from "@/components/ui/avatar"
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuGroup,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
-import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
-  useSidebar,
 } from "@/components/ui/sidebar"
-import { ChevronsUpDownIcon, SparklesIcon, BadgeCheckIcon, CreditCardIcon, BellIcon, LogOutIcon } from "lucide-react"
+import { LogOutIcon, UserIcon } from "lucide-react"
 
 export function NavUser({
   regNo,
@@ -26,83 +12,26 @@ export function NavUser({
   regNo: string
   onLogout: () => void
 }) {
-  const { isMobile } = useSidebar()
-  const initials = regNo.slice(-2)
   return (
-    <SidebarMenu>
+    // gap-2 matches SidebarFooter's gap above, so theme, profile and log out are evenly spaced.
+    <SidebarMenu className="gap-2">
       <SidebarMenuItem>
-        <DropdownMenu>
-          <DropdownMenuTrigger
-            render={
-              <SidebarMenuButton
-                size="lg"
-                className="md:h-8 md:p-0 data-open:bg-sidebar-accent data-open:text-sidebar-accent-foreground"
-              />
-            }
-          >
-            <Avatar>
-              <AvatarFallback>{initials}</AvatarFallback>
-            </Avatar>
-            <div className="grid flex-1 text-left text-sm leading-tight">
-              <span className="truncate font-medium">{regNo}</span>
-              <span className="truncate text-xs">Student</span>
-            </div>
-            <ChevronsUpDownIcon className="ml-auto size-4" />
-          </DropdownMenuTrigger>
-          <DropdownMenuContent
-            className="min-w-56"
-            side={isMobile ? "bottom" : "right"}
-            align="end"
-            sideOffset={4}
-          >
-            {/* Base UI requires labels to sit inside a group, or opening the menu throws. */}
-            <DropdownMenuGroup>
-              <DropdownMenuLabel className="p-0 font-normal">
-                <div className="flex items-center gap-2 px-1 py-1.5 text-left text-sm">
-                  <Avatar>
-                    <AvatarFallback>{initials}</AvatarFallback>
-                  </Avatar>
-                  <div className="grid flex-1 text-left text-sm leading-tight">
-                    <span className="truncate font-medium">{regNo}</span>
-                    <span className="truncate text-xs">Student</span>
-                  </div>
-                </div>
-              </DropdownMenuLabel>
-            </DropdownMenuGroup>
-            <DropdownMenuSeparator />
-            <DropdownMenuGroup>
-              <DropdownMenuItem>
-                <SparklesIcon
-                />
-                Upgrade to Pro
-              </DropdownMenuItem>
-            </DropdownMenuGroup>
-            <DropdownMenuSeparator />
-            <DropdownMenuGroup>
-              <DropdownMenuItem>
-                <BadgeCheckIcon
-                />
-                Account
-              </DropdownMenuItem>
-              <DropdownMenuItem>
-                <CreditCardIcon
-                />
-                Billing
-              </DropdownMenuItem>
-              <DropdownMenuItem>
-                <BellIcon
-                />
-                Notifications
-              </DropdownMenuItem>
-            </DropdownMenuGroup>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem onClick={onLogout}>
-              <LogOutIcon
-              />
-              Log out
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+        <SidebarMenuButton
+          tooltip={{ children: regNo, hidden: false }}
+          className="px-2.5 md:px-2"
+        >
+          <UserIcon />
+        </SidebarMenuButton>
+      </SidebarMenuItem>
+      <SidebarMenuItem>
+        <SidebarMenuButton
+          tooltip={{ children: "Log out", hidden: false }}
+          onClick={onLogout}
+          className="px-2.5 text-destructive hover:bg-destructive/10 hover:text-destructive md:px-2"
+        >
+          <LogOutIcon />
+          <span>Log out</span>
+        </SidebarMenuButton>
       </SidebarMenuItem>
     </SidebarMenu>
   )
