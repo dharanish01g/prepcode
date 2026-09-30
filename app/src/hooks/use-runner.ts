@@ -96,8 +96,6 @@ export function useRunner() {
         } else if (event.type === "output") {
           push({ kind: event.stream, text: event.text });
           if (started && event.stream === "stdout") setAcceptingInput(true);
-        } else if (event.type === "status") {
-          push({ kind: "status", text: event.message });
         } else {
           const message = exitMessage(event);
           if (message) push({ kind: event.stopped ? "status" : "error", text: message });

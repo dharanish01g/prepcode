@@ -22,8 +22,6 @@ use crate::runtimes::{executable_path, shared_data_dir, step_command, write_step
 #[derive(Clone, Serialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum RunEvent {
-    /// A line from prepcode itself, e.g. "Compiling hello.c…".
-    Status { message: String },
     /// The student's program itself has started (after any compile step).
     Started,
     Output { stream: &'static str, text: String },
@@ -142,10 +140,6 @@ impl RunContext<'_> {
         let _ = self.channel.send(event);
     }
 
-    fn status(&self, message: String) {
-        self.send(RunEvent::Status { message });
-    }
-
     /// Compiles (if the language has a compile step) and runs the program.
     /// Compiling happens in prepcode's build folder; the program itself runs in
     /// the student's workspace, so it can open files next to their code.
@@ -177,7 +171,6 @@ impl RunContext<'_> {
             .set("shared", shared_data_dir(self.app)?);
 
         if let Some(compile) = &language.compile {
-            self.status(format!("Compiling {filename}…"));
             // Never run a stale binary if this compile fails.
             let _ = std::fs::remove_file(&binary);
             write_step_files(compile, &build_dir)?;

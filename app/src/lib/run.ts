@@ -2,7 +2,6 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 
 /** Mirrors RunEvent in src-tauri/src/run.rs. */
 export type RunEvent =
-  | { type: "status"; message: string }
   | { type: "started" }
   | { type: "output"; stream: "stdout" | "stderr"; text: string }
   | { type: "exit"; code: number | null; stopped: boolean; stage: "compile" | "run" };
