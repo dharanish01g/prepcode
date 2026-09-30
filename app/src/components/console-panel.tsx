@@ -1,19 +1,106 @@
-import { TerminalIcon } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { EraserIcon, TerminalIcon } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import type { ConsoleEntry } from "@/hooks/use-runner";
+import { cn } from "@/lib/utils";
 
-export function ConsolePanel() {
+const ENTRY_STYLES: Record<ConsoleEntry["kind"], string> = {
+  stdout: "",
+  stderr: "text-destructive",
+  input: "text-primary",
+  status: "text-muted-foreground",
+  error: "text-destructive",
+};
+
+export function ConsolePanel({
+  entries,
+  acceptingInput,
+  onSend,
+  onClear,
+}: {
+  entries: ConsoleEntry[];
+  /** Show the input box (the program is running and plausibly reading input). */
+  acceptingInput: boolean;
+  onSend: (line: string) => void;
+  onClear: () => void;
+}) {
+  const [input, setInput] = useState("");
+  const endRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // Keep the newest output in view.
+  useEffect(() => {
+    endRef.current?.scrollIntoView({ block: "end" });
+  }, [entries]);
+
+  // Ready for typing as soon as the input box appears.
+  useEffect(() => {
+    if (acceptingInput) inputRef.current?.focus();
+    else setInput("");
+  }, [acceptingInput]);
+
   return (
     <div className="flex h-full flex-col">
-      <div className="flex shrink-0 items-center gap-2 border-b px-4 py-2 text-xs font-medium text-muted-foreground">
+      <div className="flex shrink-0 items-center gap-2 border-b px-4 py-1 text-xs font-medium text-muted-foreground">
         <TerminalIcon className="size-3.5" />
         Console
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          className="ml-auto"
+          onClick={onClear}
+          disabled={entries.length === 0}
+          aria-label="Clear console"
+        >
+          <EraserIcon />
+        </Button>
       </div>
+
       <ScrollArea className="min-h-0 flex-1">
-        {/* Output will stream here once running programs is built. */}
-        <pre className="p-4 font-mono text-xs text-muted-foreground">
-          Run your program to see its output here.
+        <pre className="p-4 font-mono text-xs break-words whitespace-pre-wrap">
+          {entries.length === 0 ? (
+            <span className="text-muted-foreground">Run your program to see its output here.</span>
+          ) : (
+            entries.map((entry, i) => {
+              // prepcode's own messages always start on a fresh line.
+              const ownLine = entry.kind === "status" || entry.kind === "error";
+              const previous = entries[i - 1];
+              const needsBreak = ownLine && previous && !previous.text.endsWith("\n");
+              return (
+                <span key={i} className={cn(ENTRY_STYLES[entry.kind], ownLine && "italic")}>
+                  {needsBreak && "\n"}
+                  {entry.text}
+                  {ownLine && "\n"}
+                </span>
+              );
+            })
+          )}
+          <div ref={endRef} />
         </pre>
       </ScrollArea>
+
+      {acceptingInput && (
+        <form
+          className="shrink-0 border-t p-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            onSend(input);
+            setInput("");
+          }}
+        >
+          <Input
+            ref={inputRef}
+            value={input}
+            onChange={(e) => setInput(e.currentTarget.value)}
+            placeholder="Type input for your program and press Enter"
+            autoComplete="off"
+            spellCheck={false}
+            className="font-mono"
+          />
+        </form>
+      )}
     </div>
   );
 }

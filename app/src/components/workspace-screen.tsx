@@ -3,7 +3,8 @@ import { AppSidebar } from "@/components/app-sidebar";
 import { CodeEditor } from "@/components/code-editor";
 import { ConsolePanel } from "@/components/console-panel";
 import { SaveStatus } from "@/components/save-status";
-import { PlayIcon } from "lucide-react";
+import { PlayIcon, SquareIcon } from "lucide-react";
+import { useRunner } from "@/hooks/use-runner";
 import { Button } from "@/components/ui/button";
 import {
   Breadcrumb,
@@ -31,12 +32,22 @@ export function WorkspaceScreen({
 }) {
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const flushEditorRef = useRef<() => void>(() => {});
+  const runner = useRunner();
 
   // Save the last few keystrokes before the backend forgets who's logged in.
   async function handleLogout() {
+    if (runner.running) runner.stop();
     flushEditorRef.current();
     await whenSavesSettled();
     onLogout();
+  }
+
+  // Always run what's on screen: save pending edits first.
+  async function handleRun() {
+    if (!selectedFile) return;
+    flushEditorRef.current();
+    await whenSavesSettled();
+    runner.run(selectedFile);
   }
 
   return (
@@ -72,14 +83,20 @@ export function WorkspaceScreen({
               )}
             </BreadcrumbList>
           </Breadcrumb>
-          {/* Running programs isn't built yet; the button is wired up next. */}
           <div className="ml-auto">
             <SaveStatus />
           </div>
-          <Button disabled={!selectedFile}>
-            <PlayIcon />
-            Run
-          </Button>
+          {runner.running ? (
+            <Button variant="destructive" onClick={runner.stop}>
+              <SquareIcon />
+              Stop
+            </Button>
+          ) : (
+            <Button disabled={!selectedFile} onClick={handleRun}>
+              <PlayIcon />
+              Run
+            </Button>
+          )}
         </header>
 
         <ResizablePanelGroup orientation="vertical" className="min-h-0 flex-1">
@@ -92,7 +109,12 @@ export function WorkspaceScreen({
           </ResizablePanel>
           <ResizableHandle withHandle />
           <ResizablePanel defaultSize="30%" minSize="10%">
-            <ConsolePanel />
+            <ConsolePanel
+              entries={runner.entries}
+              acceptingInput={runner.acceptingInput}
+              onSend={runner.send}
+              onClear={runner.clear}
+            />
           </ResizablePanel>
         </ResizablePanelGroup>
       </SidebarInset>

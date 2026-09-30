@@ -29,7 +29,7 @@ fn validate_name(name: &str) -> Result<(), String> {
 
 /// Path of `<name>.<ext>` in the current student's workspace. Validating the
 /// name also rules out path separators, so this can't escape the workspace.
-fn resolve_file(app: &AppHandle, current: &CurrentUser, filename: &str) -> Result<PathBuf, String> {
+pub(crate) fn resolve_file(app: &AppHandle, current: &CurrentUser, filename: &str) -> Result<PathBuf, String> {
     let (name, extension) = filename
         .rsplit_once('.')
         .ok_or_else(|| format!("Invalid file name: {filename}"))?;
