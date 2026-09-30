@@ -74,9 +74,16 @@ jobs:
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Signs the updater bundles; the app only installs updates signed by
+          # this key (public half is plugins.updater.pubkey in tauri.conf.json).
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
         with:
           projectPath: app
           args: --target ${{ matrix.target }}
+          # latest.json points Windows at the per-user NSIS installer, which
+          # updates without admin rights (unlike the MSI).
+          updaterJsonPreferNsis: true
           tagName: v__VERSION__
           releaseName: prepcode v__VERSION__
           releaseBody: |
