@@ -7,6 +7,7 @@ import { SaveStatus } from "@/components/save-status";
 import { PlayIcon, SquareIcon, WandSparklesIcon } from "lucide-react";
 import { Spinner } from "@/components/ui/spinner";
 import { useRunner } from "@/hooks/use-runner";
+import { canFormat } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import {
   Breadcrumb,
@@ -117,7 +118,7 @@ export function WorkspaceScreen({
           </div>
           <Button
             variant="outline"
-            disabled={!selectedFile || formatting}
+            disabled={!selectedFile || !canFormat(selectedFile) || formatting}
             onClick={handleFormat}
           >
             {formatting ? <Spinner /> : <WandSparklesIcon />}

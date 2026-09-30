@@ -4,7 +4,7 @@ import { toast } from "sonner";
 import { editorModelPath } from "@/lib/monaco";
 import { useIsDark } from "@/hooks/use-theme";
 import { monacoLanguageOf } from "@/lib/files";
-import { formatCode } from "@/lib/format";
+import { formatCode, NoFormatterError } from "@/lib/format";
 import { useFileContentQuery, useSaveFileMutation } from "@/lib/queries";
 
 /** How long to wait after the last keystroke before saving. */
@@ -90,7 +90,10 @@ function FileEditor({
     } catch (err) {
       console.error("Format failed:", err);
       toast.error(`Couldn't format ${filename}`, {
-        description: "Fix the errors in your code first, then try again.",
+        description:
+          err instanceof NoFormatterError
+            ? "Formatting isn't available for this language yet."
+            : "Fix the errors in your code first, then try again.",
       });
       return;
     }

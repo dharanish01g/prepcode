@@ -11,7 +11,7 @@ export default defineConfig(() => ({
   // The code formatters load their .wasm with `?url` / `?init` imports, which
   // dev-time pre-bundling would break.
   optimizeDeps: {
-    exclude: ["@wasm-fmt/clang-format", "@wasm-fmt/ruff_fmt"],
+    exclude: ["@wasm-fmt/clang-format", "@wasm-fmt/gofmt", "@wasm-fmt/ruff_fmt"],
   },
   resolve: {
     alias: {

@@ -467,7 +467,7 @@ mod tests {
 
         let languages = languages(&conn).unwrap();
         let exts: Vec<_> = languages.iter().map(|l| l.extension.as_str()).collect();
-        assert_eq!(exts, ["py", "js", "c", "cpp", "java"]);
+        assert_eq!(exts, ["py", "js", "c", "cpp", "java", "go"]);
 
         let c = language(&conn, "c").unwrap().unwrap();
         assert_eq!(c.run.program.as_deref(), Some("{binary}"));
