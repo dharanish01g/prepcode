@@ -1,40 +1,53 @@
 import { useCallback, useLayoutEffect, useRef } from "react";
-import Editor from "@monaco-editor/react";
-import "@/lib/monaco";
+import Editor, { type OnMount } from "@monaco-editor/react";
+import { toast } from "sonner";
+import { editorModelPath } from "@/lib/monaco";
 import { useIsDark } from "@/hooks/use-theme";
 import { monacoLanguageOf } from "@/lib/files";
+import { formatCode } from "@/lib/format";
 import { useFileContentQuery, useSaveFileMutation } from "@/lib/queries";
 
 /** How long to wait after the last keystroke before saving. */
 const AUTOSAVE_DELAY_MS = 500;
 
 export type FlushRef = React.RefObject<() => void>;
+export type FormatRef = React.RefObject<() => Promise<void>>;
+
+type MonacoEditor = Parameters<OnMount>[0];
 
 export function CodeEditor({
   regNo,
   filename,
   flushRef,
+  formatRef,
 }: {
   regNo: string;
   filename: string;
   /** Set to a function that saves pending edits immediately (used before logout). */
   flushRef: FlushRef;
+  /** Set to a function that formats the open file (used by the Format button). */
+  formatRef: FormatRef;
 }) {
   // Not keyed by file on purpose: like VS Code, one editor stays mounted and
   // switching files just swaps its model, so there's no reload.
-  return <FileEditor regNo={regNo} filename={filename} flushRef={flushRef} />;
+  return (
+    <FileEditor regNo={regNo} filename={filename} flushRef={flushRef} formatRef={formatRef} />
+  );
 }
 
 function FileEditor({
   regNo,
   filename,
   flushRef,
+  formatRef,
 }: {
   regNo: string;
   filename: string;
   flushRef: FlushRef;
+  formatRef: FormatRef;
 }) {
   const isDark = useIsDark();
+  const editorRef = useRef<MonacoEditor | null>(null);
   const content = useFileContentQuery(regNo, filename);
   const { mutate: save } = useSaveFileMutation(regNo);
 
@@ -63,6 +76,44 @@ function FileEditor({
 
   useLayoutEffect(() => () => flush(), [filename, flush]);
 
+  // Replaces the text with the formatted version as one edit, so a single
+  // Ctrl/Cmd+Z undoes it. The change then autosaves like any other edit.
+  const format = useCallback(async () => {
+    const editor = editorRef.current;
+    const model = editor?.getModel();
+    if (!editor || !model) return;
+    const source = model.getValue();
+
+    let formatted: string;
+    try {
+      formatted = await formatCode(filename, source);
+    } catch (err) {
+      console.error("Format failed:", err);
+      toast.error(`Couldn't format ${filename}`, {
+        description: "Fix the errors in your code first, then try again.",
+      });
+      return;
+    }
+    // Skip if nothing changed, or the student switched files or kept typing meanwhile.
+    if (formatted === source || editor.getModel() !== model || model.getValue() !== source) {
+      return;
+    }
+
+    const position = editor.getPosition();
+    editor.pushUndoStop();
+    editor.executeEdits("format", [{ range: model.getFullModelRange(), text: formatted }]);
+    editor.pushUndoStop();
+    if (position) editor.setPosition(model.validatePosition(position));
+    editor.focus();
+  }, [filename]);
+
+  useLayoutEffect(() => {
+    formatRef.current = format;
+    return () => {
+      formatRef.current = async () => {};
+    };
+  }, [format, formatRef]);
+
   if (content.isError) {
     return <EditorMessage>{String(content.error)}</EditorMessage>;
   }
@@ -74,13 +125,24 @@ function FileEditor({
   return (
     <Editor
       // One model per file, scoped by student. Monaco keeps each model (text,
-      // cursor, undo history) while switching; they're disposed on logout.
-      path={`${regNo}/${filename}`}
+      // cursor, undo history) while switching; they're disposed on logout, and
+      // one at a time when its file is renamed or deleted.
+      path={editorModelPath(regNo, filename)}
       defaultValue={content.data}
       language={monacoLanguageOf(filename)}
       theme={isDark ? "vs-dark" : "light"}
       keepCurrentModel
       loading={null}
+      onMount={(editor, monaco) => {
+        editorRef.current = editor;
+        // Shift+Alt+F, the same shortcut as VS Code's Format Document.
+        editor.addAction({
+          id: "prepcode.format",
+          label: "Format Code",
+          keybindings: [monaco.KeyMod.Shift | monaco.KeyMod.Alt | monaco.KeyCode.KeyF],
+          run: () => formatRef.current(),
+        });
+      }}
       onChange={(value) => {
         pending.current = { filename, content: value ?? "" };
         clearTimeout(timer.current);

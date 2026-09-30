@@ -1,7 +1,9 @@
 use std::fs::{self, OpenOptions};
 use std::io::ErrorKind;
 use std::path::PathBuf;
+use std::time::UNIX_EPOCH;
 
+use serde::Serialize;
 use tauri::{AppHandle, State};
 
 use crate::auth::{workspace_dir, CurrentUser};
@@ -84,6 +86,32 @@ pub fn list_files(app: AppHandle, current: State<CurrentUser>) -> Result<Vec<Str
     Ok(files)
 }
 
+#[derive(Serialize)]
+pub struct FileHistoryEntry {
+    filename: String,
+    /// Last modified, in milliseconds since the Unix epoch (what JS Date takes).
+    modified: u64,
+}
+
+/// The student's files with when each was last edited, newest first.
+#[tauri::command]
+pub fn list_file_history(
+    app: AppHandle,
+    current: State<CurrentUser>,
+) -> Result<Vec<FileHistoryEntry>, String> {
+    let dir = workspace_dir(&app, &current.get()?)?;
+    let mut entries: Vec<FileHistoryEntry> = list_files(app, current)?
+        .into_iter()
+        .filter_map(|filename| {
+            let modified = fs::metadata(dir.join(&filename)).and_then(|m| m.modified()).ok()?;
+            let modified = modified.duration_since(UNIX_EPOCH).ok()?.as_millis() as u64;
+            Some(FileHistoryEntry { filename, modified })
+        })
+        .collect();
+    entries.sort_by(|a, b| b.modified.cmp(&a.modified));
+    Ok(entries)
+}
+
 /// Creates an empty `<name>.<extension>` and returns the filename.
 #[tauri::command]
 pub fn create_file(
@@ -115,5 +143,52 @@ pub fn create_file(
         Ok(_) => Ok(filename),
         Err(e) if e.kind() == ErrorKind::AlreadyExists => Err(format!("{filename} already exists.")),
         Err(e) => Err(format!("Could not create {filename}: {e}")),
+    }
+}
+
+/// Renames `filename` to `<new_name>.<same extension>` and returns the new
+/// filename. The language can't change, so the extension is kept.
+#[tauri::command]
+pub fn rename_file(
+    app: AppHandle,
+    current: State<CurrentUser>,
+    filename: String,
+    new_name: String,
+) -> Result<String, String> {
+    let old_path = resolve_file(&app, &current, &filename)?;
+    let new_name = new_name.trim();
+    validate_name(new_name)?;
+    let extension = filename.rsplit_once('.').map(|(_, ext)| ext).unwrap_or_default();
+    let new_filename = format!("{new_name}.{extension}");
+    if new_filename == filename {
+        return Ok(new_filename);
+    }
+    if !old_path.is_file() {
+        return Err(format!("{filename} doesn't exist anymore."));
+    }
+
+    // Case-insensitive, like create_file. A case-only change (hello.py ->
+    // Hello.py) is allowed: it's the same file.
+    let taken = list_files(app.clone(), current.clone())?
+        .iter()
+        .any(|f| f.eq_ignore_ascii_case(&new_filename) && !f.eq_ignore_ascii_case(&filename));
+    if taken {
+        return Err(format!("{new_filename} already exists."));
+    }
+
+    fs::rename(&old_path, old_path.with_file_name(&new_filename))
+        .map_err(|e| format!("Could not rename {filename}: {e}"))?;
+    Ok(new_filename)
+}
+
+/// Permanently deletes `filename` from the student's workspace.
+#[tauri::command]
+pub fn delete_file(app: AppHandle, current: State<CurrentUser>, filename: String) -> Result<(), String> {
+    let path = resolve_file(&app, &current, &filename)?;
+    match fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        // Already gone is what the student wanted anyway.
+        Err(e) if e.kind() == ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(format!("Could not delete {filename}: {e}")),
     }
 }

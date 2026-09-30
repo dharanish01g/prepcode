@@ -25,3 +25,17 @@ onZoomApplied(() => monaco.editor.remeasureFonts());
 export function disposeEditorModels() {
   for (const model of monaco.editor.getModels()) model.dispose();
 }
+
+/** The editor model path for a student's file, e.g. "21CS001/hello.py". */
+export function editorModelPath(regNo: string, filename: string) {
+  return `${regNo}/${filename}`;
+}
+
+/**
+ * Frees one file's editor model. Needed after a rename or delete: the editor
+ * reuses a model by path, so a new file with the old name would otherwise
+ * show the old text. Call it once no editor is showing the file.
+ */
+export function disposeEditorModel(path: string) {
+  monaco.editor.getModel(monaco.Uri.parse(path))?.dispose();
+}

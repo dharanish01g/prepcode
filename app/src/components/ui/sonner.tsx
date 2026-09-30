@@ -31,13 +31,18 @@ const Toaster = ({ ...props }: ToasterProps) => {
         {
           "--normal-bg": "var(--popover)",
           "--normal-text": "var(--popover-foreground)",
-          "--normal-border": "var(--border)",
-          "--border-radius": "var(--radius)",
+          // Match the other popups in this style (menus, popovers, dialogs):
+          // square corners and the same faint ring-foreground/10 outline.
+          "--normal-border": "color-mix(in oklab, var(--foreground) 10%, transparent)",
+          "--border-radius": "0px",
         } as React.CSSProperties
       }
       toastOptions={{
         classNames: {
-          toast: "cn-toast",
+          // `!` beats sonner's own stylesheet, which is more specific.
+          toast: "cn-toast shadow-md!",
+          title: "text-xs! font-medium!",
+          description: "text-xs! text-muted-foreground!",
         },
       }}
       {...props}

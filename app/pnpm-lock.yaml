@@ -35,6 +35,12 @@ importers:
       '@tauri-apps/plugin-updater':
         specifier: ^2.13.0
         version: 2.13.0
+      '@wasm-fmt/clang-format':
+        specifier: ^23.1.1
+        version: 23.1.1
+      '@wasm-fmt/ruff_fmt':
+        specifier: ^0.15.20
+        version: 0.15.20
       class-variance-authority:
         specifier: ^0.7.1
         version: 0.7.1
@@ -50,6 +56,9 @@ importers:
       monaco-editor:
         specifier: ^0.57.0
         version: 0.57.0
+      prettier:
+        specifier: ^3.9.9
+        version: 3.9.9
       react:
         specifier: ^19.1.0
         version: 19.3.0
@@ -675,6 +684,14 @@ packages:
         optional: true
       oxc-transform-react:
         optional: true
+
+  '@wasm-fmt/clang-format@23.1.1':
+    resolution: {integrity: sha512-SPA6H8DI/MOJAr0CfpbFBoqI5sfrimu3SlovuAAy36mq9vs9TOkS48lpUsNaPLeZzeQVEGe+pfbJHXKxiroP/g==}
+    engines: {node: '>=16.17.0'}
+    hasBin: true
+
+  '@wasm-fmt/ruff_fmt@0.15.20':
+    resolution: {integrity: sha512-PYij4wTiDSTx6MyBGHSY0nWDjSiTbOB3moPJiZTBL8F0JZLEfHAi4lYAn9SC9Hzm8tVeTnL7Qyf1iPW0TKHVEg==}
 
   accepts@2.0.0:
     resolution: {integrity: sha512-5cvg6CtKwfgdmVqY1WIiXKc3Q1bkRqGLi+2W/6ao+6Y7gu/RCwRuAhGEzh5B4KlszSuTLgZYuqFqo5bImjNKng==}
@@ -1670,6 +1687,11 @@ packages:
     resolution: {integrity: sha512-C+y9x90UElAddDZmV4qOx9W53B61PO7cIqWz2dQsWlwswuq4mr8NEwytdGKboYbQlGZ3awrkTeNvcZiZNHnQ8A==}
     engines: {node: '>=20'}
 
+  prettier@3.9.9:
+    resolution: {integrity: sha512-Z/CJHIkdujO/OtN7nXUii0Rf3VT5SRuhjBA82Xvu2XhBUgX3nhP67T0LHceBdQLex7OOFGTox+Q5Yg8Jk2Qivg==}
+    engines: {node: '>=14'}
+    hasBin: true
+
   pretty-ms@9.3.1:
     resolution: {integrity: sha512-HzMy3Geq23nVALD/M2LliU+F+M+gVNsvkQWWqeBZ8HDiCgzo6YPJ/Omrmtq24EFrIsk0a3EkQGEd7bDOo+IhGA==}
     engines: {node: '>=18'}
@@ -2603,6 +2625,10 @@ snapshots:
       '@rolldown/pluginutils': 1.0.1
       vite: 8.3.1(@types/node@26.6.3)(jiti@2.7.0)
 
+  '@wasm-fmt/clang-format@23.1.1': {}
+
+  '@wasm-fmt/ruff_fmt@0.15.20': {}
+
   accepts@2.0.0:
     dependencies:
       mime-types: 3.0.2
@@ -3436,6 +3462,8 @@ snapshots:
   powershell-utils@0.1.0: {}
 
   powershell-utils@0.2.1: {}
+
+  prettier@3.9.9: {}
 
   pretty-ms@9.3.1:
     dependencies:

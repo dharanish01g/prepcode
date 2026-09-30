@@ -1,9 +1,11 @@
 import { useRef, useState } from "react";
 import { AppSidebar } from "@/components/app-sidebar";
 import { CodeEditor } from "@/components/code-editor";
+import { FileIcon } from "@/components/file-icon";
 import { ConsolePanel } from "@/components/console-panel";
 import { SaveStatus } from "@/components/save-status";
-import { PlayIcon, SquareIcon } from "lucide-react";
+import { PlayIcon, SquareIcon, WandSparklesIcon } from "lucide-react";
+import { Spinner } from "@/components/ui/spinner";
 import { useRunner } from "@/hooks/use-runner";
 import { Button } from "@/components/ui/button";
 import {
@@ -40,6 +42,8 @@ export function WorkspaceScreen({
 }) {
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const flushEditorRef = useRef<() => void>(() => {});
+  const formatEditorRef = useRef<() => Promise<void>>(async () => {});
+  const [formatting, setFormatting] = useState(false);
   const runner = useRunner();
 
   // Save the last few keystrokes before the backend forgets who's logged in.
@@ -48,6 +52,16 @@ export function WorkspaceScreen({
     flushEditorRef.current();
     await whenSavesSettled();
     onLogout();
+  }
+
+  // The first format of each language loads its formatter, so show progress.
+  async function handleFormat() {
+    setFormatting(true);
+    try {
+      await formatEditorRef.current();
+    } finally {
+      setFormatting(false);
+    }
   }
 
   // Always run what's on screen: save pending edits first.
@@ -68,6 +82,7 @@ export function WorkspaceScreen({
         onLogout={handleLogout}
         selectedFile={selectedFile}
         onSelectFile={setSelectedFile}
+        onFlushEdits={() => flushEditorRef.current()}
       />
       {/* min-w-0: let the main area shrink when the sidebar expands. Without it,
           Monaco's pixel width (set while collapsed) holds it wide and pushes
@@ -88,7 +103,10 @@ export function WorkspaceScreen({
                 <>
                   <BreadcrumbSeparator />
                   <BreadcrumbItem>
-                    <BreadcrumbPage>{selectedFile}</BreadcrumbPage>
+                    <BreadcrumbPage className="flex items-center gap-1.5">
+                      <FileIcon filename={selectedFile} />
+                      {selectedFile}
+                    </BreadcrumbPage>
                   </BreadcrumbItem>
                 </>
               )}
@@ -97,6 +115,14 @@ export function WorkspaceScreen({
           <div className="ml-auto">
             <SaveStatus />
           </div>
+          <Button
+            variant="outline"
+            disabled={!selectedFile || formatting}
+            onClick={handleFormat}
+          >
+            {formatting ? <Spinner /> : <WandSparklesIcon />}
+            Format
+          </Button>
           {runner.running ? (
             <Button variant="destructive" onClick={runner.stop}>
               <SquareIcon />
@@ -117,6 +143,7 @@ export function WorkspaceScreen({
                 regNo={session.reg_no}
                 filename={selectedFile}
                 flushRef={flushEditorRef}
+                formatRef={formatEditorRef}
               />
             </ResizablePanel>
             <ResizableHandle withHandle />

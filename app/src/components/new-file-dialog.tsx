@@ -21,6 +21,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
+import { FileIcon } from "@/components/file-icon";
 import { DownloadIcon } from "lucide-react";
 import { fileNameError, LANGUAGES, type Extension } from "@/lib/files";
 import { useCreateFileMutation } from "@/lib/queries";
@@ -136,6 +137,7 @@ function NewFileForm({
                 <SelectLabel>Installed</SelectLabel>
                 {installed.map((lang) => (
                   <SelectItem key={lang.value} value={lang.value}>
+                    <FileIcon extension={lang.value} />
                     {lang.label} (.{lang.value})
                   </SelectItem>
                 ))}
@@ -200,6 +202,7 @@ function NotInstalledRow({
   return (
     <div className="flex flex-col gap-1 py-1 pr-1 pl-2 text-xs">
       <div className="flex items-center gap-2">
+        <FileIcon extension={extension} className="opacity-60 grayscale" />
         <span className="flex-1 text-muted-foreground opacity-60">{label}</span>
         {downloading && (
           <span className="text-muted-foreground tabular-nums">{progressLabel(progress)}</span>

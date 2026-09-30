@@ -1,9 +1,15 @@
 "use client"
 
 import * as React from "react"
+import { flushSync } from "react-dom"
 
 import { NavUser } from "@/components/nav-user"
+import { DeleteFileDialog } from "@/components/delete-file-dialog"
+import { FileIcon } from "@/components/file-icon"
+import { FileMenuItem } from "@/components/file-menu-item"
+import { HistoryList } from "@/components/history-list"
 import { NewFileDialog } from "@/components/new-file-dialog"
+import { RenameFileDialog } from "@/components/rename-file-dialog"
 import { ZoomMenu } from "@/components/zoom-menu"
 import { Button } from "@/components/ui/button"
 import {
@@ -27,12 +33,13 @@ import {
 } from "@/components/ui/sidebar"
 import type { Session } from "@/lib/auth"
 import { extensionOf, LANGUAGES } from "@/lib/files"
+import { disposeEditorModel, editorModelPath } from "@/lib/monaco"
 import { useFilesQuery } from "@/lib/queries"
 import {
+  HistoryIcon,
   InboxIcon,
   PlusIcon,
   ChevronRightIcon,
-  FileCodeIcon,
   MoonIcon,
   SunIcon,
 } from "lucide-react"
@@ -41,15 +48,9 @@ import logo from "@/assets/logo.png"
 
 const data = {
   navMain: [
-    {
-      title: "Programs",
-      url: "#",
-      icon: (
-        <InboxIcon
-        />
-      ),
-      isActive: true,
-    },
+    { title: "Programs", icon: <InboxIcon /> },
+    // Every program by when it was last edited, newest first.
+    { title: "History", icon: <HistoryIcon /> },
   ],
 }
 
@@ -58,12 +59,15 @@ export function AppSidebar({
   onLogout,
   selectedFile,
   onSelectFile,
+  onFlushEdits,
   ...props
 }: React.ComponentProps<typeof Sidebar> & {
   session: Session
   onLogout: () => void
   selectedFile: string | null
-  onSelectFile: (filename: string) => void
+  onSelectFile: (filename: string | null) => void
+  /** Saves the editor's pending edits now (before a rename or delete). */
+  onFlushEdits: () => void
 }) {
   // Note: I'm using state to show active item.
   // IRL you should use the url/router.
@@ -74,6 +78,15 @@ export function AppSidebar({
   const files = filesQuery.data ?? []
   const [search, setSearch] = React.useState("")
   const [newFileOpen, setNewFileOpen] = React.useState(false)
+  const [renaming, setRenaming] = React.useState<string | null>(null)
+  const [deleting, setDeleting] = React.useState<string | null>(null)
+
+  // Moves the editor off `oldFile` (synchronously, so Monaco has switched
+  // models), then frees its model so a future file with that name starts fresh.
+  function releaseFile(oldFile: string, next: string | null) {
+    if (selectedFile === oldFile) flushSync(() => onSelectFile(next))
+    disposeEditorModel(editorModelPath(session.reg_no, oldFile))
+  }
 
   // One category per language that has files, in LANGUAGES order.
   const query = search.trim().toLowerCase()
@@ -128,7 +141,7 @@ export function AppSidebar({
                         setActiveItem(item)
                         setOpen(true)
                       }}
-                      isActive={activeItem?.title === item.title}
+                      isActive={activeItem.title === item.title}
                       className="px-2.5 md:px-2"
                     >
                       {item.icon}
@@ -168,7 +181,7 @@ export function AppSidebar({
         <SidebarHeader className="gap-3.5 border-b p-4">
           <div className="flex w-full items-center justify-between">
             <div className="text-base font-medium text-foreground">
-              {activeItem?.title}
+              {activeItem.title}
             </div>
             <Button size="sm" onClick={() => setNewFileOpen(true)}>
               <PlusIcon />
@@ -193,54 +206,128 @@ export function AppSidebar({
           />
         </SidebarHeader>
         <SidebarContent className="py-2">
-          {filesQuery.isError ? (
-            <p className="px-4 py-2 text-sm text-destructive">
-              Could not load your files: {String(filesQuery.error)}
-            </p>
+          {activeItem.title === "History" ? (
+            <HistoryList
+              regNo={session.reg_no}
+              search={query}
+              selectedFile={selectedFile}
+              onSelectFile={onSelectFile}
+              onRename={setRenaming}
+              onDelete={setDeleting}
+            />
           ) : (
-            filesQuery.isSuccess &&
-            categories.length === 0 && (
-              <p className="px-4 py-2 text-sm text-muted-foreground">
-                {files.length === 0
-                  ? "No programs yet. Click New file to create one."
-                  : "No files match your search."}
-              </p>
-            )
+            <ProgramsList
+              isError={filesQuery.isError}
+              error={filesQuery.error}
+              isSuccess={filesQuery.isSuccess}
+              hasFiles={files.length > 0}
+              categories={categories}
+              selectedFile={selectedFile}
+              onSelectFile={onSelectFile}
+              onRename={setRenaming}
+              onDelete={setDeleting}
+            />
           )}
-          {categories.map((category) => (
-            <Collapsible key={category.value} defaultOpen>
-              {/* Vertical padding lives on SidebarContent so groups sit close together. */}
-              <SidebarGroup className="py-0">
-                <SidebarGroupLabel
-                  render={<CollapsibleTrigger />}
-                  className="group/label w-full gap-2"
-                >
-                  <ChevronRightIcon className="transition-transform group-data-panel-open/label:rotate-90" />
-                  {category.label}
-                  <span className="ml-auto">{category.files.length}</span>
-                </SidebarGroupLabel>
-                <CollapsibleContent>
-                  <SidebarGroupContent>
-                    <SidebarMenu>
-                      {category.files.map((file) => (
-                        <SidebarMenuItem key={file}>
-                          <SidebarMenuButton
-                            isActive={selectedFile === file}
-                            onClick={() => onSelectFile(file)}
-                          >
-                            <FileCodeIcon />
-                            <span>{file}</span>
-                          </SidebarMenuButton>
-                        </SidebarMenuItem>
-                      ))}
-                    </SidebarMenu>
-                  </SidebarGroupContent>
-                </CollapsibleContent>
-              </SidebarGroup>
-            </Collapsible>
-          ))}
         </SidebarContent>
       </Sidebar>
+
+      <RenameFileDialog
+        filename={renaming}
+        regNo={session.reg_no}
+        existingFiles={files}
+        onClose={() => setRenaming(null)}
+        beforeRename={onFlushEdits}
+        onRenamed={(oldFile, newFile) => {
+          setRenaming(null)
+          releaseFile(oldFile, newFile)
+        }}
+      />
+      <DeleteFileDialog
+        filename={deleting}
+        regNo={session.reg_no}
+        onClose={() => setDeleting(null)}
+        beforeDelete={onFlushEdits}
+        onDeleted={(file) => {
+          setDeleting(null)
+          releaseFile(file, null)
+        }}
+      />
     </Sidebar>
+  )
+}
+
+type Category = (typeof LANGUAGES)[number] & { files: string[] }
+
+/** Files grouped by language, each group collapsible. */
+function ProgramsList({
+  isError,
+  error,
+  isSuccess,
+  hasFiles,
+  categories,
+  selectedFile,
+  onSelectFile,
+  onRename,
+  onDelete,
+}: {
+  isError: boolean
+  error: unknown
+  isSuccess: boolean
+  hasFiles: boolean
+  categories: Category[]
+  selectedFile: string | null
+  onSelectFile: (filename: string) => void
+  onRename: (filename: string) => void
+  onDelete: (filename: string) => void
+}) {
+  return (
+    <>
+      {isError ? (
+        <p className="px-4 py-2 text-sm text-destructive">
+          Could not load your files: {String(error)}
+        </p>
+      ) : (
+        isSuccess &&
+        categories.length === 0 && (
+          <p className="px-4 py-2 text-sm text-muted-foreground">
+            {!hasFiles
+              ? "No programs yet. Click New file to create one."
+              : "No files match your search."}
+          </p>
+        )
+      )}
+      {categories.map((category) => (
+        <Collapsible key={category.value} defaultOpen>
+          {/* Vertical padding lives on SidebarContent so groups sit close together. */}
+          <SidebarGroup className="py-0">
+            <SidebarGroupLabel
+              render={<CollapsibleTrigger />}
+              className="group/label w-full gap-2"
+            >
+              <ChevronRightIcon className="transition-transform group-data-panel-open/label:rotate-90" />
+              <FileIcon extension={category.value} />
+              {category.label}
+              <span className="ml-auto">{category.files.length}</span>
+            </SidebarGroupLabel>
+            <CollapsibleContent>
+              <SidebarGroupContent>
+                <SidebarMenu>
+                  {category.files.map((file) => (
+                    <FileMenuItem
+                      key={file}
+                      file={file}
+                      isActive={selectedFile === file}
+                      onSelect={() => onSelectFile(file)}
+                      onRename={() => onRename(file)}
+                      onDelete={() => onDelete(file)}
+                    />
+                  ))}
+                </SidebarMenu>
+              </SidebarGroupContent>
+            </CollapsibleContent>
+          </SidebarGroup>
+        </Collapsible>
+      ))}
+    </>
   )
 }
