@@ -4,6 +4,7 @@ import * as React from "react"
 
 import { NavUser } from "@/components/nav-user"
 import { NewFileDialog } from "@/components/new-file-dialog"
+import { ZoomMenu } from "@/components/zoom-menu"
 import { Button } from "@/components/ui/button"
 import {
   Collapsible,
@@ -140,7 +141,9 @@ export function AppSidebar({
           </SidebarGroup>
         </SidebarContent>
         <SidebarFooter>
-          <SidebarMenu>
+          {/* gap-2 matches the footer's own gap, so all footer items are evenly spaced. */}
+          <SidebarMenu className="gap-2">
+            <ZoomMenu />
             <SidebarMenuItem>
               <SidebarMenuButton
                 tooltip={{

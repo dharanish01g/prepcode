@@ -4,7 +4,10 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import App from "./App";
 import { AppUpdater } from "@/components/app-updater";
 import { Toaster } from "@/components/ui/sonner";
+import { initZoom } from "@/hooks/use-zoom";
 import { queryClient } from "@/lib/query-client";
+
+initZoom();
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>

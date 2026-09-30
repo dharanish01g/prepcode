@@ -3,6 +3,7 @@
 import { loader } from "@monaco-editor/react";
 import * as monaco from "monaco-editor";
 import EditorWorker from "monaco-editor/editor/editor.worker?worker";
+import { onZoomApplied } from "@/hooks/use-zoom";
 
 self.MonacoEnvironment = {
   // Monaco 0.57+ bundles its language workers (TypeScript, JSON, ...) itself via
@@ -15,6 +16,10 @@ self.MonacoEnvironment = {
 };
 
 loader.config({ monaco });
+
+// Monaco caches character widths; re-measure after zooming so the cursor and
+// selections stay aligned with the text.
+onZoomApplied(() => monaco.editor.remeasureFonts());
 
 /** Frees every open file's text, cursor and undo history (on logout). */
 export function disposeEditorModels() {
