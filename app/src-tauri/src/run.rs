@@ -78,7 +78,7 @@ pub async fn run_program(
     let extension = filename.rsplit_once('.').map(|(_, ext)| ext).unwrap_or_default();
     let exe = executable_path(&app, extension)?.ok_or_else(|| {
         format!(
-            "{} isn't installed yet. Click New file, open Type, and download it.",
+            "{} isn't installed yet. Click New file, open Language, and download it.",
             language_name(extension)
         )
     })?;

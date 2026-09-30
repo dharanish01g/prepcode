@@ -95,7 +95,7 @@ pub fn create_file(
     let name = name.trim();
     validate_name(name)?;
     if !EXTENSIONS.contains(&extension.as_str()) {
-        return Err("Pick a file type.".into());
+        return Err("Select a language.".into());
     }
 
     let dir = workspace_dir(&app, &current.get()?)?;

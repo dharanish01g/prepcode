@@ -118,7 +118,7 @@ function NewFileForm({
       </div>
 
       <div className="flex flex-col gap-2">
-        <Label htmlFor="file-type">Type</Label>
+        <Label htmlFor="file-language">Language</Label>
         <Select
           items={LANGUAGES}
           value={extension}
@@ -127,8 +127,8 @@ function NewFileForm({
             createFile.reset();
           }}
         >
-          <SelectTrigger id="file-type" className="w-full" disabled={runtimes.isPending}>
-            <SelectValue placeholder="Download a language first" />
+          <SelectTrigger id="file-language" className="w-full" disabled={runtimes.isPending}>
+            <SelectValue placeholder="Select a language" />
           </SelectTrigger>
           <SelectContent>
             {installed.length > 0 && (
@@ -163,7 +163,7 @@ function NewFileForm({
         <p className="text-xs text-destructive">{error}</p>
       ) : extension === null && runtimes.isSuccess ? (
         <p className="text-xs text-muted-foreground">
-          No languages installed yet. Open Type and download one to get started.
+          No languages installed yet. Open Language and download one to get started.
         </p>
       ) : (
         trimmed && <p className="text-xs text-muted-foreground">Will be saved as {filename}</p>
