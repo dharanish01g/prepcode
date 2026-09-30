@@ -10,7 +10,7 @@ use tauri::ipc::Channel;
 use tauri::{AppHandle, Manager, State};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::process::{ChildStdin, Command};
-use tokio::sync::{watch, Mutex};
+use tokio::sync::{oneshot, watch, Mutex};
 
 use crate::auth::CurrentUser;
 use crate::files::resolve_file;
@@ -43,6 +43,8 @@ struct ActiveRun {
     id: u64,
     stdin: Option<ChildStdin>,
     stop: watch::Sender<bool>,
+    /// Resolves once this run's `run_program` has returned and its process is gone.
+    done: oneshot::Receiver<()>,
 }
 
 /// The program currently running, if any. Only one runs at a time.
@@ -86,12 +88,19 @@ pub async fn run_program(
     // Replace whatever was running before.
     let id = NEXT_RUN_ID.fetch_add(1, Ordering::Relaxed);
     let (stop_tx, stop_rx) = watch::channel(false);
-    {
+    // Dropped when this function returns, which tells the next run we're gone.
+    let (_done_tx, done_rx) = oneshot::channel::<()>();
+    let previous = {
         let mut active = runner.0.lock().await;
-        if let Some(previous) = active.take() {
-            let _ = previous.stop.send(true);
-        }
-        *active = Some(ActiveRun { id, stdin: None, stop: stop_tx });
+        active.replace(ActiveRun { id, stdin: None, stop: stop_tx, done: done_rx })
+    };
+    // Wait for the old process to actually exit before starting. Otherwise a
+    // quick re-run of the same C/C++ file can find the old binary still locked
+    // (Windows) when compiling over it. Awaited outside the lock, since the old
+    // run needs it to finish.
+    if let Some(previous) = previous {
+        let _ = previous.stop.send(true);
+        let _ = previous.done.await;
     }
 
     let ctx = RunContext { app: &app, runner: &runner, id, channel: &on_event, stop: stop_rx };
@@ -355,10 +364,16 @@ fn pump(
 /// Takes the decodable prefix of `bytes`, leaving an incomplete trailing
 /// character (at most 3 bytes) for the next chunk. Invalid bytes become U+FFFD.
 fn take_utf8(bytes: &mut Vec<u8>) -> String {
-    let keep = match std::str::from_utf8(bytes) {
-        Ok(_) => 0,
-        Err(e) if e.error_len().is_none() => bytes.len() - e.valid_up_to(),
-        Err(_) => 0,
+    // Skip past any invalid bytes to see whether the chunk ends mid-character.
+    let mut rest: &[u8] = bytes;
+    let keep = loop {
+        match std::str::from_utf8(rest) {
+            Ok(_) => break 0,
+            Err(e) => match e.error_len() {
+                None => break rest.len() - e.valid_up_to(),
+                Some(invalid) => rest = &rest[e.valid_up_to() + invalid..],
+            },
+        }
     };
     let rest = bytes.split_off(bytes.len() - keep);
     let text = String::from_utf8_lossy(bytes).into_owned();
@@ -379,5 +394,15 @@ mod tests {
         bytes.push(0x93);
         assert_eq!(take_utf8(&mut bytes), "✓");
         assert!(bytes.is_empty());
+    }
+
+    #[test]
+    fn keeps_split_char_after_invalid_byte() {
+        let mut bytes = b"a\xFFb".to_vec();
+        bytes.extend_from_slice(&"✓".as_bytes()[..2]);
+        assert_eq!(take_utf8(&mut bytes), "a\u{FFFD}b");
+        assert_eq!(bytes.len(), 2);
+        bytes.push(0x93);
+        assert_eq!(take_utf8(&mut bytes), "✓");
     }
 }
