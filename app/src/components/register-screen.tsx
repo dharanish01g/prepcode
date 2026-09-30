@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { AuthHeader } from "@/components/auth-header";
+import { ConfirmDobDialog } from "@/components/confirm-dob-dialog";
 import { DobPicker, formatDob } from "@/components/dob-picker";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -17,17 +18,26 @@ export function RegisterScreen({
   const [dob, setDob] = useState<Date>();
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
 
-  async function handleSubmit(e: React.FormEvent) {
+  // The account is only created once the DOB has been double-checked.
+  function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!regNo.trim()) return setError("Enter your register number.");
     if (!dob) return setError("Select your date of birth.");
 
     setError("");
+    setConfirmOpen(true);
+  }
+
+  async function createAccount() {
+    if (!dob) return;
     setSubmitting(true);
     try {
       onAuthenticated(await register(regNo, formatDob(dob)));
     } catch (err) {
+      // e.g. already registered: show it on the form, where it can be fixed.
+      setConfirmOpen(false);
       setError(String(err));
     } finally {
       setSubmitting(false);
@@ -67,6 +77,14 @@ export function RegisterScreen({
           Create account
         </Button>
       </form>
+
+      <ConfirmDobDialog
+        open={confirmOpen}
+        dob={dob}
+        submitting={submitting}
+        onCancel={() => setConfirmOpen(false)}
+        onConfirmed={createAccount}
+      />
 
       <p className="text-sm text-muted-foreground">
         Already have an account?{" "}
