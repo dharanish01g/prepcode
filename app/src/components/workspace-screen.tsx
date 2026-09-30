@@ -131,10 +131,12 @@ export function WorkspaceScreen({
           </ResizablePanelGroup>
         ) : (
           // Like VS Code's watermark: nothing to edit or run until a file is open.
-          <Empty>
-            <EmptyHeader>
-              <EmptyMedia>
-                <img src={logo} alt="" className="size-32 opacity-40 grayscale" />
+          // pb-24 lifts it above true center, offsetting the header bar above.
+          <Empty className="pb-24">
+            <EmptyHeader className="gap-1">
+              {/* -mb-4 trims the transparent padding at the bottom of logo.png. */}
+              <EmptyMedia className="mb-0">
+                <img src={logo} alt="" className="-mb-4 size-32 opacity-40 grayscale" />
               </EmptyMedia>
               <EmptyTitle className="text-3xl font-semibold text-muted-foreground">
                 prepcode
