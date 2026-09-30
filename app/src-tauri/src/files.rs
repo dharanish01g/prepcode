@@ -7,9 +7,8 @@ use serde::Serialize;
 use tauri::{AppHandle, State};
 
 use crate::auth::{workspace_dir, CurrentUser};
-
-/// File types a student can create. Keep in sync with LANGUAGES in src/lib/files.ts.
-const EXTENSIONS: &[&str] = &["py", "js", "c", "cpp", "java"];
+use crate::catalog;
+use crate::db::Db;
 
 /// Letters, digits, `_` and `-`, not starting with `-`. The extension is added separately.
 fn validate_name(name: &str) -> Result<(), String> {
@@ -30,21 +29,32 @@ fn validate_name(name: &str) -> Result<(), String> {
 }
 
 /// Path of `<name>.<ext>` in the current student's workspace. Validating the
-/// name also rules out path separators, so this can't escape the workspace.
-pub(crate) fn resolve_file(app: &AppHandle, current: &CurrentUser, filename: &str) -> Result<PathBuf, String> {
+/// name (and the catalog validating extensions) rules out path separators, so
+/// this can't escape the workspace.
+pub(crate) fn resolve_file(
+    app: &AppHandle,
+    current: &CurrentUser,
+    db: &Db,
+    filename: &str,
+) -> Result<PathBuf, String> {
     let (name, extension) = filename
         .rsplit_once('.')
         .ok_or_else(|| format!("Invalid file name: {filename}"))?;
     validate_name(name)?;
-    if !EXTENSIONS.contains(&extension) {
+    if !db.with(|conn| catalog::is_supported(conn, extension))? {
         return Err(format!("Unsupported file type: .{extension}"));
     }
     Ok(workspace_dir(app, &current.get()?)?.join(filename))
 }
 
 #[tauri::command]
-pub fn read_file(app: AppHandle, current: State<CurrentUser>, filename: String) -> Result<String, String> {
-    let path = resolve_file(&app, &current, &filename)?;
+pub fn read_file(
+    app: AppHandle,
+    current: State<CurrentUser>,
+    db: State<Db>,
+    filename: String,
+) -> Result<String, String> {
+    let path = resolve_file(&app, &current, &db, &filename)?;
     fs::read_to_string(&path).map_err(|e| format!("Could not open {filename}: {e}"))
 }
 
@@ -52,10 +62,11 @@ pub fn read_file(app: AppHandle, current: State<CurrentUser>, filename: String) 
 pub fn write_file(
     app: AppHandle,
     current: State<CurrentUser>,
+    db: State<Db>,
     filename: String,
     content: String,
 ) -> Result<(), String> {
-    let path = resolve_file(&app, &current, &filename)?;
+    let path = resolve_file(&app, &current, &db, &filename)?;
     // Write to a hidden temp file then rename, so a crash mid-save never leaves
     // a half-written program. list_files skips it (".tmp" isn't a supported type).
     let tmp = path.with_file_name(format!(".{filename}.tmp"));
@@ -65,8 +76,9 @@ pub fn write_file(
 
 /// Filenames in the student's workspace with a supported extension, sorted.
 #[tauri::command]
-pub fn list_files(app: AppHandle, current: State<CurrentUser>) -> Result<Vec<String>, String> {
+pub fn list_files(app: AppHandle, current: State<CurrentUser>, db: State<Db>) -> Result<Vec<String>, String> {
     let dir = workspace_dir(&app, &current.get()?)?;
+    let extensions = db.with(|conn| catalog::extensions(conn))?;
     let entries = match fs::read_dir(&dir) {
         Ok(entries) => entries,
         Err(e) if e.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
@@ -79,7 +91,7 @@ pub fn list_files(app: AppHandle, current: State<CurrentUser>) -> Result<Vec<Str
         .filter_map(|entry| entry.file_name().into_string().ok())
         .filter(|name| {
             name.rsplit_once('.')
-                .is_some_and(|(_, ext)| EXTENSIONS.contains(&ext))
+                .is_some_and(|(_, ext)| extensions.contains(ext))
         })
         .collect();
     files.sort_by_key(|name| name.to_lowercase());
@@ -98,9 +110,10 @@ pub struct FileHistoryEntry {
 pub fn list_file_history(
     app: AppHandle,
     current: State<CurrentUser>,
+    db: State<Db>,
 ) -> Result<Vec<FileHistoryEntry>, String> {
     let dir = workspace_dir(&app, &current.get()?)?;
-    let mut entries: Vec<FileHistoryEntry> = list_files(app, current)?
+    let mut entries: Vec<FileHistoryEntry> = list_files(app, current, db)?
         .into_iter()
         .filter_map(|filename| {
             let modified = fs::metadata(dir.join(&filename)).and_then(|m| m.modified()).ok()?;
@@ -117,12 +130,13 @@ pub fn list_file_history(
 pub fn create_file(
     app: AppHandle,
     current: State<CurrentUser>,
+    db: State<Db>,
     name: String,
     extension: String,
 ) -> Result<String, String> {
     let name = name.trim();
     validate_name(name)?;
-    if !EXTENSIONS.contains(&extension.as_str()) {
+    if !db.with(|conn| catalog::is_supported(conn, &extension))? {
         return Err("Select a language.".into());
     }
 
@@ -131,7 +145,7 @@ pub fn create_file(
 
     let filename = format!("{name}.{extension}");
     // Case-insensitive, so Hello.py and hello.py can't both exist on any OS.
-    let taken = list_files(app.clone(), current)?
+    let taken = list_files(app.clone(), current, db)?
         .iter()
         .any(|f| f.eq_ignore_ascii_case(&filename));
     if taken {
@@ -152,10 +166,11 @@ pub fn create_file(
 pub fn rename_file(
     app: AppHandle,
     current: State<CurrentUser>,
+    db: State<Db>,
     filename: String,
     new_name: String,
 ) -> Result<String, String> {
-    let old_path = resolve_file(&app, &current, &filename)?;
+    let old_path = resolve_file(&app, &current, &db, &filename)?;
     let new_name = new_name.trim();
     validate_name(new_name)?;
     let extension = filename.rsplit_once('.').map(|(_, ext)| ext).unwrap_or_default();
@@ -169,7 +184,7 @@ pub fn rename_file(
 
     // Case-insensitive, like create_file. A case-only change (hello.py ->
     // Hello.py) is allowed: it's the same file.
-    let taken = list_files(app.clone(), current.clone())?
+    let taken = list_files(app.clone(), current.clone(), db.clone())?
         .iter()
         .any(|f| f.eq_ignore_ascii_case(&new_filename) && !f.eq_ignore_ascii_case(&filename));
     if taken {
@@ -183,8 +198,13 @@ pub fn rename_file(
 
 /// Permanently deletes `filename` from the student's workspace.
 #[tauri::command]
-pub fn delete_file(app: AppHandle, current: State<CurrentUser>, filename: String) -> Result<(), String> {
-    let path = resolve_file(&app, &current, &filename)?;
+pub fn delete_file(
+    app: AppHandle,
+    current: State<CurrentUser>,
+    db: State<Db>,
+    filename: String,
+) -> Result<(), String> {
+    let path = resolve_file(&app, &current, &db, &filename)?;
     match fs::remove_file(&path) {
         Ok(()) => Ok(()),
         // Already gone is what the student wanted anyway.

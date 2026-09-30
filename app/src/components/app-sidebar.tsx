@@ -32,7 +32,8 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar"
 import type { Session } from "@/lib/auth"
-import { extensionOf, LANGUAGES } from "@/lib/files"
+import { extensionOf } from "@/lib/files"
+import { getLanguages, type Language } from "@/lib/languages"
 import { disposeEditorModel, editorModelPath } from "@/lib/monaco"
 import { useFilesQuery } from "@/lib/queries"
 import {
@@ -88,12 +89,12 @@ export function AppSidebar({
     disposeEditorModel(editorModelPath(session.reg_no, oldFile))
   }
 
-  // One category per language that has files, in LANGUAGES order.
+  // One category per language that has files, in catalog order.
   const query = search.trim().toLowerCase()
-  const categories = LANGUAGES.map((lang) => ({
+  const categories = getLanguages().map((lang) => ({
     ...lang,
     files: files.filter(
-      (f) => extensionOf(f) === lang.value && f.toLowerCase().includes(query)
+      (f) => extensionOf(f) === lang.extension && f.toLowerCase().includes(query)
     ),
   })).filter((category) => category.files.length > 0)
 
@@ -256,7 +257,7 @@ export function AppSidebar({
   )
 }
 
-type Category = (typeof LANGUAGES)[number] & { files: string[] }
+type Category = Language & { files: string[] }
 
 /** Files grouped by language, each group collapsible. */
 function ProgramsList({
@@ -297,7 +298,7 @@ function ProgramsList({
         )
       )}
       {categories.map((category) => (
-        <Collapsible key={category.value} defaultOpen>
+        <Collapsible key={category.extension} defaultOpen>
           {/* Vertical padding lives on SidebarContent so groups sit close together. */}
           <SidebarGroup className="py-0">
             <SidebarGroupLabel
@@ -305,8 +306,8 @@ function ProgramsList({
               className="group/label w-full gap-2"
             >
               <ChevronRightIcon className="transition-transform group-data-panel-open/label:rotate-90" />
-              <FileIcon extension={category.value} />
-              {category.label}
+              <FileIcon extension={category.extension} />
+              {category.name}
               <span className="ml-auto">{category.files.length}</span>
             </SidebarGroupLabel>
             <CollapsibleContent>

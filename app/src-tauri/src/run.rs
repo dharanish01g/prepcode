@@ -1,7 +1,8 @@
 //! Runs a student's program with prepcode's own runtimes, streaming output to
-//! the console and forwarding what they type to the program's stdin.
+//! the console and forwarding what they type to the program's stdin. How to
+//! compile and run each language comes from the catalog.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -13,19 +14,10 @@ use tokio::process::{ChildStdin, Command};
 use tokio::sync::{oneshot, watch, Mutex};
 
 use crate::auth::CurrentUser;
+use crate::catalog::{self, Language, Runtime, Vars};
+use crate::db::Db;
 use crate::files::resolve_file;
-use crate::runtimes::{executable_path, zig_cache_dir};
-
-/// Force-included when compiling C/C++. When stdout is a pipe (as it is here)
-/// C fully buffers it, so a prompt like `printf("Enter a number: ")` wouldn't
-/// show before `scanf` waits for input. Unbuffered output fixes that.
-const C_PRELUDE: &str = "\
-/* Added by prepcode so output appears immediately in the console. */
-#include <stdio.h>
-__attribute__((constructor)) static void prepcode_unbuffered_stdout(void) {
-    setvbuf(stdout, NULL, _IONBF, 0);
-}
-";
+use crate::runtimes::{executable_path, shared_data_dir, step_command, write_step_files};
 
 #[derive(Clone, Serialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
@@ -53,35 +45,31 @@ pub struct Runner(Mutex<Option<ActiveRun>>);
 
 static NEXT_RUN_ID: AtomicU64 = AtomicU64::new(1);
 
-fn language_name(extension: &str) -> &'static str {
-    match extension {
-        "py" => "Python",
-        "js" => "JavaScript",
-        "c" => "C",
-        "cpp" => "C++",
-        "java" => "Java",
-        _ => "This language",
-    }
-}
-
 #[tauri::command]
 pub async fn run_program(
     app: AppHandle,
     current: State<'_, CurrentUser>,
+    db: State<'_, Db>,
     runner: State<'_, Runner>,
     filename: String,
     on_event: Channel<RunEvent>,
 ) -> Result<(), String> {
     let reg_no = current.get()?;
-    let source = resolve_file(&app, &current, &filename)?;
+    let source = resolve_file(&app, &current, &db, &filename)?;
     if !source.is_file() {
         return Err(format!("{filename} doesn't exist."));
     }
     let extension = filename.rsplit_once('.').map(|(_, ext)| ext).unwrap_or_default();
-    let exe = executable_path(&app, extension)?.ok_or_else(|| {
+    let (language, runtime) = db.with(|conn| {
+        let language = catalog::language(conn, extension)?
+            .ok_or_else(|| format!("Can't run .{extension} files."))?;
+        let runtime = catalog::runtime(conn, &language.runtime)?;
+        Ok((language, runtime))
+    })?;
+    let exe = executable_path(&app, &runtime)?.ok_or_else(|| {
         format!(
             "{} isn't installed yet. Click New file, open Language, and download it.",
-            language_name(extension)
+            language.name
         )
     })?;
 
@@ -95,16 +83,16 @@ pub async fn run_program(
         active.replace(ActiveRun { id, stdin: None, stop: stop_tx, done: done_rx })
     };
     // Wait for the old process to actually exit before starting. Otherwise a
-    // quick re-run of the same C/C++ file can find the old binary still locked
-    // (Windows) when compiling over it. Awaited outside the lock, since the old
-    // run needs it to finish.
+    // quick re-run of the same compiled file can find the old binary still
+    // locked (Windows) when compiling over it. Awaited outside the lock, since
+    // the old run needs it to finish.
     if let Some(previous) = previous {
         let _ = previous.stop.send(true);
         let _ = previous.done.await;
     }
 
     let ctx = RunContext { app: &app, runner: &runner, id, channel: &on_event, stop: stop_rx };
-    let result = ctx.run(&reg_no, &source, &filename, extension, &exe).await;
+    let result = ctx.run(&reg_no, &source, &filename, &language, &runtime, &exe).await;
 
     let mut active = runner.0.lock().await;
     if active.as_ref().is_some_and(|run| run.id == id) {
@@ -158,107 +146,60 @@ impl RunContext<'_> {
         self.send(RunEvent::Status { message });
     }
 
+    /// Compiles (if the language has a compile step) and runs the program.
+    /// Compiling happens in prepcode's build folder; the program itself runs in
+    /// the student's workspace, so it can open files next to their code.
     async fn run(
         &self,
         reg_no: &str,
         source: &Path,
         filename: &str,
-        extension: &str,
+        language: &Language,
+        runtime: &Runtime,
         exe: &Path,
     ) -> Result<(), String> {
         let workdir = source.parent().ok_or("Invalid file location.")?;
-
-        let mut program = match extension {
-            "py" => {
-                let mut cmd = runtime_command(exe);
-                // -u: unbuffered, so output and prompts appear immediately.
-                cmd.arg("-u")
-                    .arg(filename)
-                    .env("PYTHONUTF8", "1")
-                    .env("PYTHONIOENCODING", "utf-8")
-                    // Don't litter the student's folder with __pycache__.
-                    .env("PYTHONDONTWRITEBYTECODE", "1");
-                cmd
-            }
-            "js" => {
-                let mut cmd = runtime_command(exe);
-                cmd.arg(filename);
-                cmd
-            }
-            "java" => {
-                // Java 11+ runs a single source file directly; no javac step.
-                let mut cmd = runtime_command(exe);
-                cmd.args(["-Dfile.encoding=UTF-8", "-Dstdout.encoding=UTF-8", "-Dstderr.encoding=UTF-8"])
-                    .arg(filename);
-                cmd
-            }
-            "c" | "cpp" => {
-                self.status(format!("Compiling {filename}…"));
-                let binary = match self.compile(reg_no, source, extension, exe).await? {
-                    Ok(binary) => binary,
-                    Err(finished) => {
-                        self.send(RunEvent::Exit {
-                            code: finished.code,
-                            stopped: finished.stopped,
-                            stage: "compile",
-                        });
-                        return Ok(());
-                    }
-                };
-                Command::new(binary)
-            }
-            _ => return Err(format!("Can't run .{extension} files.")),
-        };
-
-        program.current_dir(workdir);
-        let finished = self.execute(program, true).await?;
-        self.send(RunEvent::Exit { code: finished.code, stopped: finished.stopped, stage: "run" });
-        Ok(())
-    }
-
-    /// Compiles with Zig into prepcode's build folder. Ok(Err(..)) means the
-    /// compiler ran but failed (errors were already streamed to the console).
-    async fn compile(
-        &self,
-        reg_no: &str,
-        source: &Path,
-        extension: &str,
-        zig: &Path,
-    ) -> Result<Result<PathBuf, Finished>, String> {
         let data = self
             .app
             .path()
             .app_local_data_dir()
             .map_err(|e| format!("Could not locate app data folder: {e}"))?;
         let build_dir = data.join("build").join(reg_no);
-        let zig_cache = zig_cache_dir(self.app)?;
         std::fs::create_dir_all(&build_dir).map_err(|e| format!("Could not create build folder: {e}"))?;
-
-        let prelude = build_dir.join("prepcode_prelude.h");
-        std::fs::write(&prelude, C_PRELUDE).map_err(|e| format!("Could not prepare build: {e}"))?;
 
         let stem = source.file_stem().and_then(|s| s.to_str()).unwrap_or("program");
         let binary = build_dir.join(format!("{stem}{}", std::env::consts::EXE_SUFFIX));
-        // Never run a stale binary if this compile fails.
-        let _ = std::fs::remove_file(&binary);
+        let vars = Vars::default()
+            .set("source", source)
+            .set("filename", filename)
+            .set("binary", &binary)
+            .set("build", &build_dir)
+            .set("shared", shared_data_dir(self.app)?);
 
-        let mut cmd = runtime_command(zig);
-        cmd.arg(if extension == "cpp" { "c++" } else { "cc" })
-            .arg("-include")
-            .arg(&prelude)
-            .arg("-o")
-            .arg(&binary)
-            .arg(source)
-            .current_dir(&build_dir)
-            // Same cache the installer warmed up, inside prepcode's folder.
-            .env("ZIG_GLOBAL_CACHE_DIR", &zig_cache)
-            .env("ZIG_LOCAL_CACHE_DIR", &zig_cache);
-
-        let finished = self.execute(cmd, false).await?;
-        if finished.stopped || finished.code != Some(0) || !binary.is_file() {
-            return Ok(Err(finished));
+        if let Some(compile) = &language.compile {
+            self.status(format!("Compiling {filename}…"));
+            // Never run a stale binary if this compile fails.
+            let _ = std::fs::remove_file(&binary);
+            write_step_files(compile, &build_dir)?;
+            let mut cmd = Command::from(step_command(compile, runtime, exe, &vars));
+            cmd.current_dir(&build_dir);
+            let finished = self.execute(cmd, false).await?;
+            if finished.stopped || finished.code != Some(0) || !binary.is_file() {
+                self.send(RunEvent::Exit {
+                    code: finished.code,
+                    stopped: finished.stopped,
+                    stage: "compile",
+                });
+                return Ok(());
+            }
         }
-        Ok(Ok(binary))
+
+        write_step_files(&language.run, &build_dir)?;
+        let mut program = Command::from(step_command(&language.run, runtime, exe, &vars));
+        program.current_dir(workdir);
+        let finished = self.execute(program, true).await?;
+        self.send(RunEvent::Exit { code: finished.code, stopped: finished.stopped, stage: "run" });
+        Ok(())
     }
 
     /// Spawns `cmd`, streams its output, and waits for it to exit or be stopped.
@@ -307,20 +248,6 @@ impl RunContext<'_> {
         let status = status.map_err(|e| format!("Lost track of the program: {e}"))?;
         Ok(Finished { code: status.code(), stopped })
     }
-}
-
-/// A command for a runtime executable, with its folder first on PATH for this
-/// process only, so the runtime can find its own helper programs.
-fn runtime_command(exe: &Path) -> Command {
-    let mut cmd = Command::new(exe);
-    if let Some(dir) = exe.parent() {
-        let mut paths = vec![dir.to_path_buf()];
-        paths.extend(std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()));
-        if let Ok(path) = std::env::join_paths(paths) {
-            cmd.env("PATH", path);
-        }
-    }
-    cmd
 }
 
 async fn stop_requested(stop: &mut watch::Receiver<bool>) {

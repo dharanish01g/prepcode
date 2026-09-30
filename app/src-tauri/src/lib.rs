@@ -1,7 +1,11 @@
 mod auth;
+mod catalog;
+mod db;
 mod files;
 mod run;
 mod runtimes;
+
+use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -9,14 +13,18 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
-        .manage(auth::AuthLock::default())
         .manage(auth::CurrentUser::default())
         .manage(runtimes::RuntimeInstalls::default())
         .manage(run::Runner::default())
+        .setup(|app| {
+            app.manage(db::open(app.handle())?);
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             auth::register,
             auth::login,
             auth::logout,
+            catalog::list_languages,
             files::list_files,
             files::list_file_history,
             files::create_file,

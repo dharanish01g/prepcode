@@ -1,14 +1,10 @@
 import { FileCodeIcon } from "lucide-react";
-import c from "@/assets/file-icons/c.svg";
-import cpp from "@/assets/file-icons/cpp.svg";
-import java from "@/assets/file-icons/java.svg";
-import js from "@/assets/file-icons/js.svg";
-import python from "@/assets/file-icons/python.svg";
-import { extensionOf, type Extension } from "@/lib/files";
+import { extensionOf } from "@/lib/files";
+import { findLanguage } from "@/lib/languages";
 import { cn } from "@/lib/utils";
 
-// From the "Icons – Maintained" VS Code theme (MIT, see assets/file-icons/LICENSE).
-const ICONS: Record<Extension, string> = { py: python, js, c, cpp, java };
+// Icons come from the language catalog (the bundled ones are from the "Icons –
+// Maintained" VS Code theme, MIT, see src-tauri/catalog/ICONS-LICENSE).
 
 /**
  * The language logo for a file or extension, like VS Code's file icons.
@@ -20,11 +16,12 @@ export function FileIcon({
   className,
 }: {
   filename?: string;
-  extension?: Extension;
+  extension?: string;
   className?: string;
 }) {
   const ext = extension ?? (filename ? extensionOf(filename) : "");
-  const src = ICONS[ext as Extension];
-  if (!src) return <FileCodeIcon className={cn("size-4 shrink-0", className)} />;
+  const icon = findLanguage(ext)?.icon;
+  if (!icon) return <FileCodeIcon className={cn("size-4 shrink-0", className)} />;
+  const src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(icon)}`;
   return <img src={src} alt="" className={cn("size-4 shrink-0", className)} />;
 }

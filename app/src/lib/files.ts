@@ -1,15 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-
-/** Keep in sync with EXTENSIONS in src-tauri/src/files.rs. */
-export const LANGUAGES = [
-  { value: "py", label: "Python", monaco: "python" },
-  { value: "js", label: "JavaScript", monaco: "javascript" },
-  { value: "c", label: "C", monaco: "c" },
-  { value: "cpp", label: "C++", monaco: "cpp" },
-  { value: "java", label: "Java", monaco: "java" },
-] as const;
-
-export type Extension = (typeof LANGUAGES)[number]["value"];
+import { findLanguage } from "@/lib/languages";
 
 export function extensionOf(filename: string) {
   return filename.slice(filename.lastIndexOf(".") + 1);
@@ -17,7 +7,7 @@ export function extensionOf(filename: string) {
 
 /** Monaco language id for a filename, e.g. "hello.py" -> "python". */
 export function monacoLanguageOf(filename: string) {
-  return LANGUAGES.find((lang) => lang.value === extensionOf(filename))?.monaco ?? "plaintext";
+  return findLanguage(extensionOf(filename))?.monaco ?? "plaintext";
 }
 
 /** Filenames (e.g. "hello.py") in the logged-in student's workspace. */
@@ -37,7 +27,7 @@ export function listFileHistory() {
 }
 
 /** Creates an empty file and returns its filename. Rejects with a user-facing message. */
-export function createFile(name: string, extension: Extension) {
+export function createFile(name: string, extension: string) {
   return invoke<string>("create_file", { name, extension });
 }
 

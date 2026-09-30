@@ -2,12 +2,11 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use serde::{Deserialize, Serialize};
+use rusqlite::{params, OptionalExtension};
+use serde::Serialize;
 use tauri::{AppHandle, Manager, State};
 
-/// Serialises access to users.json so two commands can't clobber each other.
-#[derive(Default)]
-pub struct AuthLock(Mutex<()>);
+use crate::db::Db;
 
 /// The logged-in student. File commands read this instead of trusting a
 /// register number sent from the frontend.
@@ -28,12 +27,6 @@ impl CurrentUser {
     }
 }
 
-#[derive(Serialize, Deserialize)]
-struct User {
-    reg_no: String,
-    dob: String,
-}
-
 #[derive(Serialize)]
 pub struct Session {
     reg_no: String,
@@ -45,32 +38,8 @@ fn data_dir(app: &AppHandle) -> Result<PathBuf, String> {
         .map_err(|e| format!("Could not locate app data folder: {e}"))
 }
 
-fn users_path(app: &AppHandle) -> Result<PathBuf, String> {
-    Ok(data_dir(app)?.join("users.json"))
-}
-
 pub fn workspace_dir(app: &AppHandle, reg_no: &str) -> Result<PathBuf, String> {
     Ok(data_dir(app)?.join("workspaces").join(reg_no))
-}
-
-fn load_users(app: &AppHandle) -> Result<Vec<User>, String> {
-    let path = users_path(app)?;
-    if !path.exists() {
-        return Ok(Vec::new());
-    }
-    let raw = fs::read_to_string(&path).map_err(|e| format!("Could not read accounts: {e}"))?;
-    serde_json::from_str(&raw).map_err(|e| format!("Accounts file is corrupted: {e}"))
-}
-
-fn save_users(app: &AppHandle, users: &[User]) -> Result<(), String> {
-    let path = users_path(app)?;
-    fs::create_dir_all(path.parent().unwrap())
-        .map_err(|e| format!("Could not create app data folder: {e}"))?;
-    let raw = serde_json::to_string_pretty(users).map_err(|e| e.to_string())?;
-    // Write to a temp file then rename, so a crash never leaves a half-written file.
-    let tmp = path.with_extension("json.tmp");
-    fs::write(&tmp, raw).map_err(|e| format!("Could not save accounts: {e}"))?;
-    fs::rename(&tmp, &path).map_err(|e| format!("Could not save accounts: {e}"))
 }
 
 /// Register numbers double as folder names, so only allow safe characters.
@@ -103,7 +72,7 @@ fn validate_dob(dob: &str) -> Result<(), String> {
 #[tauri::command]
 pub fn register(
     app: AppHandle,
-    lock: State<AuthLock>,
+    db: State<Db>,
     current: State<CurrentUser>,
     reg_no: String,
     dob: String,
@@ -111,16 +80,21 @@ pub fn register(
     let reg_no = normalize_reg_no(&reg_no)?;
     validate_dob(&dob)?;
 
-    let _guard = lock.0.lock().map_err(|_| "Internal error, try again.")?;
-    let mut users = load_users(&app)?;
-    if users.iter().any(|u| u.reg_no == reg_no) {
-        return Err(format!("{reg_no} is already registered. Please log in instead."));
-    }
+    db.with(|conn| {
+        let inserted = conn
+            .execute(
+                "INSERT OR IGNORE INTO users (reg_no, dob) VALUES (?1, ?2)",
+                params![reg_no, dob],
+            )
+            .map_err(|e| format!("Could not save your account: {e}"))?;
+        if inserted == 0 {
+            return Err(format!("{reg_no} is already registered. Please log in instead."));
+        }
+        Ok(())
+    })?;
 
     fs::create_dir_all(workspace_dir(&app, &reg_no)?)
         .map_err(|e| format!("Could not create your workspace: {e}"))?;
-    users.push(User { reg_no: reg_no.clone(), dob });
-    save_users(&app, &users)?;
 
     current.set(Some(reg_no.clone()));
     Ok(Session { reg_no })
@@ -129,7 +103,7 @@ pub fn register(
 #[tauri::command]
 pub fn login(
     app: AppHandle,
-    lock: State<AuthLock>,
+    db: State<Db>,
     current: State<CurrentUser>,
     reg_no: String,
     dob: String,
@@ -137,13 +111,14 @@ pub fn login(
     let reg_no = normalize_reg_no(&reg_no)?;
     validate_dob(&dob)?;
 
-    let _guard = lock.0.lock().map_err(|_| "Internal error, try again.")?;
-    let users = load_users(&app)?;
-    let user = users
-        .iter()
-        .find(|u| u.reg_no == reg_no)
+    let saved_dob: String = db
+        .with(|conn| {
+            conn.query_row("SELECT dob FROM users WHERE reg_no = ?1", [&reg_no], |row| row.get(0))
+                .optional()
+                .map_err(|e| format!("Could not read accounts: {e}"))
+        })?
         .ok_or_else(|| format!("{reg_no} is not registered. Please register first."))?;
-    if user.dob != dob {
+    if saved_dob != dob {
         return Err("Date of birth doesn't match. Try again.".into());
     }
 

@@ -23,7 +23,8 @@ import {
 import { Spinner } from "@/components/ui/spinner";
 import { FileIcon } from "@/components/file-icon";
 import { DownloadIcon } from "lucide-react";
-import { fileNameError, LANGUAGES, type Extension } from "@/lib/files";
+import { fileNameError } from "@/lib/files";
+import { getLanguages } from "@/lib/languages";
 import { useCreateFileMutation } from "@/lib/queries";
 import {
   progressLabel,
@@ -73,15 +74,16 @@ function NewFileForm({
   onCreated: (filename: string) => void;
 }) {
   const [name, setName] = useState("");
-  const [pickedExtension, setExtension] = useState<Extension | null>(null);
+  const [pickedExtension, setExtension] = useState<string | null>(null);
   const createFile = useCreateFileMutation(regNo);
   const submitting = createFile.isPending;
 
   const runtimes = useInstalledRuntimes();
-  const installed = LANGUAGES.filter((lang) => runtimes.data?.includes(lang.value));
-  const notInstalled = LANGUAGES.filter((lang) => !runtimes.data?.includes(lang.value));
+  const languages = getLanguages();
+  const installed = languages.filter((lang) => runtimes.data?.includes(lang.extension));
+  const notInstalled = languages.filter((lang) => !runtimes.data?.includes(lang.extension));
   // Default to the first installed language until the student picks one.
-  const extension = pickedExtension ?? installed[0]?.value ?? null;
+  const extension = pickedExtension ?? installed[0]?.extension ?? null;
 
   const trimmed = name.trim();
   const filename = extension ? `${trimmed}.${extension}` : trimmed;
@@ -121,7 +123,7 @@ function NewFileForm({
       <div className="flex flex-col gap-2">
         <Label htmlFor="file-language">Language</Label>
         <Select
-          items={LANGUAGES}
+          items={languages.map((lang) => ({ value: lang.extension, label: lang.name }))}
           value={extension}
           onValueChange={(value) => {
             if (value) setExtension(value);
@@ -136,9 +138,9 @@ function NewFileForm({
               <SelectGroup>
                 <SelectLabel>Installed</SelectLabel>
                 {installed.map((lang) => (
-                  <SelectItem key={lang.value} value={lang.value}>
-                    <FileIcon extension={lang.value} />
-                    {lang.label} (.{lang.value})
+                  <SelectItem key={lang.extension} value={lang.extension}>
+                    <FileIcon extension={lang.extension} />
+                    {lang.name} (.{lang.extension})
                   </SelectItem>
                 ))}
               </SelectGroup>
@@ -149,10 +151,10 @@ function NewFileForm({
                 <SelectLabel>Not installed</SelectLabel>
                 {notInstalled.map((lang) => (
                   <NotInstalledRow
-                    key={lang.value}
-                    extension={lang.value}
-                    label={`${lang.label} (.${lang.value})`}
-                    onInstalled={() => setExtension(lang.value)}
+                    key={lang.extension}
+                    extension={lang.extension}
+                    label={`${lang.name} (.${lang.extension})`}
+                    onInstalled={() => setExtension(lang.extension)}
                   />
                 ))}
               </SelectGroup>
@@ -189,7 +191,7 @@ function NotInstalledRow({
   label,
   onInstalled,
 }: {
-  extension: Extension;
+  extension: string;
   label: string;
   onInstalled: () => void;
 }) {

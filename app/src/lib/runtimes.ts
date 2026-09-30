@@ -2,19 +2,11 @@ import { useSyncExternalStore } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useMutation, useMutationState, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { Extension } from "@/lib/files";
+import { findLanguage } from "@/lib/languages";
 
-/** Languages that share one download. Keep in sync with LANGUAGE_RUNTIMES in runtimes.rs. */
-const RUNTIME_OF: Record<Extension, string> = {
-  py: "python",
-  js: "node",
-  c: "zig",
-  cpp: "zig",
-  java: "java",
-};
-
-export function sameRuntime(a: Extension, b: Extension) {
-  return RUNTIME_OF[a] === RUNTIME_OF[b];
+/** Whether two languages share one download (e.g. C and C++). */
+export function sameRuntime(a: string, b: string) {
+  return findLanguage(a)?.runtime === findLanguage(b)?.runtime;
 }
 
 const RUNTIMES_KEY = ["runtimes"] as const;
@@ -24,7 +16,7 @@ const INSTALL_RUNTIME_KEY = ["install-runtime"] as const;
 export function useInstalledRuntimes() {
   return useQuery({
     queryKey: RUNTIMES_KEY,
-    queryFn: () => invoke<Extension[]>("list_runtimes"),
+    queryFn: () => invoke<string[]>("list_runtimes"),
   });
 }
 
@@ -32,7 +24,7 @@ export function useInstallRuntimeMutation() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationKey: INSTALL_RUNTIME_KEY,
-    mutationFn: (extension: Extension) => invoke<void>("install_runtime", { extension }),
+    mutationFn: (extension: string) => invoke<void>("install_runtime", { extension }),
     onSettled: (_data, _error, extension) => {
       clearProgress(extension);
       return queryClient.invalidateQueries({ queryKey: RUNTIMES_KEY });
@@ -44,20 +36,20 @@ export function useInstallRuntimeMutation() {
 export function useInstallingRuntimes() {
   return useMutationState({
     filters: { mutationKey: INSTALL_RUNTIME_KEY, status: "pending" },
-    select: (mutation) => mutation.state.variables as Extension,
+    select: (mutation) => mutation.state.variables as string,
   });
 }
 
 // --- Progress events from install_runtime --------------------------------
 
 export type RuntimeProgress = {
-  extension: Extension;
+  extension: string;
   stage: "downloading" | "unpacking" | "verifying";
   downloaded: number;
   total: number;
 };
 
-let progress: Partial<Record<Extension, RuntimeProgress>> = {};
+let progress: Partial<Record<string, RuntimeProgress>> = {};
 const listeners = new Set<() => void>();
 
 function setProgress(next: typeof progress) {
@@ -65,7 +57,7 @@ function setProgress(next: typeof progress) {
   listeners.forEach((notify) => notify());
 }
 
-function clearProgress(extension: Extension) {
+function clearProgress(extension: string) {
   const { [extension]: _removed, ...rest } = progress;
   setProgress(rest);
 }
@@ -76,7 +68,7 @@ listen<RuntimeProgress>("runtime-progress", (event) => {
 });
 
 /** Latest progress for a language's download, or undefined when idle. */
-export function useRuntimeProgress(extension: Extension) {
+export function useRuntimeProgress(extension: string) {
   return useSyncExternalStore(
     (notify) => {
       listeners.add(notify);

@@ -8,7 +8,6 @@ import {
   readFile,
   renameFile,
   writeFile,
-  type Extension,
 } from "@/lib/files";
 
 // Keys include the register number so one student's cache can never be
@@ -65,7 +64,7 @@ function invalidateHistory(queryClient: ReturnType<typeof useQueryClient>, regNo
 export function useCreateFileMutation(regNo: string) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ name, extension }: { name: string; extension: Extension }) =>
+    mutationFn: ({ name, extension }: { name: string; extension: string }) =>
       createFile(name, extension),
     onSuccess: (filename) => {
       queryClient.setQueryData<string[]>(queryKeys.files(regNo), (files = []) =>

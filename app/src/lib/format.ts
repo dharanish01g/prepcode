@@ -1,4 +1,5 @@
-import { extensionOf, type Extension } from "@/lib/files";
+import { extensionOf } from "@/lib/files";
+import { findLanguage } from "@/lib/languages";
 
 // Each formatter is loaded the first time it's needed, so the app starts as
 // fast as before. All of them are bundled (WASM or JS), so they work offline.
@@ -54,22 +55,21 @@ async function formatJavaScript(code: string) {
 }
 
 /**
- * Formats a student's program by its file type: Prettier for JavaScript,
- * Ruff for Python, clang-format for C, C++ and Java. Throws if the code
- * can't be parsed (e.g. a Python syntax error).
+ * Formats a student's program with the formatter its language names in the
+ * catalog: "prettier" (JavaScript), "ruff" (Python) or "clang-format" (C,
+ * C++, Java; it picks the language from the file extension). Throws if the
+ * code can't be parsed (e.g. a Python syntax error).
  */
 export async function formatCode(filename: string, code: string): Promise<string> {
-  const extension = extensionOf(filename) as Extension;
-  switch (extension) {
-    case "js":
+  const extension = extensionOf(filename);
+  switch (findLanguage(extension)?.formatter) {
+    case "prettier":
       return formatJavaScript(code);
-    case "py": {
+    case "ruff": {
       const ruff = await loadRuff();
       return ruff.format(code, filename, { indent_width: 4, line_width: 100 });
     }
-    case "c":
-    case "cpp":
-    case "java": {
+    case "clang-format": {
       const clang = await loadClang();
       return clang.format(code, `main.${extension}`, CLANG_STYLE);
     }

@@ -1,0 +1,295 @@
+{
+  "version": 1,
+  "runtimes": [
+    {
+      "id": "python-3.13.15",
+      "exe": {
+        "windows": "python.exe",
+        "macos": "bin/python3",
+        "linux": "bin/python3"
+      },
+      "version_args": [
+        "--version"
+      ],
+      "downloads": [
+        {
+          "os": "windows",
+          "arch": "x86_64",
+          "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260929/cpython-3.13.15%2B20260929-x86_64-pc-windows-msvc-install_only.tar.gz",
+          "sha256": "26877c51b0aa91066f9d76291c324c6037b2ad8c40a1f85f51801b6c9ff0789c",
+          "kind": "tar.gz"
+        },
+        {
+          "os": "macos",
+          "arch": "aarch64",
+          "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260929/cpython-3.13.15%2B20260929-aarch64-apple-darwin-install_only.tar.gz",
+          "sha256": "003d459a75ff6949a6590812b1e02a65e849b5b2a9f47c421010138ec643a11c",
+          "kind": "tar.gz"
+        },
+        {
+          "os": "macos",
+          "arch": "x86_64",
+          "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260929/cpython-3.13.15%2B20260929-x86_64-apple-darwin-install_only.tar.gz",
+          "sha256": "54e9da9571fd13655096dbfbd2f18a04ff90fe0051c135cb6547d6e76c3db507",
+          "kind": "tar.gz"
+        },
+        {
+          "os": "linux",
+          "arch": "x86_64",
+          "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260929/cpython-3.13.15%2B20260929-x86_64-unknown-linux-gnu-install_only.tar.gz",
+          "sha256": "d6b4e09474dfc219befabeae16264466f09615a991dcd080ae698833bdb3ed44",
+          "kind": "tar.gz"
+        }
+      ]
+    },
+    {
+      "id": "node-22.23.3",
+      "exe": {
+        "windows": "node.exe",
+        "macos": "bin/node",
+        "linux": "bin/node"
+      },
+      "version_args": [
+        "--version"
+      ],
+      "downloads": [
+        {
+          "os": "windows",
+          "arch": "x86_64",
+          "url": "https://nodejs.org/dist/v22.23.3/node-v22.23.3-win-x64.zip",
+          "sha256": "2b0ff57b049cda1bbcea2240eec20467018713c1efe1f7360c2681859b90ed71",
+          "kind": "zip"
+        },
+        {
+          "os": "macos",
+          "arch": "aarch64",
+          "url": "https://nodejs.org/dist/v22.23.3/node-v22.23.3-darwin-arm64.tar.gz",
+          "sha256": "23b25245dcfb9af7262f8ff142e9e2e0af025368117329e7a7458a51e5922f53",
+          "kind": "tar.gz"
+        },
+        {
+          "os": "macos",
+          "arch": "x86_64",
+          "url": "https://nodejs.org/dist/v22.23.3/node-v22.23.3-darwin-x64.tar.gz",
+          "sha256": "8a677b0219178efd6eb0e475457c4afb452b521a92f6e67845a73bd85727f2a8",
+          "kind": "tar.gz"
+        },
+        {
+          "os": "linux",
+          "arch": "x86_64",
+          "url": "https://nodejs.org/dist/v22.23.3/node-v22.23.3-linux-x64.tar.gz",
+          "sha256": "1084aa36196bba4c3a5e69a1ee388a6e4ff729dad09445fbcd434b28fe3c24af",
+          "kind": "tar.gz"
+        }
+      ]
+    },
+    {
+      "id": "jdk-21.0.12.1",
+      "exe": {
+        "windows": "bin/java.exe",
+        "macos": "Contents/Home/bin/java",
+        "linux": "bin/java"
+      },
+      "version_args": [
+        "-version"
+      ],
+      "downloads": [
+        {
+          "os": "windows",
+          "arch": "x86_64",
+          "url": "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.12.1%2B1/OpenJDK21U-jdk_x64_windows_hotspot_21.0.12.1_1.zip",
+          "sha256": "f9d6e191ab098c0d416e7d588a24420a8621cd2f4720dab2459b8b7b2d2d8b4e",
+          "kind": "zip"
+        },
+        {
+          "os": "macos",
+          "arch": "aarch64",
+          "url": "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.12.1%2B1/OpenJDK21U-jdk_aarch64_mac_hotspot_21.0.12.1_1.tar.gz",
+          "sha256": "3623232f33a9c3baadf304480b2535f9a3cba8a58d42ecbb438ba267315d9998",
+          "kind": "tar.gz"
+        },
+        {
+          "os": "macos",
+          "arch": "x86_64",
+          "url": "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.12.1%2B1/OpenJDK21U-jdk_x64_mac_hotspot_21.0.12.1_1.tar.gz",
+          "sha256": "44db0f08196daf19a47f90d13388b0c943b67663cb537f998fe29e836fa842ce",
+          "kind": "tar.gz"
+        },
+        {
+          "os": "linux",
+          "arch": "x86_64",
+          "url": "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.12.1%2B1/OpenJDK21U-jdk_x64_linux_hotspot_21.0.12.1_1.tar.gz",
+          "sha256": "ce79869e1307ed8ee1e2baa86a412b1eb5b75d10a01006d788a6f968bcfaee94",
+          "kind": "tar.gz"
+        }
+      ]
+    },
+    {
+      "id": "zig-0.16.0",
+      "exe": {
+        "windows": "zig.exe",
+        "macos": "zig",
+        "linux": "zig"
+      },
+      "version_args": [
+        "version"
+      ],
+      "env": {
+        "ZIG_GLOBAL_CACHE_DIR": "{shared}/zig-cache",
+        "ZIG_LOCAL_CACHE_DIR": "{shared}/zig-cache"
+      },
+      "warmup": [
+        {
+          "files": {
+            "warmup.c": "#include <stdio.h>\nint main(void){puts(\"ok\");return 0;}\n"
+          },
+          "args": [
+            "cc",
+            "-o",
+            "warmup-c",
+            "warmup.c"
+          ]
+        },
+        {
+          "files": {
+            "warmup.cpp": "#include <iostream>\n#include <string>\nint main(){std::string s;std::cout<<s;}\n"
+          },
+          "args": [
+            "c++",
+            "-o",
+            "warmup-cpp",
+            "warmup.cpp"
+          ]
+        }
+      ],
+      "downloads": [
+        {
+          "os": "windows",
+          "arch": "x86_64",
+          "url": "https://ziglang.org/download/0.16.0/zig-x86_64-windows-0.16.0.zip",
+          "sha256": "68659eb5f1e4eb1437a722f1dd889c5a322c9954607f5edcf337bc3684a75a7e",
+          "kind": "zip"
+        },
+        {
+          "os": "macos",
+          "arch": "aarch64",
+          "url": "https://ziglang.org/download/0.16.0/zig-aarch64-macos-0.16.0.tar.xz",
+          "sha256": "b23d70deaa879b5c2d486ed3316f7eaa53e84acf6fc9cc747de152450d401489",
+          "kind": "tar.xz"
+        },
+        {
+          "os": "macos",
+          "arch": "x86_64",
+          "url": "https://ziglang.org/download/0.16.0/zig-x86_64-macos-0.16.0.tar.xz",
+          "sha256": "0387557ed1877bc6a2e1802c8391953baddba76081876301c522f52977b52ba7",
+          "kind": "tar.xz"
+        },
+        {
+          "os": "linux",
+          "arch": "x86_64",
+          "url": "https://ziglang.org/download/0.16.0/zig-x86_64-linux-0.16.0.tar.xz",
+          "sha256": "70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00",
+          "kind": "tar.xz"
+        }
+      ]
+    }
+  ],
+  "languages": [
+    {
+      "extension": "py",
+      "name": "Python",
+      "monaco": "python",
+      "formatter": "ruff",
+      "runtime": "python-3.13.15",
+      "icon": "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" id=\"Calque_1\" data-name=\"Calque 1\" viewBox=\"0 0 16 16\"><defs><style>.cls-1{fill:url(#Dégradé_sans_nom_11)}.cls-2{fill:url(#Dégradé_sans_nom_2)}</style><linearGradient id=\"Dégradé_sans_nom_11\" x1=\"48\" x2=\"53.96\" y1=\"-32.55\" y2=\"-38.53\" gradientTransform=\"matrix(1, 0, 0, -1, -44.94, -29.47)\" gradientUnits=\"userSpaceOnUse\"><stop offset=\"0\" stop-color=\"#387eb8\"/><stop offset=\"1\" stop-color=\"#366994\"/></linearGradient><linearGradient id=\"Dégradé_sans_nom_2\" x1=\"51.66\" x2=\"58.07\" y1=\"-36.36\" y2=\"-42.49\" gradientTransform=\"matrix(1, 0, 0, -1, -44.94, -29.47)\" gradientUnits=\"userSpaceOnUse\"><stop offset=\"0\" stop-color=\"#ffe052\"/><stop offset=\"1\" stop-color=\"#ffc331\"/></linearGradient></defs><g id=\"layer1\"><g id=\"g1894\"><path id=\"path8615\" d=\"M7.91,2C4.85,2,5,3.33,5,3.33V4.7H8v.42H3.89s-2-.23-2,2.86,1.71,3,1.71,3h1V9.53A1.62,1.62,0,0,1,6.34,7.82h2.9a1.55,1.55,0,0,0,1.63-1.57V3.6S11.11,2,7.91,2ZM6.3,2.93a.52.52,0,0,1,.53.52A.53.53,0,0,1,6.3,4a.52.52,0,0,1-.52-.53A.52.52,0,0,1,6.3,2.93Z\" class=\"cls-1\"/><path id=\"path8620\" d=\"M8,14c3.06,0,2.87-1.33,2.87-1.33V11.3H8v-.42H12s2,.23,2-2.86-1.71-3-1.71-3h-1V6.47A1.63,1.63,0,0,1,9.58,8.18H6.68A1.55,1.55,0,0,0,5.05,9.75V12.4S4.8,14,8,14Zm1.61-.93a.52.52,0,0,1-.52-.52A.52.52,0,0,1,9.61,12a.53.53,0,0,1,.53.53A.52.52,0,0,1,9.61,13.07Z\" class=\"cls-2\"/></g></g></svg>",
+      "run": {
+        "args": [
+          "-u",
+          "{filename}"
+        ],
+        "env": {
+          "PYTHONUTF8": "1",
+          "PYTHONIOENCODING": "utf-8",
+          "PYTHONDONTWRITEBYTECODE": "1"
+        }
+      }
+    },
+    {
+      "extension": "js",
+      "name": "JavaScript",
+      "monaco": "javascript",
+      "formatter": "prettier",
+      "runtime": "node-22.23.3",
+      "icon": "<svg viewBox=\"0 0 24 24\" xmlns=\"http://www.w3.org/2000/svg\"><path d=\"M3 3h18v18H3V3m4.73 15.04c.4.85 1.19 1.55 2.54 1.55 1.5 0 2.53-.8 2.53-2.55v-5.78h-1.7V17c0 .86-.35 1.08-.9 1.08-.58 0-.82-.4-1.09-.87l-1.38.83m5.98-.18c.5.98 1.51 1.73 3.09 1.73 1.6 0 2.8-.83 2.8-2.36 0-1.41-.81-2.04-2.25-2.66l-.42-.18c-.73-.31-1.04-.52-1.04-1.02 0-.41.31-.73.81-.73.48 0 .8.21 1.09.73l1.31-.87c-.55-.96-1.33-1.33-2.4-1.33-1.51 0-2.48.96-2.48 2.23 0 1.38.81 2.03 2.03 2.55l.42.18c.78.34 1.24.55 1.24 1.13 0 .48-.45.83-1.15.83-.83 0-1.31-.43-1.67-1.03l-1.38.8z\" fill=\"#ffca28\"/></svg>",
+      "run": {
+        "args": [
+          "{filename}"
+        ]
+      }
+    },
+    {
+      "extension": "c",
+      "name": "C",
+      "monaco": "c",
+      "formatter": "clang-format",
+      "runtime": "zig-0.16.0",
+      "icon": "<svg viewBox=\"0 0 24 24\" xmlns=\"http://www.w3.org/2000/svg\"><path d=\"m16.45 15.97.42 2.44c-.26.14-.68.27-1.24.39-.57.13-1.24.2-2.01.2-2.21-.04-3.87-.7-4.98-1.96-1.14-1.27-1.68-2.88-1.68-4.83C7 9.9 7.68 8.13 9 6.89 10.28 5.64 11.92 5 13.9 5c.75 0 1.4.07 1.94.19s.94.25 1.2.4l-.6 2.49-1.04-.34c-.4-.1-.87-.15-1.4-.15-1.15-.01-2.11.36-2.86 1.1-.76.73-1.14 1.85-1.18 3.34.01 1.36.37 2.42 1.08 3.2.71.77 1.7 1.17 2.99 1.18l1.33-.12c.43-.08.79-.19 1.09-.32z\" style=\"fill:#0277bd\"/></svg>",
+      "compile": {
+        "args": [
+          "cc",
+          "-include",
+          "{build}/prepcode_prelude.h",
+          "-o",
+          "{binary}",
+          "{source}"
+        ],
+        "files": {
+          "prepcode_prelude.h": "/* Added by prepcode so output appears immediately in the console. */\n#include <stdio.h>\n__attribute__((constructor)) static void prepcode_unbuffered_stdout(void) {\n    setvbuf(stdout, NULL, _IONBF, 0);\n}\n"
+        }
+      },
+      "run": {
+        "program": "{binary}"
+      }
+    },
+    {
+      "extension": "cpp",
+      "name": "C++",
+      "monaco": "cpp",
+      "formatter": "clang-format",
+      "runtime": "zig-0.16.0",
+      "icon": "<svg viewBox=\"0 0 24 24\" xmlns=\"http://www.w3.org/2000/svg\"><path d=\"m10 15.97.41 2.44c-.26.14-.68.27-1.24.39-.57.13-1.24.2-2.01.2-2.21-.04-3.87-.7-4.98-1.96C1.06 15.77.5 14.16.5 12.21c.05-2.31.72-4.08 2-5.32C3.82 5.64 5.46 5 7.44 5c.75 0 1.4.07 1.94.19s.94.25 1.2.4L10 8.08l-1.06-.34c-.4-.1-.86-.15-1.39-.15-1.16-.01-2.12.36-2.87 1.1-.76.73-1.15 1.85-1.18 3.34 0 1.36.37 2.42 1.08 3.2.71.77 1.71 1.17 2.99 1.18l1.33-.12c.43-.08.79-.19 1.1-.32m.5-4.97h2V9h2v2h2v2h-2v2h-2v-2h-2v-2m7 0h2V9h2v2h2v2h-2v2h-2v-2h-2z\" style=\"fill:#0277bd\"/></svg>",
+      "compile": {
+        "args": [
+          "c++",
+          "-include",
+          "{build}/prepcode_prelude.h",
+          "-o",
+          "{binary}",
+          "{source}"
+        ],
+        "files": {
+          "prepcode_prelude.h": "/* Added by prepcode so output appears immediately in the console. */\n#include <stdio.h>\n__attribute__((constructor)) static void prepcode_unbuffered_stdout(void) {\n    setvbuf(stdout, NULL, _IONBF, 0);\n}\n"
+        }
+      },
+      "run": {
+        "program": "{binary}"
+      }
+    },
+    {
+      "extension": "java",
+      "name": "Java",
+      "monaco": "java",
+      "formatter": "clang-format",
+      "runtime": "jdk-21.0.12.1",
+      "icon": "<svg viewBox=\"0 0 24 24\" xmlns=\"http://www.w3.org/2000/svg\"><path d=\"M2 21h18v-2H2M20 8h-2V5h2m0-2H4v10a4 4 0 0 0 4 4h6a4 4 0 0 0 4-4v-3h2a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2z\" fill=\"#f44336\"/></svg>",
+      "run": {
+        "args": [
+          "-Dfile.encoding=UTF-8",
+          "-Dstdout.encoding=UTF-8",
+          "-Dstderr.encoding=UTF-8",
+          "{filename}"
+        ]
+      }
+    }
+  ]
+}
