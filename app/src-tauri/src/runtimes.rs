@@ -1,8 +1,11 @@
 //! Portable language runtimes that prepcode downloads for itself.
 //!
 //! Nothing is installed system-wide: each runtime is a portable archive,
-//! checksum-verified, unpacked into `<app local data>/runtimes/<id>/` and run by
+//! checksum-verified, unpacked into `<shared data>/runtimes/<id>/` and run by
 //! its full path. PATH, the registry and other programs are never touched.
+//!
+//! On Windows the shared data folder is machine-wide, so a lab PC downloads
+//! each language once for every Windows account instead of once per account.
 
 use std::collections::HashSet;
 use std::fs::{self, File};
@@ -10,6 +13,8 @@ use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Mutex;
+#[cfg(windows)]
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use futures_util::StreamExt;
@@ -232,13 +237,58 @@ struct Progress {
     total: u64,
 }
 
-fn runtimes_dir(app: &AppHandle) -> Result<PathBuf, String> {
-    // Local (not roaming) app data: runtimes are big and shouldn't sync between
-    // machines on networks that roam user profiles.
+/// Where runtimes and the Zig cache live.
+///
+/// Windows: `C:\ProgramData\<identifier>`, shared by every Windows account on
+/// the PC. Elsewhere: the user's local (not roaming) app data, since runtimes
+/// are big and shouldn't sync between machines on networks that roam profiles.
+#[cfg(windows)]
+fn shared_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    let base = std::env::var_os("ProgramData").ok_or("Could not locate the ProgramData folder.")?;
+    let dir = PathBuf::from(base).join(&app.config().identifier);
+    static SHARED: OnceLock<()> = OnceLock::new();
+    SHARED.get_or_init(|| share_with_all_users(&dir));
+    Ok(dir)
+}
+
+#[cfg(not(windows))]
+fn shared_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
     app.path()
         .app_local_data_dir()
-        .map(|dir| dir.join("runtimes"))
         .map_err(|e| format!("Could not locate app data folder: {e}"))
+}
+
+/// By default, what one account creates in ProgramData is read-only to the
+/// others: enough to run a runtime, but not to repair an interrupted download
+/// or let Zig write its cache. So the account that creates the folder (its
+/// owner, who may change its permissions without admin rights) grants all
+/// users Modify, inherited by everything inside. Best effort: for every later
+/// account this fails harmlessly because the permission is already there.
+#[cfg(windows)]
+fn share_with_all_users(dir: &Path) {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+    if fs::create_dir_all(dir).is_err() {
+        return;
+    }
+    let icacls = std::env::var_os("SystemRoot")
+        .map(|root| PathBuf::from(root).join("System32").join("icacls.exe"))
+        .unwrap_or_else(|| PathBuf::from("icacls.exe"));
+    // *S-1-5-32-545 is the built-in Users group, named by SID so it works in
+    // every Windows language. (OI)(CI)M: Modify, inherited by files and folders.
+    let _ = Command::new(icacls)
+        .arg(dir)
+        .args(["/grant", "*S-1-5-32-545:(OI)(CI)M", "/Q"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .creation_flags(CREATE_NO_WINDOW)
+        .status();
+}
+
+fn runtimes_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(shared_data_dir(app)?.join("runtimes"))
 }
 
 fn is_installed(app: &AppHandle, runtime: &Runtime) -> Result<bool, String> {
@@ -428,12 +478,11 @@ fn single_top_level_dir(dir: &Path) -> Result<PathBuf, String> {
     }
 }
 
-/// Zig's cache, kept inside prepcode's folder instead of the user's home.
+/// Zig's cache, kept inside prepcode's folder instead of the user's home. It
+/// sits next to the runtimes so the standard libraries the installer builds
+/// are reused by every account, not rebuilt on each one's first compile.
 pub fn zig_cache_dir(app: &AppHandle) -> Result<PathBuf, String> {
-    app.path()
-        .app_local_data_dir()
-        .map(|dir| dir.join("zig-cache"))
-        .map_err(|e| format!("Could not locate app data folder: {e}"))
+    Ok(shared_data_dir(app)?.join("zig-cache"))
 }
 
 /// Compiles throwaway C and C++ programs so Zig builds and caches its standard
