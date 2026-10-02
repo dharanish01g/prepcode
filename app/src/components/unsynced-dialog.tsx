@@ -44,8 +44,8 @@ export function UnsyncedDialog({
           </AlertDialogMedia>
           <AlertDialogTitle>{changes} synced to GitHub</AlertDialogTitle>
           <AlertDialogDescription>
-            Sync now to save them to GitHub, where your teacher can see them. If you {action}{" "}
-            without syncing, they stay only on this computer until you sign in here again and sync.
+            Sync now to save them to GitHub. If you {action} without syncing, they stay only on this
+            computer until you sign in here again and sync.
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>

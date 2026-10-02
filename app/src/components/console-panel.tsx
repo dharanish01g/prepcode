@@ -18,6 +18,7 @@ const ENTRY_STYLES: Record<ConsoleEntry["kind"], string> = {
 export function ConsolePanel({
   entries,
   loading,
+  running,
   acceptingInput,
   onSend,
   onClear,
@@ -25,6 +26,8 @@ export function ConsolePanel({
   entries: ConsoleEntry[];
   /** A run just started: show a loader instead of the (held back) output. */
   loading: boolean;
+  /** The program is still running (shown once the loader is gone). */
+  running: boolean;
   /** Show the input box (the program is running and plausibly reading input). */
   acceptingInput: boolean;
   onSend: (line: string) => void;
@@ -72,7 +75,9 @@ export function ConsolePanel({
           <pre className="p-4 font-mono text-xs break-words whitespace-pre-wrap">
             {entries.length === 0 ? (
               <span className="text-muted-foreground">
-                Run your program to see its output here.
+                {running
+                  ? "Your program is running but hasn't printed anything. If it's waiting for input, type it below."
+                  : "Run your program to see its output here."}
               </span>
             ) : (
               entries.map((entry, i) => {

@@ -10,12 +10,26 @@ export type ConsoleEntry = {
 const MAX_CONSOLE_CHARS = 200_000;
 
 /**
- * Programs can't tell us when they're waiting for input, so the input box
- * appears once the program prints normal output (e.g. a prompt) or has been
- * running this long. Showing it immediately made it flash for programs that
- * fail right away, like Java compile errors (which go to stderr).
+ * Each run shows a loader for at least this long, and after that until the
+ * program prints something or finishes. Otherwise the console flickers: the
+ * empty-console hint, the input box, then output (worst for Java, which
+ * compiles inside the run, so a second can pass before any output).
  */
-const SHOW_INPUT_AFTER_MS = 1500;
+const MIN_LOADING_MS = 400;
+
+/**
+ * Programs can't tell us when they're waiting for input. One that has run this
+ * long without printing anything might be (e.g. reading input without a
+ * prompt), so the loader gives way to the input box then.
+ */
+const SILENT_INPUT_AFTER_MS = 3000;
+
+/**
+ * After the program prints, the input box waits until output has been quiet
+ * this long, so it doesn't flash for a program that prints and exits, but
+ * appears soon after a prompt.
+ */
+const INPUT_SETTLE_MS = 300;
 
 /** Message for how a run ended, or null for a normal finish (nothing to say). */
 function exitMessage(event: Extract<RunEvent, { type: "exit" }>) {
@@ -49,31 +63,25 @@ function append(entries: ConsoleEntry[], added: ConsoleEntry[]) {
   return next;
 }
 
-/**
- * Each run shows a loader for at least this long, holding back output and the
- * input box meanwhile. Otherwise the console flickers: the empty-console
- * hint, then the input box for a program that's already done, then output.
- */
-const MIN_LOADING_MS = 400;
-
 /** Console state for running the student's programs, one at a time. */
 export function useRunner() {
   const [entries, setEntries] = useState<ConsoleEntry[]>([]);
   const [running, setRunning] = useState(false);
   const [loading, setLoading] = useState(false);
+  // Loading for a while (e.g. a slow compile): Stop is offered meanwhile.
+  const [loadingLong, setLoadingLong] = useState(false);
   const [acceptingInput, setAcceptingInput] = useState(false);
-  const inputTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
-  const loadingTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   // Events from a previous run are ignored once a new run starts.
   const runToken = useRef(0);
   // Output arrives in bursts; apply it once per animation frame.
   const buffered = useRef<ConsoleEntry[]>([]);
   const frame = useRef<number | null>(null);
-  // While the loader shows, output only collects in `buffered`, and a wish to
-  // show the input box waits here (cleared if the program ends first).
+  // While the loader shows, output only collects in `buffered`.
   const holding = useRef(false);
-  const inputWanted = useRef(false);
+  // The current run's timers, cleared when it ends or another starts.
+  const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const inputTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   const flush = useCallback(() => {
     if (holding.current || frame.current !== null) return;
@@ -93,61 +101,88 @@ export function useRunner() {
     [flush],
   );
 
-  const showInput = useCallback(() => {
-    if (holding.current) inputWanted.current = true;
-    else setAcceptingInput(true);
+  const clearTimers = useCallback(() => {
+    timers.current.forEach(clearTimeout);
+    timers.current = [];
+    clearTimeout(inputTimer.current);
   }, []);
 
   useEffect(
     () => () => {
       if (frame.current !== null) cancelAnimationFrame(frame.current);
-      clearTimeout(inputTimer.current);
-      clearTimeout(loadingTimer.current);
+      clearTimers();
     },
-    [],
+    [clearTimers],
   );
 
   const run = useCallback(
     async (filename: string) => {
       const token = ++runToken.current;
+      const current = () => token === runToken.current;
       // A frame still due from the last run would show this run's output early.
       if (frame.current !== null) cancelAnimationFrame(frame.current);
       frame.current = null;
+      clearTimers();
       buffered.current = [];
       setEntries([]);
       setRunning(true);
       setAcceptingInput(false);
-      clearTimeout(inputTimer.current);
-      clearTimeout(loadingTimer.current);
-      let started = false;
 
       holding.current = true;
-      inputWanted.current = false;
       setLoading(true);
-      loadingTimer.current = setTimeout(() => {
-        if (token !== runToken.current) return;
+      setLoadingLong(false);
+      let minElapsed = false;
+      let printed = false; // anything, on stdout or stderr
+      let exited = false;
+      let started = false; // the program itself, after any compile step
+
+      // Shows the input box once stdout has been quiet for a moment, if the
+      // program is still running by then.
+      const settleInput = (delay: number) => {
+        clearTimeout(inputTimer.current);
+        inputTimer.current = setTimeout(() => {
+          if (current() && !exited && !holding.current) setAcceptingInput(true);
+        }, delay);
+      };
+
+      // Ends the loader once it's been up long enough and there's something
+      // to show: output, the end of the run, or a long silence.
+      const release = (silent = false) => {
+        if (!current() || !holding.current || !minElapsed) return;
+        if (!printed && !exited && !silent) return;
         holding.current = false;
         // Everything held back appears in the same render that hides the
-        // loader (not a frame later, which would flash the empty-console
-        // hint), along with the input box if the program is still running
-        // and seems to want input.
+        // loader (not a frame later, which would flash the empty-console hint).
         const added = buffered.current;
         buffered.current = [];
         setEntries((prev) => append(prev, added));
         setLoading(false);
-        if (inputWanted.current) setAcceptingInput(true);
-      }, MIN_LOADING_MS);
+        setLoadingLong(false);
+        if (exited) return;
+        if (silent) setAcceptingInput(true);
+        else if (started && added.some((e) => e.kind === "stdout")) settleInput(INPUT_SETTLE_MS);
+      };
+
+      timers.current.push(
+        setTimeout(() => {
+          minElapsed = true;
+          release();
+        }, MIN_LOADING_MS),
+        setTimeout(() => {
+          if (current() && holding.current) setLoadingLong(true);
+        }, SILENT_INPUT_AFTER_MS),
+      );
 
       const onEvent = (event: RunEvent) => {
-        if (token !== runToken.current) return;
+        if (!current()) return;
         if (event.type === "started") {
           started = true;
-          inputTimer.current = setTimeout(() => {
-            if (token === runToken.current) showInput();
-          }, SHOW_INPUT_AFTER_MS);
+          timers.current.push(setTimeout(() => release(true), SILENT_INPUT_AFTER_MS));
         } else if (event.type === "output") {
           push({ kind: event.stream, text: event.text });
-          if (started && event.stream === "stdout") showInput();
+          printed = true;
+          if (holding.current) release();
+          else if (started && event.stream === "stdout" && !exited) settleInput(INPUT_SETTLE_MS);
         } else {
           const message = exitMessage(event);
           if (message) push({ kind: event.stopped ? "status" : "error", text: message });
@@ -157,18 +192,19 @@ export function useRunner() {
       try {
         await runProgram(filename, onEvent);
       } catch (err) {
-        if (token === runToken.current) push({ kind: "error", text: String(err) });
+        if (current()) push({ kind: "error", text: String(err) });
       } finally {
-        if (token === runToken.current) {
+        if (current()) {
+          exited = true;
           clearTimeout(inputTimer.current);
-          // Finished during the loader: show the output, never the input box.
-          inputWanted.current = false;
           setAcceptingInput(false);
           setRunning(false);
+          // Over already: no loader beyond the minimum, and never the input box.
+          release();
         }
       }
     },
-    [push, showInput],
+    [push, clearTimers],
   );
 
   const send = useCallback(
@@ -189,5 +225,5 @@ export function useRunner() {
     setEntries([]);
   }, []);
 
-  return { entries, running, loading, acceptingInput, run, send, stop, clear };
+  return { entries, running, loading, loadingLong, acceptingInput, run, send, stop, clear };
 }

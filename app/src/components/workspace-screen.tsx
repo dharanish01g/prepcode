@@ -212,6 +212,7 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
               <ConsolePanel
                 entries={runner.entries}
                 loading={runner.loading}
+                running={runner.running}
                 acceptingInput={runner.acceptingInput}
                 onSend={runner.send}
                 onClear={runner.clear}
