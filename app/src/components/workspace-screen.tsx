@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { AppSidebar } from "@/components/app-sidebar";
+import { AppSidebar, type View } from "@/components/app-sidebar";
 import { CodeEditor } from "@/components/code-editor";
 import { FileIcon } from "@/components/file-icon";
 import { ConsolePanel } from "@/components/console-panel";
 import { GuestLogoutDialog } from "@/components/guest-logout-dialog";
+import { PracticeScreen } from "@/components/practice-screen";
 import { SaveStatus } from "@/components/save-status";
 import { UnsyncedDialog } from "@/components/unsynced-dialog";
 import { PlayIcon, SquareIcon, WandSparklesIcon } from "lucide-react";
@@ -39,6 +40,11 @@ import logo from "@/assets/logo.png";
 
 export function WorkspaceScreen({ session, onLogout }: { session: Session; onLogout: () => void }) {
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
+  const [view, setView] = useState<View>("Programs");
+  // Practice uses the whole main area, so the sidebar's second column stays
+  // hidden there, and comes back as it was when leaving.
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const practicing = view === "Practice";
   const flushEditorRef = useRef<() => void>(() => {});
   const formatEditorRef = useRef<() => Promise<void>>(async () => {});
   const [formatting, setFormatting] = useState(false);
@@ -112,8 +118,17 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
     runner.run(selectedFile);
   }
 
+  function handleViewChange(next: View) {
+    setView(next);
+    if (next !== "Practice") setSidebarOpen(true);
+  }
+
   return (
     <SidebarProvider
+      open={sidebarOpen && !practicing}
+      onOpenChange={(open) => {
+        if (!practicing) setSidebarOpen(open);
+      }}
       className="h-svh"
       style={{ "--sidebar-width": "350px" } as React.CSSProperties}
     >
@@ -126,6 +141,8 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
               ? () => setUnsyncedAction("log out")
               : handleLogout
         }
+        view={view}
+        onViewChange={handleViewChange}
         selectedFile={selectedFile}
         onSelectFile={setSelectedFile}
         onFlushEdits={() => flushEditorRef.current()}
@@ -138,110 +155,116 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
           Monaco's pixel width (set while collapsed) holds it wide and pushes
           the header, including Run, off screen. */}
       <SidebarInset className="min-h-0 min-w-0">
-        <header className="flex shrink-0 items-center gap-2 border-b bg-background p-4">
-          <SidebarTrigger className="-ml-1" />
-          <Separator
-            orientation="vertical"
-            className="mr-2 data-vertical:h-4 data-vertical:self-auto"
-          />
-          <Breadcrumb>
-            <BreadcrumbList>
-              <BreadcrumbItem>
-                {selectedFile ? (
-                  displayName(session)
-                ) : (
-                  <BreadcrumbPage>{displayName(session)}</BreadcrumbPage>
-                )}
-              </BreadcrumbItem>
-              {selectedFile && (
-                <>
-                  <BreadcrumbSeparator />
-                  <BreadcrumbItem>
-                    <BreadcrumbPage className="flex items-center gap-1.5">
-                      <FileIcon filename={selectedFile} />
-                      {selectedFile}
-                    </BreadcrumbPage>
-                  </BreadcrumbItem>
-                </>
-              )}
-            </BreadcrumbList>
-          </Breadcrumb>
-          <div className="ml-auto">
-            <SaveStatus />
-          </div>
-          <Button
-            variant="outline"
-            disabled={!selectedFile || !canFormat(selectedFile) || formatting || sync.syncing}
-            onClick={handleFormat}
-          >
-            {formatting ? <Spinner /> : <WandSparklesIcon />}
-            Format
-          </Button>
-          {runner.loading ? (
-            // Until the console shows the output (see MIN_LOADING_MS).
-            <Button disabled>
-              <Spinner />
-              Run
-            </Button>
-          ) : runner.running ? (
-            <Button variant="destructive" onClick={runner.stop}>
-              <SquareIcon />
-              Stop
-            </Button>
-          ) : (
-            <Button disabled={!selectedFile} onClick={handleRun}>
-              <PlayIcon />
-              Run
-            </Button>
-          )}
-        </header>
-
-        {selectedFile ? (
-          <ResizablePanelGroup orientation="vertical" className="min-h-0 flex-1">
-            <ResizablePanel defaultSize="70%" minSize="20%">
-              <CodeEditor
-                userId={session.id}
-                filename={selectedFile}
-                readOnly={sync.syncing}
-                flushRef={flushEditorRef}
-                formatRef={formatEditorRef}
-              />
-            </ResizablePanel>
-            <ResizableHandle withHandle />
-            <ResizablePanel defaultSize="30%" minSize="10%">
-              <ConsolePanel
-                entries={runner.entries}
-                loading={runner.loading}
-                running={runner.running}
-                acceptingInput={runner.acceptingInput}
-                onSend={runner.send}
-                onClear={runner.clear}
-              />
-            </ResizablePanel>
-          </ResizablePanelGroup>
+        {practicing ? (
+          <PracticeScreen />
         ) : (
-          // Like VS Code's watermark: nothing to edit or run until a file is open.
-          // pb-24 lifts it above true center, offsetting the header bar above.
-          <Empty className="pb-24">
-            <EmptyHeader className="gap-1">
-              {/* -mb-4 trims the transparent padding at the bottom of logo.png. */}
-              <EmptyMedia className="mb-0">
-                <img src={logo} alt="" className="-mb-4 size-32 opacity-40 grayscale" />
-              </EmptyMedia>
-              <EmptyTitle className="text-3xl font-semibold text-muted-foreground">
-                prepcode
-              </EmptyTitle>
-              <EmptyDescription className="text-sm">
-                Create or select a file to start coding.
-                {session.guest && (
-                  <>
-                    <br />
-                    You're a guest: your files are deleted when you log out or close prepcode.
-                  </>
-                )}
-              </EmptyDescription>
-            </EmptyHeader>
-          </Empty>
+          <>
+            <header className="flex h-16 shrink-0 items-center gap-2 border-b bg-background px-4">
+              <SidebarTrigger className="-ml-1" />
+              <Separator
+                orientation="vertical"
+                className="mr-2 data-vertical:h-4 data-vertical:self-auto"
+              />
+              <Breadcrumb>
+                <BreadcrumbList>
+                  <BreadcrumbItem>
+                    {selectedFile ? (
+                      displayName(session)
+                    ) : (
+                      <BreadcrumbPage>{displayName(session)}</BreadcrumbPage>
+                    )}
+                  </BreadcrumbItem>
+                  {selectedFile && (
+                    <>
+                      <BreadcrumbSeparator />
+                      <BreadcrumbItem>
+                        <BreadcrumbPage className="flex items-center gap-1.5">
+                          <FileIcon filename={selectedFile} />
+                          {selectedFile}
+                        </BreadcrumbPage>
+                      </BreadcrumbItem>
+                    </>
+                  )}
+                </BreadcrumbList>
+              </Breadcrumb>
+              <div className="ml-auto">
+                <SaveStatus />
+              </div>
+              <Button
+                variant="outline"
+                disabled={!selectedFile || !canFormat(selectedFile) || formatting || sync.syncing}
+                onClick={handleFormat}
+              >
+                {formatting ? <Spinner /> : <WandSparklesIcon />}
+                Format
+              </Button>
+              {runner.loading && !runner.loadingLong ? (
+                // Until the console shows the output (see MIN_LOADING_MS).
+                <Button disabled>
+                  <Spinner />
+                  Run
+                </Button>
+              ) : runner.running ? (
+                <Button variant="destructive" onClick={runner.stop}>
+                  {runner.loading ? <Spinner /> : <SquareIcon />}
+                  Stop
+                </Button>
+              ) : (
+                <Button disabled={!selectedFile} onClick={handleRun}>
+                  <PlayIcon />
+                  Run
+                </Button>
+              )}
+            </header>
+
+            {selectedFile ? (
+              <ResizablePanelGroup orientation="vertical" className="min-h-0 flex-1">
+                <ResizablePanel defaultSize="70%" minSize="20%">
+                  <CodeEditor
+                    userId={session.id}
+                    filename={selectedFile}
+                    readOnly={sync.syncing}
+                    flushRef={flushEditorRef}
+                    formatRef={formatEditorRef}
+                  />
+                </ResizablePanel>
+                <ResizableHandle withHandle />
+                <ResizablePanel defaultSize="30%" minSize="10%">
+                  <ConsolePanel
+                    entries={runner.entries}
+                    loading={runner.loading}
+                    running={runner.running}
+                    acceptingInput={runner.acceptingInput}
+                    onSend={runner.send}
+                    onClear={runner.clear}
+                  />
+                </ResizablePanel>
+              </ResizablePanelGroup>
+            ) : (
+              // Like VS Code's watermark: nothing to edit or run until a file is open.
+              // pb-24 lifts it above true center, offsetting the header bar above.
+              <Empty className="pb-24">
+                <EmptyHeader className="gap-1">
+                  {/* -mb-4 trims the transparent padding at the bottom of logo.png. */}
+                  <EmptyMedia className="mb-0">
+                    <img src={logo} alt="" className="-mb-4 size-32 opacity-40 grayscale" />
+                  </EmptyMedia>
+                  <EmptyTitle className="text-3xl font-semibold text-muted-foreground">
+                    prepcode
+                  </EmptyTitle>
+                  <EmptyDescription className="text-sm">
+                    Create or select a file to start coding.
+                    {session.guest && (
+                      <>
+                        <br />
+                        You're a guest: your files are deleted when you log out or close prepcode.
+                      </>
+                    )}
+                  </EmptyDescription>
+                </EmptyHeader>
+              </Empty>
+            )}
+          </>
         )}
       </SidebarInset>
       <UnsyncedDialog

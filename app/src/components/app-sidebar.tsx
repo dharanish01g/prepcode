@@ -22,29 +22,34 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
-  useSidebar,
 } from "@/components/ui/sidebar";
 import { displayName, type Session } from "@/lib/auth";
 import { disposeEditorModel, editorModelPath } from "@/lib/monaco";
 import { useFilesQuery } from "@/lib/queries";
 import type { SyncStatus } from "@/lib/sync";
-import { FilesIcon, PlusIcon, MoonIcon, RefreshCwIcon, SunIcon } from "lucide-react";
+import { CodeIcon, FilesIcon, PlusIcon, MoonIcon, RefreshCwIcon, SunIcon } from "lucide-react";
 import { Spinner } from "@/components/ui/spinner";
 import { useTheme } from "@/hooks/use-theme";
 import logo from "@/assets/logo.png";
 
-const data = {
+export type View = "Programs" | "Sync" | "Practice";
+
+const data: { navMain: { title: View; icon: React.ReactNode }[] } = {
   navMain: [
     // Every program by when it was last edited, newest first.
     { title: "Programs", icon: <FilesIcon /> },
     // What isn't on GitHub yet, and the Sync button. Students only.
     { title: "Sync", icon: <RefreshCwIcon /> },
+    // Questions to solve. Takes the whole main area, so this column hides.
+    { title: "Practice", icon: <CodeIcon /> },
   ],
 };
 
 export function AppSidebar({
   session,
   onLogout,
+  view,
+  onViewChange,
   selectedFile,
   onSelectFile,
   onFlushEdits,
@@ -56,6 +61,8 @@ export function AppSidebar({
 }: React.ComponentProps<typeof Sidebar> & {
   session: Session;
   onLogout: () => void;
+  view: View;
+  onViewChange: (view: View) => void;
   selectedFile: string | null;
   onSelectFile: (filename: string | null) => void;
   /** Saves the editor's pending edits now (before a rename or delete). */
@@ -67,11 +74,7 @@ export function AppSidebar({
   syncing: boolean;
   onSync: () => void;
 }) {
-  // Note: I'm using state to show active item.
-  // IRL you should use the url/router.
-  const [activeItem, setActiveItem] = React.useState(data.navMain[0]);
   const navItems = data.navMain.filter((item) => !session.guest || item.title !== "Sync");
-  const { setOpen } = useSidebar();
   const { theme, toggleTheme } = useTheme();
   const filesQuery = useFilesQuery(session.id);
   const files = filesQuery.data ?? [];
@@ -123,11 +126,8 @@ export function AppSidebar({
                         children: item.title,
                         hidden: false,
                       }}
-                      onClick={() => {
-                        setActiveItem(item);
-                        setOpen(true);
-                      }}
-                      isActive={activeItem.title === item.title}
+                      onClick={() => onViewChange(item.title)}
+                      isActive={view === item.title}
                       className="px-2.5 md:px-2"
                     >
                       {item.title === "Sync" && unsynced > 0 ? (
@@ -175,47 +175,48 @@ export function AppSidebar({
       {/* This is the second sidebar */}
       {/* We disable collapsible and let it fill remaining space */}
       <Sidebar collapsible="none" className="hidden flex-1 md:flex">
-        <SidebarHeader className="gap-3.5 border-b p-4">
-          <div className="flex w-full items-center justify-between">
-            <div className="text-base font-medium text-foreground">{activeItem.title}</div>
-            {activeItem.title === "Sync" ? (
-              <Button
-                size="sm"
-                disabled={syncing}
-                onClick={onSync}
-                title="Save your changes to GitHub"
-              >
-                {syncing ? <Spinner /> : <RefreshCwIcon />}
-                Sync
-              </Button>
-            ) : (
-              <Button size="sm" onClick={() => setNewFileOpen(true)}>
-                <PlusIcon />
-                New file
-              </Button>
-            )}
-            <NewFileDialog
-              open={newFileOpen}
-              onOpenChange={setNewFileOpen}
-              userId={session.id}
-              existingFiles={files}
-              onCreated={(filename) => {
-                onSelectFile(filename);
-                setSearch("");
-                setNewFileOpen(false);
-              }}
-            />
-          </div>
-          {activeItem.title === "Programs" && (
+        {/* h-16 and its bottom border line up with the main area's top bar. */}
+        <SidebarHeader className="h-16 flex-row items-center justify-between border-b px-4 py-0">
+          <div className="text-base font-medium text-foreground">{view}</div>
+          {view === "Sync" ? (
+            <Button
+              size="sm"
+              disabled={syncing}
+              onClick={onSync}
+              title="Save your changes to GitHub"
+            >
+              {syncing ? <Spinner /> : <RefreshCwIcon />}
+              Sync
+            </Button>
+          ) : (
+            <Button size="sm" onClick={() => setNewFileOpen(true)}>
+              <PlusIcon />
+              New file
+            </Button>
+          )}
+          <NewFileDialog
+            open={newFileOpen}
+            onOpenChange={setNewFileOpen}
+            userId={session.id}
+            existingFiles={files}
+            onCreated={(filename) => {
+              onSelectFile(filename);
+              setSearch("");
+              setNewFileOpen(false);
+            }}
+          />
+        </SidebarHeader>
+        {view === "Programs" && (
+          <SidebarHeader className="p-4 pb-0">
             <SidebarInput
               placeholder="Search files..."
               value={search}
               onChange={(e) => setSearch(e.currentTarget.value)}
             />
-          )}
-        </SidebarHeader>
+          </SidebarHeader>
+        )}
         <SidebarContent className="py-2">
-          {activeItem.title === "Sync" ? (
+          {view === "Sync" ? (
             <SyncList status={syncStatus} selectedFile={selectedFile} onSelectFile={onSelectFile} />
           ) : (
             <HistoryList
