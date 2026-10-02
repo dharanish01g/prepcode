@@ -15,7 +15,7 @@ import { useRenameFileMutation } from "@/lib/queries";
 
 export function RenameFileDialog({
   filename,
-  regNo,
+  userId,
   existingFiles,
   onClose,
   beforeRename,
@@ -23,7 +23,7 @@ export function RenameFileDialog({
 }: {
   /** The file being renamed; the dialog is open while this is set. */
   filename: string | null;
-  regNo: string;
+  userId: string;
   existingFiles: string[];
   onClose: () => void;
   /** Runs right before renaming, e.g. to save pending edits first. */
@@ -41,7 +41,7 @@ export function RenameFileDialog({
         {filename && (
           <RenameFileForm
             filename={filename}
-            regNo={regNo}
+            userId={userId}
             existingFiles={existingFiles}
             beforeRename={beforeRename}
             onRenamed={onRenamed}
@@ -54,20 +54,20 @@ export function RenameFileDialog({
 
 function RenameFileForm({
   filename,
-  regNo,
+  userId,
   existingFiles,
   beforeRename,
   onRenamed,
 }: {
   filename: string;
-  regNo: string;
+  userId: string;
   existingFiles: string[];
   beforeRename: () => void;
   onRenamed: (oldFilename: string, newFilename: string) => void;
 }) {
   const extension = extensionOf(filename);
   const [name, setName] = useState(filename.slice(0, -(extension.length + 1)));
-  const rename = useRenameFileMutation(regNo);
+  const rename = useRenameFileMutation(userId);
 
   const trimmed = name.trim();
   const newFilename = `${trimmed}.${extension}`;

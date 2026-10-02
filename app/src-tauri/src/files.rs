@@ -1,12 +1,12 @@
-use std::fs::{self, OpenOptions};
-use std::io::ErrorKind;
+use std::fs::{self, File, OpenOptions};
+use std::io::{ErrorKind, Write};
 use std::path::PathBuf;
 use std::time::UNIX_EPOCH;
 
 use serde::Serialize;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 
-use crate::auth::{workspace_dir, CurrentUser};
+use crate::auth::{workspace_dir, CurrentUser, GUEST_PREFIX};
 use crate::catalog;
 use crate::db::Db;
 
@@ -211,4 +211,62 @@ pub fn delete_file(
         Err(e) if e.kind() == ErrorKind::NotFound => Ok(()),
         Err(e) => Err(format!("Could not delete {filename}: {e}")),
     }
+}
+
+/// Zips a guest's files into their Downloads folder as
+/// `prepcode_guest_<stamp>.zip` (`(2)`, `(3)`… if that name is taken) and
+/// returns the zip's full path. `stamp` is the local date and time from the
+/// frontend, e.g. `2026-10-02_14-30-05`.
+#[tauri::command]
+pub fn export_guest_files(
+    app: AppHandle,
+    current: State<CurrentUser>,
+    db: State<Db>,
+    stamp: String,
+) -> Result<String, String> {
+    let id = current.get()?;
+    if !id.starts_with(GUEST_PREFIX) {
+        return Err("Only guest files can be exported.".into());
+    }
+    if stamp.is_empty() || !stamp.chars().all(|c| c.is_ascii_digit() || c == '-' || c == '_') {
+        return Err("Invalid export time.".into());
+    }
+    let files = list_files(app.clone(), current.clone(), db.clone())?;
+    if files.is_empty() {
+        return Err("There are no files to export.".into());
+    }
+
+    let downloads = app
+        .path()
+        .download_dir()
+        .map_err(|e| format!("Could not find your Downloads folder: {e}"))?;
+    fs::create_dir_all(&downloads).map_err(|e| format!("Could not open your Downloads folder: {e}"))?;
+    let zip_path = (1..)
+        .map(|n| match n {
+            1 => downloads.join(format!("prepcode_guest_{stamp}.zip")),
+            n => downloads.join(format!("prepcode_guest_{stamp} ({n}).zip")),
+        })
+        .find(|path| !path.exists())
+        .expect("some name is free");
+
+    let err = |e: &dyn std::fmt::Display| format!("Could not export your files: {e}");
+    let workspace = workspace_dir(&app, &id)?;
+    let result = (|| {
+        let mut zip = zip::ZipWriter::new(File::create_new(&zip_path).map_err(|e| err(&e))?);
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        for filename in &files {
+            let contents = fs::read(workspace.join(filename)).map_err(|e| err(&e))?;
+            zip.start_file(filename.as_str(), options).map_err(|e| err(&e))?;
+            zip.write_all(&contents).map_err(|e| err(&e))?;
+        }
+        zip.finish().map_err(|e| err(&e))?;
+        Ok::<(), String>(())
+    })();
+    if let Err(e) = result {
+        // Don't leave a broken zip behind.
+        let _ = fs::remove_file(&zip_path);
+        return Err(e);
+    }
+    Ok(zip_path.to_string_lossy().into_owned())
 }

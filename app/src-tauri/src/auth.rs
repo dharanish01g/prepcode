@@ -1,22 +1,36 @@
+//! Who's using prepcode: a student signed in with GitHub, or a guest.
+//!
+//! A student stays signed in, across restarts, until they log out: their
+//! GitHub token is kept in the OS's secure store (Keychain, Credential
+//! Manager, Secret Service) and their account details in the database. On
+//! shared college PCs, logging out before leaving is the student's job.
+//!
+//! A guest gets an empty workspace that's deleted when they log out or close
+//! the app.
+
 use std::fs;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use rusqlite::{params, OptionalExtension};
+use rusqlite::OptionalExtension;
 use serde::Serialize;
 use tauri::{AppHandle, Manager, State};
+use tauri_plugin_opener::OpenerExt;
 
 use crate::db::Db;
+use crate::github::{self, DeviceCode, GitHubError, Poll, User};
 
-/// The logged-in student. File commands read this instead of trusting a
-/// register number sent from the frontend.
+/// The signed-in workspace: `gh-<GitHub user id>` for a student, or
+/// `guest-<random>`. File commands read this instead of trusting a name sent
+/// from the frontend.
 #[derive(Default)]
 pub struct CurrentUser(Mutex<Option<String>>);
 
 impl CurrentUser {
-    fn set(&self, reg_no: Option<String>) {
-        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = reg_no;
+    fn set(&self, id: Option<String>) {
+        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = id;
     }
 
     pub fn get(&self) -> Result<String, String> {
@@ -29,16 +43,34 @@ impl CurrentUser {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Session {
-    /// The register number, or a generated id for a guest.
-    reg_no: String,
+    /// The workspace id (see CurrentUser).
+    id: String,
+    /// GitHub username, or "Guest".
+    login: String,
+    avatar_url: Option<String>,
     /// A guest's files are deleted when they log out or close the app.
     guest: bool,
 }
 
-/// Guests get a workspace named `guest-<random>`. Register numbers are only
-/// letters and digits, so a guest can never share a folder with a student.
-const GUEST_PREFIX: &str = "guest-";
+impl Session {
+    fn student(user: &User) -> Self {
+        Session {
+            id: student_id(user),
+            login: user.login.clone(),
+            avatar_url: user.avatar_url.clone(),
+            guest: false,
+        }
+    }
+}
+
+/// Guests get a workspace named `guest-<random>`; students `gh-<number>`.
+pub(crate) const GUEST_PREFIX: &str = "guest-";
+
+fn student_id(user: &User) -> String {
+    format!("gh-{}", user.id)
+}
 
 fn data_dir(app: &AppHandle) -> Result<PathBuf, String> {
     app.path()
@@ -46,97 +78,201 @@ fn data_dir(app: &AppHandle) -> Result<PathBuf, String> {
         .map_err(|e| format!("Could not locate app data folder: {e}"))
 }
 
-pub fn workspace_dir(app: &AppHandle, reg_no: &str) -> Result<PathBuf, String> {
-    Ok(data_dir(app)?.join("workspaces").join(reg_no))
+pub fn workspace_dir(app: &AppHandle, id: &str) -> Result<PathBuf, String> {
+    Ok(data_dir(app)?.join("workspaces").join(id))
 }
 
-/// Register numbers double as folder names, so only allow safe characters.
-fn normalize_reg_no(reg_no: &str) -> Result<String, String> {
-    let reg_no = reg_no.trim().to_uppercase();
-    if reg_no.is_empty() {
-        return Err("Enter your register number.".into());
-    }
-    if reg_no.len() > 32 || !reg_no.chars().all(|c| c.is_ascii_alphanumeric()) {
-        return Err("Register number can only contain letters and digits.".into());
-    }
-    Ok(reg_no)
-}
-
-/// Expects YYYY-MM-DD, which is what the frontend sends.
-fn validate_dob(dob: &str) -> Result<(), String> {
-    let parts: Vec<&str> = dob.split('-').collect();
-    let valid = parts.len() == 3
-        && parts[0].len() == 4
-        && parts[1].len() == 2
-        && parts[2].len() == 2
-        && parts.iter().all(|p| p.chars().all(|c| c.is_ascii_digit()));
-    if valid {
-        Ok(())
-    } else {
-        Err("Select your date of birth.".into())
-    }
-}
-
-#[tauri::command]
-pub fn register(
-    app: AppHandle,
-    db: State<Db>,
-    current: State<CurrentUser>,
-    reg_no: String,
-    dob: String,
-) -> Result<Session, String> {
-    let reg_no = normalize_reg_no(&reg_no)?;
-    validate_dob(&dob)?;
-
-    db.with(|conn| {
-        let inserted = conn
-            .execute(
-                "INSERT OR IGNORE INTO users (reg_no, dob) VALUES (?1, ?2)",
-                params![reg_no, dob],
-            )
-            .map_err(|e| format!("Could not save your account: {e}"))?;
-        if inserted == 0 {
-            return Err(format!("{reg_no} is already registered. Please log in instead."));
-        }
-        Ok(())
-    })?;
-
-    fs::create_dir_all(workspace_dir(&app, &reg_no)?)
-        .map_err(|e| format!("Could not create your workspace: {e}"))?;
-
-    current.set(Some(reg_no.clone()));
-    Ok(Session { reg_no, guest: false })
-}
-
-#[tauri::command]
-pub fn login(
-    app: AppHandle,
-    db: State<Db>,
-    current: State<CurrentUser>,
-    reg_no: String,
-    dob: String,
-) -> Result<Session, String> {
-    let reg_no = normalize_reg_no(&reg_no)?;
-    validate_dob(&dob)?;
-
-    let saved_dob: String = db
-        .with(|conn| {
-            conn.query_row("SELECT dob FROM users WHERE reg_no = ?1", [&reg_no], |row| row.get(0))
-                .optional()
-                .map_err(|e| format!("Could not read accounts: {e}"))
-        })?
-        .ok_or_else(|| format!("{reg_no} is not registered. Please register first."))?;
-    if saved_dob != dob {
-        return Err("Date of birth doesn't match. Try again.".into());
-    }
-
-    // Recreate the workspace if it was deleted by hand.
-    fs::create_dir_all(workspace_dir(&app, &reg_no)?)
+fn open_workspace(app: &AppHandle, current: &CurrentUser, id: &str) -> Result<(), String> {
+    fs::create_dir_all(workspace_dir(app, id)?)
         .map_err(|e| format!("Could not open your workspace: {e}"))?;
-
-    current.set(Some(reg_no.clone()));
-    Ok(Session { reg_no, guest: false })
+    current.set(Some(id.to_owned()));
+    Ok(())
 }
+
+// --- The saved sign-in -----------------------------------------------------------
+
+const KEYRING_SERVICE: &str = "in.prepwisely.code";
+const KEYRING_TOKEN: &str = "github-token";
+const ACCOUNT_KEY: &str = "github_account";
+
+/// Runs a keyring call off the async runtime: some stores block.
+async fn keyring<T: Send + 'static>(
+    f: impl FnOnce(keyring::Entry) -> keyring::Result<T> + Send + 'static,
+) -> Result<T, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        keyring::Entry::new(KEYRING_SERVICE, KEYRING_TOKEN).and_then(f)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| format!("Could not use this computer's secure storage: {e}"))
+}
+
+/// The saved GitHub token, if a student is signed in on this computer.
+pub async fn saved_token() -> Result<Option<String>, String> {
+    keyring(|entry| match entry.get_password() {
+        Ok(token) => Ok(Some(token)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(e) => Err(e),
+    })
+    .await
+}
+
+fn saved_account(db: &Db) -> Result<Option<User>, String> {
+    let raw: Option<String> = db.with(|conn| {
+        conn.query_row("SELECT value FROM meta WHERE key = ?1", [ACCOUNT_KEY], |r| r.get(0))
+            .optional()
+            .map_err(|e| format!("Could not read your account: {e}"))
+    })?;
+    Ok(raw.and_then(|raw| serde_json::from_str(&raw).ok()))
+}
+
+fn save_account(db: &Db, user: &User) -> Result<(), String> {
+    let raw = serde_json::to_string(user).map_err(|e| e.to_string())?;
+    db.with(|conn| {
+        conn.execute(
+            "INSERT INTO meta (key, value) VALUES (?1, ?2)
+             ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+            [ACCOUNT_KEY, &raw],
+        )
+        .map(|_| ())
+        .map_err(|e| format!("Could not save your account: {e}"))
+    })
+}
+
+/// Removes the saved sign-in from this computer.
+async fn forget_sign_in(db: &Db) -> Result<(), String> {
+    db.with(|conn| {
+        conn.execute("DELETE FROM meta WHERE key = ?1", [ACCOUNT_KEY])
+            .map(|_| ())
+            .map_err(|e| format!("Could not sign you out: {e}"))
+    })?;
+    keyring(|entry| match entry.delete_credential() {
+        Err(keyring::Error::NoEntry) => Ok(()),
+        result => result,
+    })
+    .await
+}
+
+/// On launch: reopens the signed-in student's workspace, if there is one.
+/// Offline, the saved sign-in is trusted; online, a revoked one is dropped.
+#[tauri::command]
+pub async fn restore_session(
+    app: AppHandle,
+    db: State<'_, Db>,
+    current: State<'_, CurrentUser>,
+) -> Result<Option<Session>, String> {
+    let (Some(mut user), Some(token)) = (saved_account(&db)?, saved_token().await?) else {
+        forget_sign_in(&db).await?;
+        return Ok(None);
+    };
+    match github::user(&token).await {
+        // The username or picture may have changed; the id never does.
+        Ok(fresh) if fresh.id == user.id => {
+            user = fresh;
+            save_account(&db, &user)?;
+        }
+        Ok(_) | Err(GitHubError::Unauthorized) => {
+            forget_sign_in(&db).await?;
+            return Ok(None);
+        }
+        Err(_) => {}
+    }
+    open_workspace(&app, &current, &student_id(&user))?;
+    Ok(Some(Session::student(&user)))
+}
+
+// --- Signing in with GitHub (device flow) ------------------------------------------
+
+struct PendingSignIn {
+    attempt: u64,
+    code: DeviceCode,
+}
+
+/// The sign-in in progress, if any. A new attempt or a cancel replaces it,
+/// which stops the old attempt's polling.
+#[derive(Default)]
+pub struct SignIn {
+    pending: Mutex<Option<PendingSignIn>>,
+    attempts: AtomicU64,
+}
+
+impl SignIn {
+    fn lock(&self) -> std::sync::MutexGuard<'_, Option<PendingSignIn>> {
+        self.pending.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn is_current(&self, attempt: u64) -> bool {
+        self.lock().as_ref().is_some_and(|p| p.attempt == attempt)
+    }
+}
+
+/// Starts signing in: opens GitHub's code page in the browser and returns the
+/// code the student enters there.
+#[tauri::command]
+pub async fn start_github_sign_in(
+    app: AppHandle,
+    sign_in: State<'_, SignIn>,
+) -> Result<DeviceCode, String> {
+    let code = github::request_device_code().await.map_err(|e| e.message())?;
+    let attempt = sign_in.attempts.fetch_add(1, Ordering::Relaxed) + 1;
+    *sign_in.lock() = Some(PendingSignIn { attempt, code: code.clone() });
+    // The dialog's Open GitHub button tries again if this fails.
+    if let Err(e) = app.opener().open_url(&code.verification_uri, None::<&str>) {
+        eprintln!("Could not open the browser: {e}");
+    }
+    Ok(code)
+}
+
+/// Waits for the student to approve the code on GitHub, then signs them in
+/// and remembers it. Resolves to None if the sign-in was cancelled.
+#[tauri::command]
+pub async fn finish_github_sign_in(
+    app: AppHandle,
+    db: State<'_, Db>,
+    current: State<'_, CurrentUser>,
+    sign_in: State<'_, SignIn>,
+) -> Result<Option<Session>, String> {
+    let Some((attempt, code)) = sign_in.lock().as_ref().map(|p| (p.attempt, p.code.clone())) else {
+        return Err("Start signing in first.".into());
+    };
+    let deadline = Instant::now() + Duration::from_secs(code.expires_in);
+    let mut interval = Duration::from_secs(code.interval.max(1));
+
+    let token = loop {
+        tokio::time::sleep(interval).await;
+        if !sign_in.is_current(attempt) {
+            return Ok(None);
+        }
+        if Instant::now() > deadline {
+            return Err("The code expired. Please try signing in again.".into());
+        }
+        match github::poll_for_token(&code.device_code).await {
+            Ok(Poll::Approved(token)) => break token,
+            Ok(Poll::Pending) | Err(GitHubError::Offline) => {}
+            Ok(Poll::SlowDown) => interval += Duration::from_secs(5),
+            Ok(Poll::Expired) => return Err("The code expired. Please try signing in again.".into()),
+            Ok(Poll::Denied) => return Err("Sign-in was cancelled on GitHub.".into()),
+            Err(e) => return Err(e.message()),
+        }
+    };
+    if !sign_in.is_current(attempt) {
+        return Ok(None);
+    }
+    *sign_in.lock() = None;
+
+    let user = github::user(&token).await.map_err(|e| e.message())?;
+    keyring(move |entry| entry.set_password(&token)).await?;
+    save_account(&db, &user)?;
+    open_workspace(&app, &current, &student_id(&user))?;
+    Ok(Some(Session::student(&user)))
+}
+
+#[tauri::command]
+pub fn cancel_github_sign_in(sign_in: State<SignIn>) {
+    *sign_in.lock() = None;
+}
+
+// --- Guests --------------------------------------------------------------------------
 
 /// Starts a guest session in a fresh, empty workspace. Nothing is kept:
 /// see `delete_guest_files`.
@@ -149,15 +285,24 @@ pub fn guest_login(app: AppHandle, current: State<CurrentUser>) -> Result<Sessio
         .map_err(|e| format!("Could not create a guest workspace: {e}"))?;
 
     current.set(Some(id.clone()));
-    Ok(Session { reg_no: id, guest: true })
+    Ok(Session { id, login: "Guest".into(), avatar_url: None, guest: true })
 }
 
+/// Signs out: a student's saved sign-in is removed from this computer; a
+/// guest's files are deleted.
 #[tauri::command]
-pub fn logout(app: AppHandle, current: State<CurrentUser>) {
+pub async fn logout(
+    app: AppHandle,
+    db: State<'_, Db>,
+    current: State<'_, CurrentUser>,
+) -> Result<(), String> {
     let was_guest = current.get().is_ok_and(|id| id.starts_with(GUEST_PREFIX));
     current.set(None);
     if was_guest {
         delete_guest_files(&app);
+        Ok(())
+    } else {
+        forget_sign_in(&db).await
     }
 }
 

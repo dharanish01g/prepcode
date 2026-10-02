@@ -15,20 +15,20 @@ import { useDeleteFileMutation } from "@/lib/queries";
 
 export function DeleteFileDialog({
   filename,
-  regNo,
+  userId,
   onClose,
   beforeDelete,
   onDeleted,
 }: {
   /** The file being deleted; the dialog is open while this is set. */
   filename: string | null;
-  regNo: string;
+  userId: string;
   onClose: () => void;
   /** Runs right before deleting, e.g. to save pending edits first. */
   beforeDelete: () => void;
   onDeleted: (filename: string) => void;
 }) {
-  const remove = useDeleteFileMutation(regNo);
+  const remove = useDeleteFileMutation(userId);
   // Keeps the name in the title while the dialog animates closed.
   const shown = useRef(filename);
   if (filename) shown.current = filename;

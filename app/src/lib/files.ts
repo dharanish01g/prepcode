@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { format } from "date-fns";
 import { findLanguage } from "@/lib/languages";
 
 export function extensionOf(filename: string) {
@@ -76,4 +77,12 @@ export function fileNameError(name: string): string | null {
     return "Use only letters, numbers, _ and -.";
   }
   return null;
+}
+
+/**
+ * Zips a guest's files into Downloads as prepcode_guest_<date & time>.zip and
+ * returns the zip's path. Rejects with a user-facing message.
+ */
+export function exportGuestFiles() {
+  return invoke<string>("export_guest_files", { stamp: format(new Date(), "yyyy-MM-dd_HH-mm-ss") });
 }

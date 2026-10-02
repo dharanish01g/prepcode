@@ -3,13 +3,17 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@/components/ui/sidebar"
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { LogOutIcon, UserIcon } from "lucide-react"
 
 export function NavUser({
   name,
+  avatarUrl,
   onLogout,
 }: {
   name: string
+  /** GitHub profile picture; a person icon when missing or offline. */
+  avatarUrl: string | null
   onLogout: () => void
 }) {
   return (
@@ -20,7 +24,12 @@ export function NavUser({
           tooltip={{ children: name, hidden: false }}
           className="px-2.5 md:px-2"
         >
-          <UserIcon />
+          <Avatar className="size-4">
+            {avatarUrl && <AvatarImage src={avatarUrl} alt="" />}
+            <AvatarFallback className="bg-transparent">
+              <UserIcon className="size-4" />
+            </AvatarFallback>
+          </Avatar>
         </SidebarMenuButton>
       </SidebarMenuItem>
       <SidebarMenuItem>

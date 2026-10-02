@@ -1,19 +1,27 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { flushSync } from "react-dom";
 import { AuthFooter } from "@/components/auth-footer";
 import { LoginScreen } from "@/components/login-screen";
-import { RegisterScreen } from "@/components/register-screen";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { WorkspaceScreen } from "@/components/workspace-screen";
-import { logout, type Session } from "@/lib/auth";
+import { logout, restoreSession, type Session } from "@/lib/auth";
 import { disposeEditorModels } from "@/lib/monaco";
 import { queryClient } from "@/lib/query-client";
 import "./App.css";
 
 function App() {
-  // Kept in memory only: the machine is shared, so every launch starts at login.
   const [session, setSession] = useState<Session | null>(null);
-  const [authScreen, setAuthScreen] = useState<"login" | "register">("login");
+  // A student stays signed in until they log out, so check on launch.
+  const [restoring, setRestoring] = useState(true);
+
+  useEffect(() => {
+    restoreSession()
+      .then(setSession)
+      .catch((err) => console.error("Could not restore the sign-in:", err))
+      .finally(() => setRestoring(false));
+  }, []);
+
+  if (restoring) return null;
 
   if (session) {
     return (
@@ -23,10 +31,7 @@ function App() {
           logout().catch((err) => console.error("Logout failed:", err));
           // Unmount the workspace first (synchronously), then drop the previous
           // student's cached files and editor models, which it was still using.
-          flushSync(() => {
-            setSession(null);
-            setAuthScreen("login");
-          });
+          flushSync(() => setSession(null));
           queryClient.clear();
           disposeEditorModels();
         }}
@@ -40,17 +45,7 @@ function App() {
         <ThemeToggle />
       </div>
 
-      {authScreen === "login" ? (
-        <LoginScreen
-          onAuthenticated={setSession}
-          onShowRegister={() => setAuthScreen("register")}
-        />
-      ) : (
-        <RegisterScreen
-          onAuthenticated={setSession}
-          onShowLogin={() => setAuthScreen("login")}
-        />
-      )}
+      <LoginScreen onAuthenticated={setSession} />
 
       <AuthFooter />
     </main>

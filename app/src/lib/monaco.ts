@@ -26,9 +26,9 @@ export function disposeEditorModels() {
   for (const model of monaco.editor.getModels()) model.dispose();
 }
 
-/** The editor model path for a student's file, e.g. "21CS001/hello.py". */
-export function editorModelPath(regNo: string, filename: string) {
-  return `${regNo}/${filename}`;
+/** The editor model path for a file, e.g. "gh-12345678/hello.py". */
+export function editorModelPath(userId: string, filename: string) {
+  return `${userId}/${filename}`;
 }
 
 /**

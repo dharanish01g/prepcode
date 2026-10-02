@@ -32,7 +32,7 @@ import {
 import { Separator } from "@/components/ui/separator";
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { displayName, type Session } from "@/lib/auth";
-import { whenSavesSettled } from "@/lib/files";
+import { exportGuestFiles, whenSavesSettled } from "@/lib/files";
 import logo from "@/assets/logo.png";
 
 export function WorkspaceScreen({
@@ -147,7 +147,7 @@ export function WorkspaceScreen({
           <ResizablePanelGroup orientation="vertical" className="min-h-0 flex-1">
             <ResizablePanel defaultSize="70%" minSize="20%">
               <CodeEditor
-                regNo={session.reg_no}
+                userId={session.id}
                 filename={selectedFile}
                 flushRef={flushEditorRef}
                 formatRef={formatEditorRef}
@@ -191,6 +191,12 @@ export function WorkspaceScreen({
       <GuestLogoutDialog
         open={confirmGuestLogout}
         onCancel={() => setConfirmGuestLogout(false)}
+        onExport={async () => {
+          // Include the last few keystrokes.
+          flushEditorRef.current();
+          await whenSavesSettled();
+          return exportGuestFiles();
+        }}
         onConfirm={() => {
           setConfirmGuestLogout(false);
           handleLogout();

@@ -16,12 +16,12 @@ export type FormatRef = React.RefObject<() => Promise<void>>;
 type MonacoEditor = Parameters<OnMount>[0];
 
 export function CodeEditor({
-  regNo,
+  userId,
   filename,
   flushRef,
   formatRef,
 }: {
-  regNo: string;
+  userId: string;
   filename: string;
   /** Set to a function that saves pending edits immediately (used before logout). */
   flushRef: FlushRef;
@@ -31,25 +31,25 @@ export function CodeEditor({
   // Not keyed by file on purpose: like VS Code, one editor stays mounted and
   // switching files just swaps its model, so there's no reload.
   return (
-    <FileEditor regNo={regNo} filename={filename} flushRef={flushRef} formatRef={formatRef} />
+    <FileEditor userId={userId} filename={filename} flushRef={flushRef} formatRef={formatRef} />
   );
 }
 
 function FileEditor({
-  regNo,
+  userId,
   filename,
   flushRef,
   formatRef,
 }: {
-  regNo: string;
+  userId: string;
   filename: string;
   flushRef: FlushRef;
   formatRef: FormatRef;
 }) {
   const isDark = useIsDark();
   const editorRef = useRef<MonacoEditor | null>(null);
-  const content = useFileContentQuery(regNo, filename);
-  const { mutate: save } = useSaveFileMutation(regNo);
+  const content = useFileContentQuery(userId, filename);
+  const { mutate: save } = useSaveFileMutation(userId);
 
   // Remembers which file the unsaved text belongs to, so a flush after
   // switching files still saves to the right place.
@@ -130,7 +130,7 @@ function FileEditor({
       // One model per file, scoped by student. Monaco keeps each model (text,
       // cursor, undo history) while switching; they're disposed on logout, and
       // one at a time when its file is renamed or deleted.
-      path={editorModelPath(regNo, filename)}
+      path={editorModelPath(userId, filename)}
       defaultValue={content.data}
       language={monacoLanguageOf(filename)}
       theme={isDark ? "vs-dark" : "light"}

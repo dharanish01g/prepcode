@@ -2,6 +2,7 @@ mod auth;
 mod catalog;
 mod db;
 mod files;
+mod github;
 mod run;
 mod runtimes;
 
@@ -14,6 +15,7 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .manage(auth::CurrentUser::default())
+        .manage(auth::SignIn::default())
         .manage(runtimes::RuntimeInstalls::default())
         .manage(run::Runner::default())
         .setup(|app| {
@@ -23,10 +25,12 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            auth::register,
-            auth::login,
-            auth::logout,
+            auth::restore_session,
+            auth::start_github_sign_in,
+            auth::finish_github_sign_in,
+            auth::cancel_github_sign_in,
             auth::guest_login,
+            auth::logout,
             catalog::list_languages,
             files::list_files,
             files::list_file_history,
@@ -35,6 +39,7 @@ pub fn run() {
             files::write_file,
             files::rename_file,
             files::delete_file,
+            files::export_guest_files,
             runtimes::list_runtimes,
             runtimes::install_runtime,
             run::run_program,

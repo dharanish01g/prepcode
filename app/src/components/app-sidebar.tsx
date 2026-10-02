@@ -76,7 +76,7 @@ export function AppSidebar({
   const [activeItem, setActiveItem] = React.useState(data.navMain[0])
   const { setOpen } = useSidebar()
   const { theme, toggleTheme } = useTheme()
-  const filesQuery = useFilesQuery(session.reg_no)
+  const filesQuery = useFilesQuery(session.id)
   const files = filesQuery.data ?? []
   const [search, setSearch] = React.useState("")
   const [newFileOpen, setNewFileOpen] = React.useState(false)
@@ -87,7 +87,7 @@ export function AppSidebar({
   // models), then frees its model so a future file with that name starts fresh.
   function releaseFile(oldFile: string, next: string | null) {
     if (selectedFile === oldFile) flushSync(() => onSelectFile(next))
-    disposeEditorModel(editorModelPath(session.reg_no, oldFile))
+    disposeEditorModel(editorModelPath(session.id, oldFile))
   }
 
   // One category per language that has files, in catalog order.
@@ -173,7 +173,7 @@ export function AppSidebar({
               </SidebarMenuButton>
             </SidebarMenuItem>
           </SidebarMenu>
-          <NavUser name={displayName(session)} onLogout={onLogout} />
+          <NavUser name={displayName(session)} avatarUrl={session.avatarUrl} onLogout={onLogout} />
         </SidebarFooter>
       </Sidebar>
 
@@ -192,7 +192,7 @@ export function AppSidebar({
             <NewFileDialog
               open={newFileOpen}
               onOpenChange={setNewFileOpen}
-              regNo={session.reg_no}
+              userId={session.id}
               existingFiles={files}
               onCreated={(filename) => {
                 onSelectFile(filename)
@@ -210,7 +210,7 @@ export function AppSidebar({
         <SidebarContent className="py-2">
           {activeItem.title === "Programs" ? (
             <HistoryList
-              regNo={session.reg_no}
+              userId={session.id}
               search={query}
               selectedFile={selectedFile}
               onSelectFile={onSelectFile}
@@ -235,7 +235,7 @@ export function AppSidebar({
 
       <RenameFileDialog
         filename={renaming}
-        regNo={session.reg_no}
+        userId={session.id}
         existingFiles={files}
         onClose={() => setRenaming(null)}
         beforeRename={onFlushEdits}
@@ -246,7 +246,7 @@ export function AppSidebar({
       />
       <DeleteFileDialog
         filename={deleting}
-        regNo={session.reg_no}
+        userId={session.id}
         onClose={() => setDeleting(null)}
         beforeDelete={onFlushEdits}
         onDeleted={(file) => {

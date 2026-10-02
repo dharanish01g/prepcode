@@ -38,13 +38,13 @@ import {
 export function NewFileDialog({
   open,
   onOpenChange,
-  regNo,
+  userId,
   existingFiles,
   onCreated,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  regNo: string;
+  userId: string;
   existingFiles: string[];
   onCreated: (filename: string) => void;
 }) {
@@ -57,7 +57,7 @@ export function NewFileDialog({
         </DialogHeader>
         {/* Mounted only while open, so the form resets each time. */}
         {open && (
-          <NewFileForm regNo={regNo} existingFiles={existingFiles} onCreated={onCreated} />
+          <NewFileForm userId={userId} existingFiles={existingFiles} onCreated={onCreated} />
         )}
       </DialogContent>
     </Dialog>
@@ -65,17 +65,17 @@ export function NewFileDialog({
 }
 
 function NewFileForm({
-  regNo,
+  userId,
   existingFiles,
   onCreated,
 }: {
-  regNo: string;
+  userId: string;
   existingFiles: string[];
   onCreated: (filename: string) => void;
 }) {
   const [name, setName] = useState("");
   const [pickedExtension, setExtension] = useState<string | null>(null);
-  const createFile = useCreateFileMutation(regNo);
+  const createFile = useCreateFileMutation(userId);
   const submitting = createFile.isPending;
 
   const runtimes = useInstalledRuntimes();

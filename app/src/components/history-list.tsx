@@ -29,14 +29,14 @@ function groupByDay(entries: FileHistoryEntry[]) {
 
 /** Every program, grouped by the day it was last edited, newest first. */
 export function HistoryList({
-  regNo,
+  userId,
   search,
   selectedFile,
   onSelectFile,
   onRename,
   onDelete,
 }: {
-  regNo: string
+  userId: string
   /** Lowercased search text; empty shows everything. */
   search: string
   selectedFile: string | null
@@ -44,7 +44,7 @@ export function HistoryList({
   onRename: (filename: string) => void
   onDelete: (filename: string) => void
 }) {
-  const history = useFileHistoryQuery(regNo)
+  const history = useFileHistoryQuery(userId)
 
   if (history.isError) {
     return (

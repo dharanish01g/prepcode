@@ -1,14 +1,12 @@
-//! prepcode's local database: students' accounts and the language catalog.
+//! prepcode's local database: the language catalog and the signed-in account.
 //!
 //! It lives in the per-user app data folder, so on a shared lab PC one
 //! Windows account can't change what another account's prepcode runs.
 
 use std::fs;
-use std::path::Path;
 use std::sync::Mutex;
 
-use rusqlite::{params, Connection};
-use serde::Deserialize;
+use rusqlite::Connection;
 use tauri::{AppHandle, Manager};
 
 use crate::catalog;
@@ -64,6 +62,10 @@ const MIGRATIONS: &[&str] = &["
         compile    TEXT,            -- JSON step, NULL if there's no compile step
         run        TEXT NOT NULL    -- JSON step
     );
+", "
+    -- Students sign in with GitHub now; drop the old register-number accounts
+    -- and their dates of birth.
+    DROP TABLE users;
 "];
 
 fn migrate(conn: &mut Connection) -> rusqlite::Result<()> {
@@ -98,40 +100,8 @@ pub fn open(app: &AppHandle) -> Result<Db, String> {
     let mut conn = Connection::open(dir.join("prepcode.db"))
         .map_err(|e| format!("Could not open prepcode's database: {e}"))?;
     migrate(&mut conn).map_err(|e| format!("Could not update prepcode's database: {e}"))?;
-    import_legacy_users(&mut conn, &dir)?;
     catalog::import(&mut conn, &catalog::parse(catalog::BUNDLED)?)?;
     Ok(Db(Mutex::new(conn)))
-}
-
-/// Before the database, accounts were kept in users.json. Copy them over once,
-/// then rename the file so it's kept as a backup but never read again.
-fn import_legacy_users(conn: &mut Connection, dir: &Path) -> Result<(), String> {
-    #[derive(Deserialize)]
-    struct LegacyUser {
-        reg_no: String,
-        dob: String,
-    }
-
-    let path = dir.join("users.json");
-    let Ok(raw) = fs::read_to_string(&path) else {
-        return Ok(());
-    };
-    let users: Vec<LegacyUser> =
-        serde_json::from_str(&raw).map_err(|e| format!("Accounts file is corrupted: {e}"))?;
-
-    let err = |e: rusqlite::Error| format!("Could not move accounts to the database: {e}");
-    let tx = conn.transaction().map_err(err)?;
-    for user in &users {
-        tx.execute(
-            "INSERT OR IGNORE INTO users (reg_no, dob) VALUES (?1, ?2)",
-            params![user.reg_no, user.dob],
-        )
-        .map_err(err)?;
-    }
-    tx.commit().map_err(err)?;
-
-    fs::rename(&path, dir.join("users.json.migrated"))
-        .map_err(|e| format!("Could not move accounts to the database: {e}"))
 }
 
 #[cfg(test)]
@@ -144,24 +114,5 @@ mod tests {
         migrate(&mut conn).unwrap();
         let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
         assert_eq!(version as usize, MIGRATIONS.len());
-    }
-
-    #[test]
-    fn imports_legacy_users_once() {
-        let dir = std::env::temp_dir().join(format!("prepcode-db-test-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join("users.json"), r#"[{"reg_no":"21CS001","dob":"2004-01-02"}]"#).unwrap();
-
-        let mut conn = open_in_memory().unwrap();
-        import_legacy_users(&mut conn, &dir).unwrap();
-        let dob: String = conn
-            .query_row("SELECT dob FROM users WHERE reg_no = '21CS001'", [], |r| r.get(0))
-            .unwrap();
-        assert_eq!(dob, "2004-01-02");
-        assert!(!dir.join("users.json").exists());
-        assert!(dir.join("users.json.migrated").exists());
-
-        fs::remove_dir_all(&dir).unwrap();
     }
 }
