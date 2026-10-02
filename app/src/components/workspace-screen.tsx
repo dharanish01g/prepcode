@@ -177,7 +177,13 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
             {formatting ? <Spinner /> : <WandSparklesIcon />}
             Format
           </Button>
-          {runner.running ? (
+          {runner.loading ? (
+            // Until the console shows the output (see MIN_LOADING_MS).
+            <Button disabled>
+              <Spinner />
+              Run
+            </Button>
+          ) : runner.running ? (
             <Button variant="destructive" onClick={runner.stop}>
               <SquareIcon />
               Stop
@@ -205,6 +211,7 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
             <ResizablePanel defaultSize="30%" minSize="10%">
               <ConsolePanel
                 entries={runner.entries}
+                loading={runner.loading}
                 acceptingInput={runner.acceptingInput}
                 onSend={runner.send}
                 onClear={runner.clear}

@@ -3,6 +3,7 @@ import { EraserIcon, TerminalIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Spinner } from "@/components/ui/spinner";
 import type { ConsoleEntry } from "@/hooks/use-runner";
 import { cn } from "@/lib/utils";
 
@@ -16,11 +17,14 @@ const ENTRY_STYLES: Record<ConsoleEntry["kind"], string> = {
 
 export function ConsolePanel({
   entries,
+  loading,
   acceptingInput,
   onSend,
   onClear,
 }: {
   entries: ConsoleEntry[];
+  /** A run just started: show a loader instead of the (held back) output. */
+  loading: boolean;
   /** Show the input box (the program is running and plausibly reading input). */
   acceptingInput: boolean;
   onSend: (line: string) => void;
@@ -51,37 +55,46 @@ export function ConsolePanel({
           size="icon-xs"
           className="ml-auto"
           onClick={onClear}
-          disabled={entries.length === 0}
+          disabled={loading || entries.length === 0}
           aria-label="Clear console"
         >
           <EraserIcon />
         </Button>
       </div>
 
-      <ScrollArea className="min-h-0 flex-1">
-        <pre className="p-4 font-mono text-xs break-words whitespace-pre-wrap">
-          {entries.length === 0 ? (
-            <span className="text-muted-foreground">Run your program to see its output here.</span>
-          ) : (
-            entries.map((entry, i) => {
-              // prepcode's own messages always start on a fresh line.
-              const ownLine = entry.kind === "status" || entry.kind === "error";
-              const previous = entries[i - 1];
-              const needsBreak = ownLine && previous && !previous.text.endsWith("\n");
-              return (
-                <span key={i} className={cn(ENTRY_STYLES[entry.kind], ownLine && "italic")}>
-                  {needsBreak && "\n"}
-                  {entry.text}
-                  {ownLine && "\n"}
-                </span>
-              );
-            })
-          )}
-          <div ref={endRef} />
-        </pre>
-      </ScrollArea>
+      {loading ? (
+        <div className="flex min-h-0 flex-1 items-center justify-center gap-2 text-xs text-muted-foreground">
+          <Spinner />
+          Running…
+        </div>
+      ) : (
+        <ScrollArea className="min-h-0 flex-1">
+          <pre className="p-4 font-mono text-xs break-words whitespace-pre-wrap">
+            {entries.length === 0 ? (
+              <span className="text-muted-foreground">
+                Run your program to see its output here.
+              </span>
+            ) : (
+              entries.map((entry, i) => {
+                // prepcode's own messages always start on a fresh line.
+                const ownLine = entry.kind === "status" || entry.kind === "error";
+                const previous = entries[i - 1];
+                const needsBreak = ownLine && previous && !previous.text.endsWith("\n");
+                return (
+                  <span key={i} className={cn(ENTRY_STYLES[entry.kind], ownLine && "italic")}>
+                    {needsBreak && "\n"}
+                    {entry.text}
+                    {ownLine && "\n"}
+                  </span>
+                );
+              })
+            )}
+            <div ref={endRef} />
+          </pre>
+        </ScrollArea>
+      )}
 
-      {acceptingInput && (
+      {acceptingInput && !loading && (
         <form
           className="shrink-0 border-t p-2"
           onSubmit={(e) => {
