@@ -66,6 +66,19 @@ const MIGRATIONS: &[&str] = &["
     -- Students sign in with GitHub now; drop the old register-number accounts
     -- and their dates of birth.
     DROP TABLE users;
+", "
+    -- For each of a student's files, the git blob sha it had when last synced
+    -- with GitHub; see sync.rs.
+    CREATE TABLE synced_files (
+        user_id TEXT NOT NULL,  -- workspace id, e.g. gh-12345678
+        path    TEXT NOT NULL,  -- e.g. 02oct2026/code2.py
+        sha     TEXT NOT NULL,
+        PRIMARY KEY (user_id, path)
+    );
+", "
+    -- The content each file had when last synced, to recognise renames like
+    -- git does (by comparing contents) after the old file is gone.
+    ALTER TABLE synced_files ADD COLUMN content BLOB;
 "];
 
 fn migrate(conn: &mut Connection) -> rusqlite::Result<()> {

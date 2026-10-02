@@ -29,7 +29,9 @@ export function listFileHistory() {
 
 /** Creates an empty file and returns its filename. Rejects with a user-facing message. */
 export function createFile(name: string, extension: string) {
-  return invoke<string>("create_file", { name, extension });
+  // Today's folder, in local time, e.g. "02oct2026".
+  const folder = format(new Date(), "ddMMMyyyy").toLowerCase();
+  return invoke<string>("create_file", { name, extension, folder });
 }
 
 export function readFile(filename: string) {

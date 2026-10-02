@@ -9,6 +9,7 @@ import {
   renameFile,
   writeFile,
 } from "@/lib/files";
+import { syncStatus } from "@/lib/sync";
 
 // Keys include the workspace id so one student's cache can never be
 // served to another (the whole cache is also cleared on logout).
@@ -16,6 +17,7 @@ export const queryKeys = {
   files: (userId: string) => ["files", userId] as const,
   fileContent: (userId: string, filename: string) => ["file", userId, filename] as const,
   fileHistory: (userId: string) => ["file-history", userId] as const,
+  syncStatus: (userId: string) => ["sync-status", userId] as const,
 };
 
 export const SAVE_FILE_MUTATION_KEY = ["save-file"] as const;
@@ -54,11 +56,21 @@ export function useFileHistoryQuery(userId: string) {
 }
 
 /**
- * Marks the history out of date after any change to a file. It's only
- * re-read while the History view is showing, so this is cheap otherwise.
+ * Marks the history and the sync status out of date after any change to a
+ * file, so the sidebar's order and its unsynced marks catch up.
  */
 function invalidateHistory(queryClient: ReturnType<typeof useQueryClient>, userId: string) {
+  queryClient.invalidateQueries({ queryKey: queryKeys.syncStatus(userId) });
   return queryClient.invalidateQueries({ queryKey: queryKeys.fileHistory(userId) });
+}
+
+/** What isn't synced to GitHub yet. Students only: guests don't sync. */
+export function useSyncStatusQuery(userId: string, enabled: boolean) {
+  return useQuery({
+    queryKey: queryKeys.syncStatus(userId),
+    queryFn: syncStatus,
+    enabled,
+  });
 }
 
 export function useCreateFileMutation(userId: string) {

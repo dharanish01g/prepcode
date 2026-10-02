@@ -3,6 +3,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check } from "@tauri-apps/plugin-updater";
 import { toast } from "sonner";
+import { isCloseBlocked } from "@/lib/close-guard";
 
 /**
  * Checks GitHub Releases for a newer version on launch, downloads it in the
@@ -28,6 +29,8 @@ export function AppUpdater() {
         // Tauri closes the window once this handler finishes. On Windows,
         // install() hands over to the installer, which exits the app itself.
         stopListening = await getCurrentWindow().onCloseRequested(async () => {
+          // Held back to warn about unsynced changes: not closing (yet).
+          if (isCloseBlocked()) return;
           await update.install();
         });
 

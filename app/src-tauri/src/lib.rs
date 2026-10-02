@@ -5,6 +5,7 @@ mod files;
 mod github;
 mod run;
 mod runtimes;
+mod sync;
 
 use tauri::{Manager, RunEvent};
 
@@ -16,6 +17,7 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .manage(auth::CurrentUser::default())
         .manage(auth::SignIn::default())
+        .manage(sync::SyncLock::default())
         .manage(runtimes::RuntimeInstalls::default())
         .manage(run::Runner::default())
         .setup(|app| {
@@ -45,6 +47,9 @@ pub fn run() {
             run::run_program,
             run::send_input,
             run::stop_program,
+            sync::sync_status,
+            sync::sync_now,
+            sync::pull_from_github,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

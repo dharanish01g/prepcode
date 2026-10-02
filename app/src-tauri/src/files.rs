@@ -1,7 +1,13 @@
+//! A workspace's files. Each lives in a folder named after the day it was
+//! created, e.g. `02oct2026/code2.py`, which is also its path in the student's
+//! GitHub repo. File names are unique across all the folders, so the app
+//! refers to a file by its name alone.
+
+use std::collections::HashSet;
 use std::fs::{self, File, OpenOptions};
 use std::io::{ErrorKind, Write};
-use std::path::PathBuf;
-use std::time::UNIX_EPOCH;
+use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 use tauri::{AppHandle, Manager, State};
@@ -28,9 +34,97 @@ fn validate_name(name: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Path of `<name>.<ext>` in the current student's workspace. Validating the
-/// name (and the catalog validating extensions) rules out path separators, so
-/// this can't escape the workspace.
+const MONTHS: [&str; 12] =
+    ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+
+/// A creation-date folder name: `ddmmmyyyy`, e.g. `02oct2026`.
+pub(crate) fn is_date_folder(name: &str) -> bool {
+    name.len() == 9
+        && name[..2].chars().all(|c| c.is_ascii_digit())
+        && MONTHS.contains(&&name[2..5])
+        && name[5..].chars().all(|c| c.is_ascii_digit())
+}
+
+/// The date folder for a moment, in UTC. Only used to tidy files from before
+/// date folders; new files get the student's local date from the frontend.
+fn date_folder_for(time: SystemTime) -> String {
+    let days = time.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() / 86_400;
+    // Howard Hinnant's days-to-civil algorithm.
+    let z = days as i64 + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!("{day:02}{}{year}", MONTHS[(month - 1) as usize])
+}
+
+/// A file in a workspace.
+pub(crate) struct WorkspaceFile {
+    /// e.g. `code2.py`
+    pub filename: String,
+    /// e.g. `02oct2026/code2.py`, also its path in the GitHub repo.
+    pub relative: String,
+    pub path: PathBuf,
+}
+
+/// Every file with a supported extension in `dir`'s date folders.
+pub(crate) fn workspace_files(dir: &Path, extensions: &HashSet<String>) -> Result<Vec<WorkspaceFile>, String> {
+    let folders = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(format!("Could not read your files: {e}")),
+    };
+    let mut files = Vec::new();
+    for folder in folders.flatten() {
+        let Ok(folder_name) = folder.file_name().into_string() else { continue };
+        if !is_date_folder(&folder_name) || !folder.path().is_dir() {
+            continue;
+        }
+        let Ok(entries) = fs::read_dir(folder.path()) else { continue };
+        for entry in entries.flatten() {
+            let Ok(filename) = entry.file_name().into_string() else { continue };
+            let supported = filename.rsplit_once('.').is_some_and(|(_, ext)| extensions.contains(ext));
+            if supported && entry.path().is_file() {
+                files.push(WorkspaceFile {
+                    relative: format!("{folder_name}/{filename}"),
+                    path: entry.path(),
+                    filename,
+                });
+            }
+        }
+    }
+    Ok(files)
+}
+
+/// Moves files sitting directly in the workspace (from before date folders)
+/// into the folder for the day they were last changed.
+pub(crate) fn tidy_workspace(dir: &Path) {
+    let Ok(entries) = fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        let Ok(filename) = entry.file_name().into_string() else { continue };
+        if filename.starts_with('.') || !filename.contains('.') || !entry.path().is_file() {
+            continue;
+        }
+        let changed = entry.metadata().and_then(|m| m.modified()).unwrap_or(SystemTime::now());
+        let folder = dir.join(date_folder_for(changed));
+        if fs::create_dir_all(&folder).is_ok() && !folder.join(&filename).exists() {
+            let _ = fs::rename(entry.path(), folder.join(&filename));
+        }
+    }
+}
+
+fn current_files(app: &AppHandle, current: &CurrentUser, db: &Db) -> Result<Vec<WorkspaceFile>, String> {
+    let extensions = db.with(|conn| catalog::extensions(conn))?;
+    workspace_files(&workspace_dir(app, &current.get()?)?, &extensions)
+}
+
+/// Path of the current student's file `<name>.<ext>`, in whichever date
+/// folder it's in. Validating the name (and the catalog validating
+/// extensions) rules out path separators.
 pub(crate) fn resolve_file(
     app: &AppHandle,
     current: &CurrentUser,
@@ -44,7 +138,11 @@ pub(crate) fn resolve_file(
     if !db.with(|conn| catalog::is_supported(conn, extension))? {
         return Err(format!("Unsupported file type: .{extension}"));
     }
-    Ok(workspace_dir(app, &current.get()?)?.join(filename))
+    current_files(app, current, db)?
+        .into_iter()
+        .find(|file| file.filename == filename)
+        .map(|file| file.path)
+        .ok_or_else(|| format!("{filename} doesn't exist anymore."))
 }
 
 #[tauri::command]
@@ -77,23 +175,8 @@ pub fn write_file(
 /// Filenames in the student's workspace with a supported extension, sorted.
 #[tauri::command]
 pub fn list_files(app: AppHandle, current: State<CurrentUser>, db: State<Db>) -> Result<Vec<String>, String> {
-    let dir = workspace_dir(&app, &current.get()?)?;
-    let extensions = db.with(|conn| catalog::extensions(conn))?;
-    let entries = match fs::read_dir(&dir) {
-        Ok(entries) => entries,
-        Err(e) if e.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(e) => return Err(format!("Could not read your files: {e}")),
-    };
-
-    let mut files: Vec<String> = entries
-        .filter_map(|entry| entry.ok())
-        .filter(|entry| entry.file_type().map(|t| t.is_file()).unwrap_or(false))
-        .filter_map(|entry| entry.file_name().into_string().ok())
-        .filter(|name| {
-            name.rsplit_once('.')
-                .is_some_and(|(_, ext)| extensions.contains(ext))
-        })
-        .collect();
+    let mut files: Vec<String> =
+        current_files(&app, &current, &db)?.into_iter().map(|file| file.filename).collect();
     files.sort_by_key(|name| name.to_lowercase());
     Ok(files)
 }
@@ -112,20 +195,20 @@ pub fn list_file_history(
     current: State<CurrentUser>,
     db: State<Db>,
 ) -> Result<Vec<FileHistoryEntry>, String> {
-    let dir = workspace_dir(&app, &current.get()?)?;
-    let mut entries: Vec<FileHistoryEntry> = list_files(app, current, db)?
+    let mut entries: Vec<FileHistoryEntry> = current_files(&app, &current, &db)?
         .into_iter()
-        .filter_map(|filename| {
-            let modified = fs::metadata(dir.join(&filename)).and_then(|m| m.modified()).ok()?;
+        .filter_map(|file| {
+            let modified = fs::metadata(&file.path).and_then(|m| m.modified()).ok()?;
             let modified = modified.duration_since(UNIX_EPOCH).ok()?.as_millis() as u64;
-            Some(FileHistoryEntry { filename, modified })
+            Some(FileHistoryEntry { filename: file.filename, modified })
         })
         .collect();
     entries.sort_by(|a, b| b.modified.cmp(&a.modified));
     Ok(entries)
 }
 
-/// Creates an empty `<name>.<extension>` and returns the filename.
+/// Creates an empty `<name>.<extension>` in the date folder `folder` (today,
+/// in the student's local time, e.g. `02oct2026`) and returns the filename.
 #[tauri::command]
 pub fn create_file(
     app: AppHandle,
@@ -133,18 +216,23 @@ pub fn create_file(
     db: State<Db>,
     name: String,
     extension: String,
+    folder: String,
 ) -> Result<String, String> {
     let name = name.trim();
     validate_name(name)?;
     if !db.with(|conn| catalog::is_supported(conn, &extension))? {
         return Err("Select a language.".into());
     }
+    if !is_date_folder(&folder) {
+        return Err(format!("Invalid folder: {folder}"));
+    }
 
-    let dir = workspace_dir(&app, &current.get()?)?;
+    let dir = workspace_dir(&app, &current.get()?)?.join(&folder);
     fs::create_dir_all(&dir).map_err(|e| format!("Could not open your workspace: {e}"))?;
 
     let filename = format!("{name}.{extension}");
-    // Case-insensitive, so Hello.py and hello.py can't both exist on any OS.
+    // Across every date folder, and case-insensitive, so Hello.py and
+    // hello.py can't both exist on any OS.
     let taken = list_files(app.clone(), current, db)?
         .iter()
         .any(|f| f.eq_ignore_ascii_case(&filename));
@@ -204,7 +292,12 @@ pub fn delete_file(
     db: State<Db>,
     filename: String,
 ) -> Result<(), String> {
-    let path = resolve_file(&app, &current, &db, &filename)?;
+    let path = match resolve_file(&app, &current, &db, &filename) {
+        Ok(path) => path,
+        // Already gone is what the student wanted anyway.
+        Err(_) if !filename.is_empty() => return Ok(()),
+        Err(e) => return Err(e),
+    };
     match fs::remove_file(&path) {
         Ok(()) => Ok(()),
         // Already gone is what the student wanted anyway.
@@ -231,7 +324,7 @@ pub fn export_guest_files(
     if stamp.is_empty() || !stamp.chars().all(|c| c.is_ascii_digit() || c == '-' || c == '_') {
         return Err("Invalid export time.".into());
     }
-    let files = list_files(app.clone(), current.clone(), db.clone())?;
+    let files = current_files(&app, &current, &db)?;
     if files.is_empty() {
         return Err("There are no files to export.".into());
     }
@@ -250,14 +343,14 @@ pub fn export_guest_files(
         .expect("some name is free");
 
     let err = |e: &dyn std::fmt::Display| format!("Could not export your files: {e}");
-    let workspace = workspace_dir(&app, &id)?;
     let result = (|| {
         let mut zip = zip::ZipWriter::new(File::create_new(&zip_path).map_err(|e| err(&e))?);
         let options = zip::write::SimpleFileOptions::default()
             .compression_method(zip::CompressionMethod::Deflated);
-        for filename in &files {
-            let contents = fs::read(workspace.join(filename)).map_err(|e| err(&e))?;
-            zip.start_file(filename.as_str(), options).map_err(|e| err(&e))?;
+        // Keep the date folders, like the GitHub repo.
+        for file in &files {
+            let contents = fs::read(&file.path).map_err(|e| err(&e))?;
+            zip.start_file(file.relative.as_str(), options).map_err(|e| err(&e))?;
             zip.write_all(&contents).map_err(|e| err(&e))?;
         }
         zip.finish().map_err(|e| err(&e))?;
@@ -269,4 +362,26 @@ pub fn export_guest_files(
         return Err(e);
     }
     Ok(zip_path.to_string_lossy().into_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn date_folders() {
+        assert!(is_date_folder("02oct2026"));
+        assert!(is_date_folder("27feb2025"));
+        assert!(!is_date_folder("02Oct2026"));
+        assert!(!is_date_folder("2oct2026"));
+        assert!(!is_date_folder("02xyz2026"));
+        assert!(!is_date_folder("../etc"));
+        // 2026-10-02T12:00:00Z
+        let time = UNIX_EPOCH + Duration::from_secs(1_790_899_200 + 43_200);
+        assert_eq!(date_folder_for(time), "02oct2026");
+        assert_eq!(date_folder_for(UNIX_EPOCH), "01jan1970");
+        // 2024-02-29 (leap day)
+        assert_eq!(date_folder_for(UNIX_EPOCH + Duration::from_secs(1_709_164_800)), "29feb2024");
+    }
 }

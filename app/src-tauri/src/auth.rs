@@ -20,6 +20,8 @@ use tauri::{AppHandle, Manager, State};
 use tauri_plugin_opener::OpenerExt;
 
 use crate::db::Db;
+use crate::files;
+use crate::sync;
 use crate::github::{self, DeviceCode, GitHubError, Poll, User};
 
 /// The signed-in workspace: `gh-<GitHub user id>` for a student, or
@@ -83,8 +85,9 @@ pub fn workspace_dir(app: &AppHandle, id: &str) -> Result<PathBuf, String> {
 }
 
 fn open_workspace(app: &AppHandle, current: &CurrentUser, id: &str) -> Result<(), String> {
-    fs::create_dir_all(workspace_dir(app, id)?)
-        .map_err(|e| format!("Could not open your workspace: {e}"))?;
+    let dir = workspace_dir(app, id)?;
+    fs::create_dir_all(&dir).map_err(|e| format!("Could not open your workspace: {e}"))?;
+    files::tidy_workspace(&dir);
     current.set(Some(id.to_owned()));
     Ok(())
 }
@@ -288,22 +291,25 @@ pub fn guest_login(app: AppHandle, current: State<CurrentUser>) -> Result<Sessio
     Ok(Session { id, login: "Guest".into(), avatar_url: None, guest: true })
 }
 
-/// Signs out: a student's saved sign-in is removed from this computer; a
-/// guest's files are deleted.
+/// Signs out. A student's synced files are deleted from this computer (they're
+/// on GitHub; unsynced ones stay for their next sign-in here) and their saved
+/// sign-in is removed. A guest's files are deleted.
 #[tauri::command]
 pub async fn logout(
     app: AppHandle,
     db: State<'_, Db>,
     current: State<'_, CurrentUser>,
 ) -> Result<(), String> {
-    let was_guest = current.get().is_ok_and(|id| id.starts_with(GUEST_PREFIX));
+    let Ok(id) = current.get() else { return Ok(()) };
     current.set(None);
-    if was_guest {
+    if id.starts_with(GUEST_PREFIX) {
         delete_guest_files(&app);
-        Ok(())
-    } else {
-        forget_sign_in(&db).await
+        return Ok(());
     }
+    if let Err(e) = sync::remove_synced_files(&app, &db, &id) {
+        eprintln!("Could not remove synced files: {e}");
+    }
+    forget_sign_in(&db).await
 }
 
 /// Deletes every guest workspace and the programs compiled for it. Runs when

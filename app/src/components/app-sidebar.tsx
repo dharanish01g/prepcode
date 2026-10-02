@@ -5,25 +5,18 @@ import { flushSync } from "react-dom"
 
 import { NavUser } from "@/components/nav-user"
 import { DeleteFileDialog } from "@/components/delete-file-dialog"
-import { FileIcon } from "@/components/file-icon"
-import { FileMenuItem } from "@/components/file-menu-item"
 import { HistoryList } from "@/components/history-list"
+import { SyncList } from "@/components/sync-list"
 import { NewFileDialog } from "@/components/new-file-dialog"
 import { RenameFileDialog } from "@/components/rename-file-dialog"
 import { ZoomMenu } from "@/components/zoom-menu"
 import { Button } from "@/components/ui/button"
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible"
 import {
   Sidebar,
   SidebarContent,
   SidebarFooter,
   SidebarGroup,
   SidebarGroupContent,
-  SidebarGroupLabel,
   SidebarHeader,
   SidebarInput,
   SidebarMenu,
@@ -32,27 +25,20 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar"
 import { displayName, type Session } from "@/lib/auth"
-import { extensionOf } from "@/lib/files"
-import { getLanguages, type Language } from "@/lib/languages"
 import { disposeEditorModel, editorModelPath } from "@/lib/monaco"
 import { useFilesQuery } from "@/lib/queries"
-import {
-  FileIcon as FileLucideIcon,
-  InboxIcon,
-  PlusIcon,
-  ChevronRightIcon,
-  MoonIcon,
-  SunIcon,
-} from "lucide-react"
+import type { SyncStatus } from "@/lib/sync"
+import { FilesIcon, PlusIcon, MoonIcon, RefreshCwIcon, SunIcon } from "lucide-react"
+import { Spinner } from "@/components/ui/spinner"
 import { useTheme } from "@/hooks/use-theme"
 import logo from "@/assets/logo.png"
 
 const data = {
   navMain: [
-    // Every program by when it was last edited, newest first. Shown first.
-    { title: "Programs", icon: <FileLucideIcon /> },
-    // Programs grouped by language.
-    { title: "Languages", icon: <InboxIcon /> },
+    // Every program by when it was last edited, newest first.
+    { title: "Programs", icon: <FilesIcon /> },
+    // What isn't on GitHub yet, and the Sync button. Students only.
+    { title: "Sync", icon: <RefreshCwIcon /> },
   ],
 }
 
@@ -62,6 +48,10 @@ export function AppSidebar({
   selectedFile,
   onSelectFile,
   onFlushEdits,
+  syncStatus,
+  unsynced,
+  syncing,
+  onSync,
   ...props
 }: React.ComponentProps<typeof Sidebar> & {
   session: Session
@@ -70,10 +60,17 @@ export function AppSidebar({
   onSelectFile: (filename: string | null) => void
   /** Saves the editor's pending edits now (before a rename or delete). */
   onFlushEdits: () => void
+  /** What isn't synced to GitHub yet; undefined for guests. */
+  syncStatus?: SyncStatus
+  /** Changes Sync would push, including deletions. */
+  unsynced: number
+  syncing: boolean
+  onSync: () => void
 }) {
   // Note: I'm using state to show active item.
   // IRL you should use the url/router.
   const [activeItem, setActiveItem] = React.useState(data.navMain[0])
+  const navItems = data.navMain.filter((item) => !session.guest || item.title !== "Sync")
   const { setOpen } = useSidebar()
   const { theme, toggleTheme } = useTheme()
   const filesQuery = useFilesQuery(session.id)
@@ -90,14 +87,7 @@ export function AppSidebar({
     disposeEditorModel(editorModelPath(session.id, oldFile))
   }
 
-  // One category per language that has files, in catalog order.
   const query = search.trim().toLowerCase()
-  const categories = getLanguages().map((lang) => ({
-    ...lang,
-    files: files.filter(
-      (f) => extensionOf(f) === lang.extension && f.toLowerCase().includes(query)
-    ),
-  })).filter((category) => category.files.length > 0)
 
   return (
     <Sidebar
@@ -131,8 +121,9 @@ export function AppSidebar({
         <SidebarContent>
           <SidebarGroup>
             <SidebarGroupContent className="px-1.5 md:px-0">
-              <SidebarMenu>
-                {data.navMain.map((item) => (
+              {/* gap-2 matches the footer's icons below. */}
+              <SidebarMenu className="gap-2">
+                {navItems.map((item) => (
                   <SidebarMenuItem key={item.title}>
                     <SidebarMenuButton
                       tooltip={{
@@ -146,7 +137,18 @@ export function AppSidebar({
                       isActive={activeItem.title === item.title}
                       className="px-2.5 md:px-2"
                     >
-                      {item.icon}
+                      {item.title === "Sync" && unsynced > 0 ? (
+                        // How many changes aren't on GitHub yet, at the
+                        // icon's bottom-right corner.
+                        <span className="relative flex shrink-0 [&>svg]:size-4">
+                          {item.icon}
+                          <span className="pointer-events-none absolute -right-1.5 -bottom-1.5 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-red-500 px-1 text-[9px] leading-none font-bold text-white tabular-nums">
+                            {unsynced}
+                          </span>
+                        </span>
+                      ) : (
+                        item.icon
+                      )}
                       <span>{item.title}</span>
                     </SidebarMenuButton>
                   </SidebarMenuItem>
@@ -185,10 +187,17 @@ export function AppSidebar({
             <div className="text-base font-medium text-foreground">
               {activeItem.title}
             </div>
-            <Button size="sm" onClick={() => setNewFileOpen(true)}>
-              <PlusIcon />
-              New file
-            </Button>
+            {activeItem.title === "Sync" ? (
+              <Button size="sm" disabled={syncing} onClick={onSync} title="Save your changes to GitHub">
+                {syncing ? <Spinner /> : <RefreshCwIcon />}
+                Sync
+              </Button>
+            ) : (
+              <Button size="sm" onClick={() => setNewFileOpen(true)}>
+                <PlusIcon />
+                New file
+              </Button>
+            )}
             <NewFileDialog
               open={newFileOpen}
               onOpenChange={setNewFileOpen}
@@ -201,29 +210,21 @@ export function AppSidebar({
               }}
             />
           </div>
-          <SidebarInput
-            placeholder="Search files..."
-            value={search}
-            onChange={(e) => setSearch(e.currentTarget.value)}
-          />
+          {activeItem.title === "Programs" && (
+            <SidebarInput
+              placeholder="Search files..."
+              value={search}
+              onChange={(e) => setSearch(e.currentTarget.value)}
+            />
+          )}
         </SidebarHeader>
         <SidebarContent className="py-2">
-          {activeItem.title === "Programs" ? (
+          {activeItem.title === "Sync" ? (
+            <SyncList status={syncStatus} selectedFile={selectedFile} onSelectFile={onSelectFile} />
+          ) : (
             <HistoryList
               userId={session.id}
               search={query}
-              selectedFile={selectedFile}
-              onSelectFile={onSelectFile}
-              onRename={setRenaming}
-              onDelete={setDeleting}
-            />
-          ) : (
-            <ProgramsList
-              isError={filesQuery.isError}
-              error={filesQuery.error}
-              isSuccess={filesQuery.isSuccess}
-              hasFiles={files.length > 0}
-              categories={categories}
               selectedFile={selectedFile}
               onSelectFile={onSelectFile}
               onRename={setRenaming}
@@ -255,81 +256,5 @@ export function AppSidebar({
         }}
       />
     </Sidebar>
-  )
-}
-
-type Category = Language & { files: string[] }
-
-/** Files grouped by language, each group collapsible. */
-function ProgramsList({
-  isError,
-  error,
-  isSuccess,
-  hasFiles,
-  categories,
-  selectedFile,
-  onSelectFile,
-  onRename,
-  onDelete,
-}: {
-  isError: boolean
-  error: unknown
-  isSuccess: boolean
-  hasFiles: boolean
-  categories: Category[]
-  selectedFile: string | null
-  onSelectFile: (filename: string) => void
-  onRename: (filename: string) => void
-  onDelete: (filename: string) => void
-}) {
-  return (
-    <>
-      {isError ? (
-        <p className="px-4 py-2 text-sm text-destructive">
-          Could not load your files: {String(error)}
-        </p>
-      ) : (
-        isSuccess &&
-        categories.length === 0 && (
-          <p className="px-4 py-2 text-sm text-muted-foreground">
-            {!hasFiles
-              ? "No programs yet. Click New file to create one."
-              : "No files match your search."}
-          </p>
-        )
-      )}
-      {categories.map((category) => (
-        <Collapsible key={category.extension} defaultOpen>
-          {/* Vertical padding lives on SidebarContent so groups sit close together. */}
-          <SidebarGroup className="py-0">
-            <SidebarGroupLabel
-              render={<CollapsibleTrigger />}
-              className="group/label w-full gap-2"
-            >
-              <ChevronRightIcon className="transition-transform group-data-panel-open/label:rotate-90" />
-              <FileIcon extension={category.extension} />
-              {category.name}
-              <span className="ml-auto">{category.files.length}</span>
-            </SidebarGroupLabel>
-            <CollapsibleContent>
-              <SidebarGroupContent>
-                <SidebarMenu>
-                  {category.files.map((file) => (
-                    <FileMenuItem
-                      key={file}
-                      file={file}
-                      isActive={selectedFile === file}
-                      onSelect={() => onSelectFile(file)}
-                      onRename={() => onRename(file)}
-                      onDelete={() => onDelete(file)}
-                    />
-                  ))}
-                </SidebarMenu>
-              </SidebarGroupContent>
-            </CollapsibleContent>
-          </SidebarGroup>
-        </Collapsible>
-      ))}
-    </>
   )
 }

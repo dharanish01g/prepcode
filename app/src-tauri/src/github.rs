@@ -4,7 +4,7 @@
 //! prepcode is a GitHub OAuth App. Its client ID isn't a secret: the device
 //! flow needs no client secret, which is why it suits a desktop app that
 //! anyone can read the source of. The app asks for `public_repo`, enough to
-//! create and write the student's public `prepcode` repo.
+//! create and write the student's public `prepcode-programs` repo.
 
 use std::sync::OnceLock;
 use std::time::Duration;
@@ -44,6 +44,9 @@ pub enum GitHubError {
     Offline,
     /// The sign-in was revoked (or never valid): the student must sign in again.
     Unauthorized,
+    NotFound,
+    /// GitHub understood but refused (e.g. a push that isn't a fast-forward).
+    Rejected { status: u16, message: String },
     /// Anything else, with a message for the student.
     Other(String),
 }
@@ -53,6 +56,10 @@ impl GitHubError {
         match self {
             GitHubError::Offline => "Could not reach GitHub. Check your internet connection.".into(),
             GitHubError::Unauthorized => "Your GitHub sign-in has expired. Please sign in again.".into(),
+            GitHubError::NotFound => "GitHub couldn't find that.".into(),
+            GitHubError::Rejected { status, message } => {
+                format!("GitHub refused the request: {message} ({status})")
+            }
             GitHubError::Other(message) => message.clone(),
         }
     }
@@ -68,12 +75,15 @@ async fn send(request: RequestBuilder) -> Result<Response, GitHubError> {
     if status == StatusCode::UNAUTHORIZED {
         return Err(GitHubError::Unauthorized);
     }
+    if status == StatusCode::NOT_FOUND {
+        return Err(GitHubError::NotFound);
+    }
     if status.is_server_error() {
         return Err(GitHubError::Offline);
     }
     let body: Value = response.json().await.unwrap_or(Value::Null);
-    let message = body["message"].as_str().unwrap_or("Unexpected response");
-    Err(GitHubError::Other(format!("GitHub refused the request: {message} ({status})")))
+    let message = body["message"].as_str().unwrap_or("Unexpected response").to_owned();
+    Err(GitHubError::Rejected { status: status.as_u16(), message })
 }
 
 async fn json<T: for<'de> Deserialize<'de>>(response: Response) -> Result<T, GitHubError> {
@@ -148,12 +158,146 @@ pub struct User {
     pub avatar_url: Option<String>,
 }
 
-pub async fn user(token: &str) -> Result<User, GitHubError> {
-    let request = client()?
-        .get(format!("{API}/user"))
+/// A REST API request as the signed-in student.
+fn api(method: reqwest::Method, path: &str, token: &str) -> Result<RequestBuilder, GitHubError> {
+    Ok(client()?
+        .request(method, format!("{API}{path}"))
         .bearer_auth(token)
-        .header("X-GitHub-Api-Version", "2022-11-28");
-    json(send(request).await?).await
+        .header("X-GitHub-Api-Version", "2022-11-28"))
+}
+
+fn get(path: &str, token: &str) -> Result<RequestBuilder, GitHubError> {
+    api(reqwest::Method::GET, path, token)
+}
+
+fn post(path: &str, token: &str, body: Value) -> Result<RequestBuilder, GitHubError> {
+    Ok(api(reqwest::Method::POST, path, token)?.json(&body))
+}
+
+pub async fn user(token: &str) -> Result<User, GitHubError> {
+    json(send(get("/user", token)?).await?).await
+}
+
+/// The student's repo, which prepcode syncs with.
+pub const REPO: &str = "prepcode-programs";
+
+#[derive(Deserialize)]
+pub struct Repo {
+    pub default_branch: String,
+    pub html_url: String,
+}
+
+pub async fn get_repo(token: &str, owner: &str) -> Result<Option<Repo>, GitHubError> {
+    match send(get(&format!("/repos/{owner}/{REPO}"), token)?).await {
+        Ok(response) => json(response).await.map(Some),
+        Err(GitHubError::NotFound) => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+pub async fn create_repo(token: &str) -> Result<Repo, GitHubError> {
+    let body = json!({
+        "name": REPO,
+        "description": "My programs, saved from prepcode",
+        "private": false,
+        // Starts the repo with a README, so it has a branch to commit to.
+        "auto_init": true,
+    });
+    json(send(post("/user/repos", token, body)?).await?).await
+}
+
+/// The commit the branch points at, or None if the repo has no commits yet.
+pub async fn branch_head(token: &str, owner: &str, branch: &str) -> Result<Option<String>, GitHubError> {
+    let path = format!("/repos/{owner}/{REPO}/git/ref/heads/{branch}");
+    match send(get(&path, token)?).await {
+        Ok(response) => {
+            let body: Value = json(response).await?;
+            Ok(body["object"]["sha"].as_str().map(str::to_owned))
+        }
+        // An empty repo answers 409 "Git Repository is empty".
+        Err(GitHubError::NotFound) | Err(GitHubError::Rejected { status: 409, .. }) => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+/// Adds one file with the contents API, which (unlike the Git data API) also
+/// works on an empty repo.
+pub async fn create_file(token: &str, owner: &str, path: &str, content: &str, message: &str) -> Result<(), GitHubError> {
+    use base64::Engine;
+    let body = json!({
+        "message": message,
+        "content": base64::engine::general_purpose::STANDARD.encode(content),
+    });
+    let request = api(reqwest::Method::PUT, &format!("/repos/{owner}/{REPO}/contents/{path}"), token)?.json(&body);
+    send(request).await.map(|_| ())
+}
+
+pub async fn commit_tree(token: &str, owner: &str, commit: &str) -> Result<String, GitHubError> {
+    let body: Value = json(send(get(&format!("/repos/{owner}/{REPO}/git/commits/{commit}"), token)?).await?).await?;
+    body["tree"]["sha"]
+        .as_str()
+        .map(str::to_owned)
+        .ok_or_else(|| GitHubError::Other("Unexpected response from GitHub: no tree".into()))
+}
+
+/// A file in a tree: its path and blob sha.
+#[derive(Deserialize)]
+pub struct TreeEntry {
+    pub path: String,
+    pub sha: String,
+    #[serde(rename = "type")]
+    pub kind: String,
+}
+
+/// Every file and folder in a tree, recursively.
+pub async fn tree(token: &str, owner: &str, tree: &str) -> Result<Vec<TreeEntry>, GitHubError> {
+    #[derive(Deserialize)]
+    struct Tree {
+        tree: Vec<TreeEntry>,
+    }
+    let path = format!("/repos/{owner}/{REPO}/git/trees/{tree}?recursive=1");
+    Ok(json::<Tree>(send(get(&path, token)?).await?).await?.tree)
+}
+
+pub async fn blob(token: &str, owner: &str, sha: &str) -> Result<Vec<u8>, GitHubError> {
+    use base64::Engine;
+    let body: Value = json(send(get(&format!("/repos/{owner}/{REPO}/git/blobs/{sha}"), token)?).await?).await?;
+    // Base64 with line breaks every 60 characters.
+    let encoded: String = body["content"].as_str().unwrap_or_default().split_whitespace().collect();
+    base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .map_err(|e| GitHubError::Other(format!("Could not read a file from GitHub: {e}")))
+}
+
+/// A new tree: `base` with `entries` added, changed or (with a null sha) removed.
+pub async fn create_tree(token: &str, owner: &str, base: &str, entries: Vec<Value>) -> Result<String, GitHubError> {
+    let body = json!({ "base_tree": base, "tree": entries });
+    let created: Value = json(send(post(&format!("/repos/{owner}/{REPO}/git/trees"), token, body)?).await?).await?;
+    created["sha"]
+        .as_str()
+        .map(str::to_owned)
+        .ok_or_else(|| GitHubError::Other("Unexpected response from GitHub: no tree".into()))
+}
+
+pub async fn create_commit(token: &str, owner: &str, message: &str, tree: &str, parent: &str) -> Result<String, GitHubError> {
+    let body = json!({ "message": message, "tree": tree, "parents": [parent] });
+    let created: Value = json(send(post(&format!("/repos/{owner}/{REPO}/git/commits"), token, body)?).await?).await?;
+    created["sha"]
+        .as_str()
+        .map(str::to_owned)
+        .ok_or_else(|| GitHubError::Other("Unexpected response from GitHub: no commit".into()))
+}
+
+/// Moves the branch to `commit`. Returns false if the branch moved meanwhile
+/// (someone pushed from another computer), so the caller can pull and retry.
+pub async fn update_branch(token: &str, owner: &str, branch: &str, commit: &str) -> Result<bool, GitHubError> {
+    let body = json!({ "sha": commit, "force": false });
+    let path = format!("/repos/{owner}/{REPO}/git/refs/heads/{branch}");
+    match send(api(reqwest::Method::PATCH, &path, token)?.json(&body)).await {
+        Ok(_) => Ok(true),
+        Err(GitHubError::Rejected { status: 422, .. }) => Ok(false),
+        Err(e) => Err(e),
+    }
 }
 
 #[cfg(test)]

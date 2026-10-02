@@ -1,13 +1,16 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { AppSidebar } from "@/components/app-sidebar";
 import { CodeEditor } from "@/components/code-editor";
 import { FileIcon } from "@/components/file-icon";
 import { ConsolePanel } from "@/components/console-panel";
 import { GuestLogoutDialog } from "@/components/guest-logout-dialog";
 import { SaveStatus } from "@/components/save-status";
+import { UnsyncedDialog } from "@/components/unsynced-dialog";
 import { PlayIcon, SquareIcon, WandSparklesIcon } from "lucide-react";
 import { Spinner } from "@/components/ui/spinner";
 import { useRunner } from "@/hooks/use-runner";
+import { useSync } from "@/hooks/use-sync";
 import { canFormat } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import {
@@ -32,7 +35,10 @@ import {
 import { Separator } from "@/components/ui/separator";
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { displayName, type Session } from "@/lib/auth";
+import { allowClose, isCloseBlocked, setUnsyncedForClose } from "@/lib/close-guard";
 import { exportGuestFiles, whenSavesSettled } from "@/lib/files";
+import { useSyncStatusQuery } from "@/lib/queries";
+import { unsyncedCount } from "@/lib/sync";
 import logo from "@/assets/logo.png";
 
 export function WorkspaceScreen({
@@ -47,7 +53,43 @@ export function WorkspaceScreen({
   const formatEditorRef = useRef<() => Promise<void>>(async () => {});
   const [formatting, setFormatting] = useState(false);
   const [confirmGuestLogout, setConfirmGuestLogout] = useState(false);
+  // Logging out or closing, held back by unsynced changes.
+  const [unsyncedAction, setUnsyncedAction] = useState<"log out" | "close" | null>(null);
   const runner = useRunner();
+  const syncStatus = useSyncStatusQuery(session.id, !session.guest);
+  const unsynced = unsyncedCount(syncStatus.data);
+  const sync = useSync({
+    userId: session.id,
+    selectedFile,
+    onSelectFile: setSelectedFile,
+    flushEdits: () => flushEditorRef.current(),
+  });
+
+  // Bring down the student's files from GitHub (e.g. on a new computer).
+  useEffect(() => {
+    if (!session.guest) sync.pull();
+  }, [session.id]);
+
+  // Closing the window with unsynced changes asks first.
+  useEffect(() => {
+    setUnsyncedForClose(session.guest ? 0 : unsynced);
+    return () => setUnsyncedForClose(0);
+  }, [session.guest, unsynced]);
+  useEffect(() => {
+    const listening = getCurrentWindow().onCloseRequested((event) => {
+      if (!isCloseBlocked()) return;
+      event.preventDefault();
+      setUnsyncedAction("close");
+    });
+    return () => {
+      listening.then((stop) => stop());
+    };
+  }, []);
+
+  function closeWindow() {
+    allowClose();
+    getCurrentWindow().close();
+  }
 
   // Save the last few keystrokes before the backend forgets who's logged in.
   async function handleLogout() {
@@ -82,10 +124,20 @@ export function WorkspaceScreen({
     >
       <AppSidebar
         session={session}
-        onLogout={session.guest ? () => setConfirmGuestLogout(true) : handleLogout}
+        onLogout={
+          session.guest
+            ? () => setConfirmGuestLogout(true)
+            : unsynced > 0
+              ? () => setUnsyncedAction("log out")
+              : handleLogout
+        }
         selectedFile={selectedFile}
         onSelectFile={setSelectedFile}
         onFlushEdits={() => flushEditorRef.current()}
+        syncStatus={syncStatus.data}
+        unsynced={unsynced}
+        syncing={sync.syncing}
+        onSync={sync.sync}
       />
       {/* min-w-0: let the main area shrink when the sidebar expands. Without it,
           Monaco's pixel width (set while collapsed) holds it wide and pushes
@@ -188,6 +240,26 @@ export function WorkspaceScreen({
           </Empty>
         )}
       </SidebarInset>
+      <UnsyncedDialog
+        action={unsyncedAction}
+        count={unsynced}
+        syncing={sync.syncing}
+        onCancel={() => setUnsyncedAction(null)}
+        onProceed={() => {
+          const action = unsyncedAction;
+          setUnsyncedAction(null);
+          if (action === "log out") handleLogout();
+          else closeWindow();
+        }}
+        onSyncAndProceed={async () => {
+          const action = unsyncedAction;
+          // Stay put if the sync fails (its error shows), so nothing is lost.
+          if (!(await sync.sync())) return;
+          setUnsyncedAction(null);
+          if (action === "log out") handleLogout();
+          else closeWindow();
+        }}
+      />
       <GuestLogoutDialog
         open={confirmGuestLogout}
         onCancel={() => setConfirmGuestLogout(false)}

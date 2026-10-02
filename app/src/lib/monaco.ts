@@ -39,3 +39,12 @@ export function editorModelPath(userId: string, filename: string) {
 export function disposeEditorModel(path: string) {
   monaco.editor.getModel(monaco.Uri.parse(path))?.dispose();
 }
+
+/**
+ * Replaces an open file's text (after Sync brought a new version from
+ * GitHub). Files that aren't open load the new text when opened.
+ */
+export function setEditorModelText(path: string, text: string) {
+  const model = monaco.editor.getModel(monaco.Uri.parse(path));
+  if (model && model.getValue() !== text) model.setValue(text);
+}
