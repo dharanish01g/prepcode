@@ -1,11 +1,12 @@
 import { useState } from "react";
+import { toast } from "sonner";
 import { AuthHeader } from "@/components/auth-header";
 import { DobPicker, formatDob } from "@/components/dob-picker";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { login, type Session } from "@/lib/auth";
+import { guestLogin, login, type Session } from "@/lib/auth";
 
 // Only the register number is remembered. The DOB is always re-entered
 // because the machine is shared.
@@ -59,6 +60,23 @@ export function LoginScreen({
     }
   }
 
+  async function handleGuest() {
+    setError("");
+    setSubmitting(true);
+    try {
+      const session = await guestLogin();
+      toast("You're using prepcode as a guest", {
+        description: "Your files will be deleted when you log out or close prepcode.",
+        duration: 8000,
+      });
+      onAuthenticated(session);
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
   return (
     <div className="flex w-full max-w-sm flex-col items-center gap-8">
       <AuthHeader subtitle="Sign in to continue." />
@@ -93,6 +111,16 @@ export function LoginScreen({
         <Button type="submit" size="lg" className="w-full" disabled={submitting}>
           Sign in
         </Button>
+        <Button
+          type="button"
+          variant="outline"
+          size="lg"
+          className="w-full"
+          disabled={submitting}
+          onClick={handleGuest}
+        >
+          Continue as guest
+        </Button>
       </form>
 
       <p className="text-sm text-muted-foreground">
@@ -102,7 +130,7 @@ export function LoginScreen({
           className="h-auto p-0 text-sm"
           onClick={onShowRegister}
         >
-          Create a new one
+          Register account
         </Button>
       </p>
     </div>

@@ -31,13 +31,13 @@ import {
   SidebarMenuItem,
   useSidebar,
 } from "@/components/ui/sidebar"
-import type { Session } from "@/lib/auth"
+import { displayName, type Session } from "@/lib/auth"
 import { extensionOf } from "@/lib/files"
 import { getLanguages, type Language } from "@/lib/languages"
 import { disposeEditorModel, editorModelPath } from "@/lib/monaco"
 import { useFilesQuery } from "@/lib/queries"
 import {
-  HistoryIcon,
+  FileIcon as FileLucideIcon,
   InboxIcon,
   PlusIcon,
   ChevronRightIcon,
@@ -49,9 +49,10 @@ import logo from "@/assets/logo.png"
 
 const data = {
   navMain: [
-    { title: "Programs", icon: <InboxIcon /> },
-    // Every program by when it was last edited, newest first.
-    { title: "History", icon: <HistoryIcon /> },
+    // Every program by when it was last edited, newest first. Shown first.
+    { title: "Programs", icon: <FileLucideIcon /> },
+    // Programs grouped by language.
+    { title: "Languages", icon: <InboxIcon /> },
   ],
 }
 
@@ -172,7 +173,7 @@ export function AppSidebar({
               </SidebarMenuButton>
             </SidebarMenuItem>
           </SidebarMenu>
-          <NavUser regNo={session.reg_no} onLogout={onLogout} />
+          <NavUser name={displayName(session)} onLogout={onLogout} />
         </SidebarFooter>
       </Sidebar>
 
@@ -207,7 +208,7 @@ export function AppSidebar({
           />
         </SidebarHeader>
         <SidebarContent className="py-2">
-          {activeItem.title === "History" ? (
+          {activeItem.title === "Programs" ? (
             <HistoryList
               regNo={session.reg_no}
               search={query}

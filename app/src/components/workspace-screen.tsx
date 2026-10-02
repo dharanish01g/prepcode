@@ -3,6 +3,7 @@ import { AppSidebar } from "@/components/app-sidebar";
 import { CodeEditor } from "@/components/code-editor";
 import { FileIcon } from "@/components/file-icon";
 import { ConsolePanel } from "@/components/console-panel";
+import { GuestLogoutDialog } from "@/components/guest-logout-dialog";
 import { SaveStatus } from "@/components/save-status";
 import { PlayIcon, SquareIcon, WandSparklesIcon } from "lucide-react";
 import { Spinner } from "@/components/ui/spinner";
@@ -30,7 +31,7 @@ import {
 } from "@/components/ui/empty";
 import { Separator } from "@/components/ui/separator";
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
-import type { Session } from "@/lib/auth";
+import { displayName, type Session } from "@/lib/auth";
 import { whenSavesSettled } from "@/lib/files";
 import logo from "@/assets/logo.png";
 
@@ -45,6 +46,7 @@ export function WorkspaceScreen({
   const flushEditorRef = useRef<() => void>(() => {});
   const formatEditorRef = useRef<() => Promise<void>>(async () => {});
   const [formatting, setFormatting] = useState(false);
+  const [confirmGuestLogout, setConfirmGuestLogout] = useState(false);
   const runner = useRunner();
 
   // Save the last few keystrokes before the backend forgets who's logged in.
@@ -80,7 +82,7 @@ export function WorkspaceScreen({
     >
       <AppSidebar
         session={session}
-        onLogout={handleLogout}
+        onLogout={session.guest ? () => setConfirmGuestLogout(true) : handleLogout}
         selectedFile={selectedFile}
         onSelectFile={setSelectedFile}
         onFlushEdits={() => flushEditorRef.current()}
@@ -98,7 +100,11 @@ export function WorkspaceScreen({
           <Breadcrumb>
             <BreadcrumbList>
               <BreadcrumbItem>
-                {selectedFile ? session.reg_no : <BreadcrumbPage>{session.reg_no}</BreadcrumbPage>}
+                {selectedFile ? (
+                  displayName(session)
+                ) : (
+                  <BreadcrumbPage>{displayName(session)}</BreadcrumbPage>
+                )}
               </BreadcrumbItem>
               {selectedFile && (
                 <>
@@ -171,11 +177,25 @@ export function WorkspaceScreen({
               </EmptyTitle>
               <EmptyDescription className="text-sm">
                 Create or select a file to start coding.
+                {session.guest && (
+                  <>
+                    <br />
+                    You're a guest: your files are deleted when you log out or close prepcode.
+                  </>
+                )}
               </EmptyDescription>
             </EmptyHeader>
           </Empty>
         )}
       </SidebarInset>
+      <GuestLogoutDialog
+        open={confirmGuestLogout}
+        onCancel={() => setConfirmGuestLogout(false)}
+        onConfirm={() => {
+          setConfirmGuestLogout(false);
+          handleLogout();
+        }}
+      />
     </SidebarProvider>
   );
 }

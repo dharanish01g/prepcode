@@ -6,10 +6,10 @@ import {
 import { LogOutIcon, UserIcon } from "lucide-react"
 
 export function NavUser({
-  regNo,
+  name,
   onLogout,
 }: {
-  regNo: string
+  name: string
   onLogout: () => void
 }) {
   return (
@@ -17,7 +17,7 @@ export function NavUser({
     <SidebarMenu className="gap-2">
       <SidebarMenuItem>
         <SidebarMenuButton
-          tooltip={{ children: regNo, hidden: false }}
+          tooltip={{ children: name, hidden: false }}
           className="px-2.5 md:px-2"
         >
           <UserIcon />

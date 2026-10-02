@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Mutex;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::{params, OptionalExtension};
 use serde::Serialize;
@@ -29,8 +30,15 @@ impl CurrentUser {
 
 #[derive(Serialize)]
 pub struct Session {
+    /// The register number, or a generated id for a guest.
     reg_no: String,
+    /// A guest's files are deleted when they log out or close the app.
+    guest: bool,
 }
+
+/// Guests get a workspace named `guest-<random>`. Register numbers are only
+/// letters and digits, so a guest can never share a folder with a student.
+const GUEST_PREFIX: &str = "guest-";
 
 fn data_dir(app: &AppHandle) -> Result<PathBuf, String> {
     app.path()
@@ -97,7 +105,7 @@ pub fn register(
         .map_err(|e| format!("Could not create your workspace: {e}"))?;
 
     current.set(Some(reg_no.clone()));
-    Ok(Session { reg_no })
+    Ok(Session { reg_no, guest: false })
 }
 
 #[tauri::command]
@@ -127,10 +135,47 @@ pub fn login(
         .map_err(|e| format!("Could not open your workspace: {e}"))?;
 
     current.set(Some(reg_no.clone()));
-    Ok(Session { reg_no })
+    Ok(Session { reg_no, guest: false })
+}
+
+/// Starts a guest session in a fresh, empty workspace. Nothing is kept:
+/// see `delete_guest_files`.
+#[tauri::command]
+pub fn guest_login(app: AppHandle, current: State<CurrentUser>) -> Result<Session, String> {
+    delete_guest_files(&app);
+    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();
+    let id = format!("{GUEST_PREFIX}{nanos:x}");
+    fs::create_dir_all(workspace_dir(&app, &id)?)
+        .map_err(|e| format!("Could not create a guest workspace: {e}"))?;
+
+    current.set(Some(id.clone()));
+    Ok(Session { reg_no: id, guest: true })
 }
 
 #[tauri::command]
-pub fn logout(current: State<CurrentUser>) {
+pub fn logout(app: AppHandle, current: State<CurrentUser>) {
+    let was_guest = current.get().is_ok_and(|id| id.starts_with(GUEST_PREFIX));
     current.set(None);
+    if was_guest {
+        delete_guest_files(&app);
+    }
+}
+
+/// Deletes every guest workspace and the programs compiled for it. Runs when
+/// a guest logs out, when the app exits, and on startup (for anything left by
+/// a crash or a forced quit). Best effort: whatever can't be removed now (e.g.
+/// a program still running on Windows) goes on the next startup.
+pub fn delete_guest_files(app: &AppHandle) {
+    let folders = [
+        data_dir(app).map(|dir| dir.join("workspaces")),
+        app.path().app_local_data_dir().map(|dir| dir.join("build")).map_err(|e| e.to_string()),
+    ];
+    for folder in folders.into_iter().flatten() {
+        let Ok(entries) = fs::read_dir(&folder) else { continue };
+        for entry in entries.flatten() {
+            if entry.file_name().to_string_lossy().starts_with(GUEST_PREFIX) {
+                let _ = fs::remove_dir_all(entry.path());
+            }
+        }
+    }
 }
