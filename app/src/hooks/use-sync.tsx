@@ -3,6 +3,7 @@ import { flushSync } from "react-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { toast } from "sonner";
+import { Button } from "@/components/ui/button";
 import { readFile, whenSavesSettled } from "@/lib/files";
 import { disposeEditorModel, editorModelPath, setEditorModelText } from "@/lib/monaco";
 import { queryKeys } from "@/lib/queries";
@@ -82,9 +83,18 @@ export function useSync({
         if (report.pushed > 0)
           parts.push(`${report.pushed} ${plural(report.pushed, "change")} saved to GitHub`);
         if (received > 0) parts.push(`${received} ${plural(received, "change")} from GitHub`);
-        toast.success("Synced", {
+        const id = toast.success("Synced", {
           description: parts.join(", ") + ".",
-          action: { label: "View on GitHub", onClick: () => openUrl(report.repoUrl) },
+          action: (
+            <Button
+              onClick={() => {
+                toast.dismiss(id);
+                openUrl(report.repoUrl);
+              }}
+            >
+              View on GitHub
+            </Button>
+          ),
         });
       }
       return true;
