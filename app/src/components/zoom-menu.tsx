@@ -1,4 +1,4 @@
-import { RotateCcwIcon, ZoomInIcon, ZoomOutIcon } from "lucide-react"
+import { RotateCcwIcon, ZoomInIcon, ZoomOutIcon } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -8,12 +8,8 @@ import {
   DropdownMenuSeparator,
   DropdownMenuShortcut,
   DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
-import {
-  SidebarMenuButton,
-  SidebarMenuItem,
-  useSidebar,
-} from "@/components/ui/sidebar"
+} from "@/components/ui/dropdown-menu";
+import { SidebarMenuButton, SidebarMenuItem, useSidebar } from "@/components/ui/sidebar";
 import {
   canZoomIn,
   canZoomOut,
@@ -23,12 +19,12 @@ import {
   zoomIn,
   zoomLabel,
   zoomOut,
-} from "@/hooks/use-zoom"
+} from "@/hooks/use-zoom";
 
 /** Sidebar item that zooms the whole app, e.g. for a projector. */
 export function ZoomMenu() {
-  const { isMobile } = useSidebar()
-  const zoom = useZoom()
+  const { isMobile } = useSidebar();
+  const zoom = useZoom();
 
   return (
     <SidebarMenuItem>
@@ -79,5 +75,5 @@ export function ZoomMenu() {
         </DropdownMenuContent>
       </DropdownMenu>
     </SidebarMenuItem>
-  )
+  );
 }

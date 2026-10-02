@@ -18,11 +18,14 @@ type MonacoEditor = Parameters<OnMount>[0];
 export function CodeEditor({
   userId,
   filename,
+  readOnly,
   flushRef,
   formatRef,
 }: {
   userId: string;
   filename: string;
+  /** While syncing, so nothing typed is overwritten by GitHub's version. */
+  readOnly: boolean;
   /** Set to a function that saves pending edits immediately (used before logout). */
   flushRef: FlushRef;
   /** Set to a function that formats the open file (used by the Format button). */
@@ -31,18 +34,26 @@ export function CodeEditor({
   // Not keyed by file on purpose: like VS Code, one editor stays mounted and
   // switching files just swaps its model, so there's no reload.
   return (
-    <FileEditor userId={userId} filename={filename} flushRef={flushRef} formatRef={formatRef} />
+    <FileEditor
+      userId={userId}
+      filename={filename}
+      readOnly={readOnly}
+      flushRef={flushRef}
+      formatRef={formatRef}
+    />
   );
 }
 
 function FileEditor({
   userId,
   filename,
+  readOnly,
   flushRef,
   formatRef,
 }: {
   userId: string;
   filename: string;
+  readOnly: boolean;
   flushRef: FlushRef;
   formatRef: FormatRef;
 }) {
@@ -81,7 +92,8 @@ function FileEditor({
   const format = useCallback(async () => {
     const editor = editorRef.current;
     const model = editor?.getModel();
-    if (!editor || !model) return;
+    // Read-only while syncing; the shortcut would otherwise still edit.
+    if (!editor || !model || editor.getRawOptions().readOnly) return;
     const source = model.getValue();
 
     let formatted: string;
@@ -157,6 +169,8 @@ function FileEditor({
         scrollBeyondLastLine: false,
         automaticLayout: true,
         tabSize: 4,
+        readOnly,
+        readOnlyMessage: { value: "Syncing with GitHub… you can type again in a moment." },
       }}
     />
   );

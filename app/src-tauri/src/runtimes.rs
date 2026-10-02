@@ -16,7 +16,7 @@ use std::process::{Command, Stdio};
 use std::sync::Mutex;
 #[cfg(windows)]
 use std::sync::OnceLock;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use futures_util::StreamExt;
 use serde::Serialize;
@@ -29,7 +29,9 @@ use tokio::io::AsyncWriteExt;
 use crate::catalog::{self, ArchiveKind, Download, Runtime, Step, Vars};
 use crate::db::Db;
 
-/// Runtimes currently downloading, so the same one is never installed twice at once.
+/// Runtimes this app is downloading, so it never installs the same one twice at
+/// once. Other copies of prepcode (other Windows accounts sharing ProgramData)
+/// are kept apart by per-process work files instead; see `install_runtime`.
 #[derive(Default)]
 pub struct RuntimeInstalls(Mutex<HashSet<String>>);
 
@@ -41,11 +43,7 @@ struct InstallGuard<'a> {
 
 impl Drop for InstallGuard<'_> {
     fn drop(&mut self) {
-        self.installs
-            .0
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .remove(&self.id);
+        self.installs.0.lock().unwrap_or_else(|e| e.into_inner()).remove(&self.id);
     }
 }
 
@@ -67,16 +65,17 @@ struct Progress {
 pub fn shared_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
     let base = std::env::var_os("ProgramData").ok_or("Could not locate the ProgramData folder.")?;
     let dir = PathBuf::from(base).join(&app.config().identifier);
+    // Once it has worked; a failure (e.g. a busy disk) is tried again next time.
     static SHARED: OnceLock<()> = OnceLock::new();
-    SHARED.get_or_init(|| share_with_all_users(&dir));
+    if SHARED.get().is_none() && share_with_all_users(&dir) {
+        let _ = SHARED.set(());
+    }
     Ok(dir)
 }
 
 #[cfg(not(windows))]
 pub fn shared_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
-    app.path()
-        .app_local_data_dir()
-        .map_err(|e| format!("Could not locate app data folder: {e}"))
+    app.path().app_local_data_dir().map_err(|e| format!("Could not locate app data folder: {e}"))
 }
 
 /// By default, what one account creates in ProgramData is read-only to the
@@ -85,20 +84,22 @@ pub fn shared_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
 /// owner, who may change its permissions without admin rights) grants all
 /// users Modify, inherited by everything inside. Best effort: for every later
 /// account this fails harmlessly because the permission is already there.
+/// Returns whether there's nothing left to do.
 #[cfg(windows)]
-fn share_with_all_users(dir: &Path) {
+fn share_with_all_users(dir: &Path) -> bool {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
     if fs::create_dir_all(dir).is_err() {
-        return;
+        return false;
     }
     let icacls = std::env::var_os("SystemRoot")
         .map(|root| PathBuf::from(root).join("System32").join("icacls.exe"))
         .unwrap_or_else(|| PathBuf::from("icacls.exe"));
     // *S-1-5-32-545 is the built-in Users group, named by SID so it works in
     // every Windows language. (OI)(CI)M: Modify, inherited by files and folders.
-    let _ = Command::new(icacls)
+    // Another account's folder can't be changed, but it's already shared.
+    let status = Command::new(icacls)
         .arg(dir)
         .args(["/grant", "*S-1-5-32-545:(OI)(CI)M", "/Q"])
         .stdin(Stdio::null())
@@ -106,6 +107,7 @@ fn share_with_all_users(dir: &Path) {
         .stderr(Stdio::null())
         .creation_flags(CREATE_NO_WINDOW)
         .status();
+    status.is_ok()
 }
 
 fn runtimes_dir(app: &AppHandle) -> Result<PathBuf, String> {
@@ -181,9 +183,7 @@ pub async fn install_runtime(
     if executable_path(&app, &runtime)?.is_some() {
         return Ok(());
     }
-    let download = runtime
-        .download()
-        .ok_or("This language isn't available for this computer yet.")?;
+    let download = runtime.download().ok_or("This language isn't available for this computer yet.")?;
 
     if !installs.0.lock().unwrap_or_else(|e| e.into_inner()).insert(runtime.id.clone()) {
         return Err("Already downloading.".into());
@@ -192,15 +192,16 @@ pub async fn install_runtime(
 
     let root = runtimes_dir(&app)?;
     let work = root.join(".downloads");
-    let archive = work.join(format!("{}.download", runtime.id));
-    let staging = work.join(format!("{}.unpack", runtime.id));
-    let warmup = work.join(format!("{}.warmup", runtime.id));
+    // Named for this process: on Windows another account's prepcode may be
+    // installing the same runtime into the same folder right now.
+    let tag = format!("{}.{}", runtime.id, std::process::id());
+    let archive = work.join(format!("{tag}.download"));
+    let staging = work.join(format!("{tag}.unpack"));
+    let warmup = work.join(format!("{tag}.warmup"));
     let target = root.join(&runtime.id);
 
-    // Leftovers from an interrupted attempt.
-    let _ = fs::remove_file(&archive);
-    let _ = fs::remove_dir_all(&staging);
     fs::create_dir_all(&work).map_err(|e| format!("Could not create runtimes folder: {e}"))?;
+    remove_stale_work(&work);
 
     let result = async {
         let emit = |stage, downloaded, total| {
@@ -229,24 +230,28 @@ pub async fn install_runtime(
             .map_err(|e| format!("Verification failed: {e}"))??;
 
         // The only step that makes the runtime visible: a single rename.
+        // Another copy of prepcode may have finished first; then keep its
+        // install (it may be running) and drop ours.
+        if executable_path(&app, &runtime)?.is_some() {
+            return Ok(());
+        }
         let _ = fs::remove_dir_all(&target);
-        fs::rename(&unpacked_root, &target)
-            .map_err(|e| format!("Could not finish installing: {e}"))?;
+        if let Err(e) = fs::rename(&unpacked_root, &target) {
+            if executable_path(&app, &runtime)?.is_some() {
+                return Ok(());
+            }
+            return Err(format!("Could not finish installing: {e}"));
+        }
 
         // E.g. Zig builds its C/C++ standard libraries on first use, which is
         // slow. Do it now, at the final path so caches match, while the UI
         // still shows "Checking…".
         if !runtime.warmup.is_empty() {
-            let (runtime, exe, shared, scratch) = (
-                runtime.clone(),
-                target.join(runtime.executable()),
-                shared_data_dir(&app)?,
-                warmup.clone(),
-            );
-            let _ = tauri::async_runtime::spawn_blocking(move || {
-                run_warmup(&runtime, &exe, &shared, &scratch)
-            })
-            .await;
+            let (runtime, exe, shared, scratch) =
+                (runtime.clone(), target.join(runtime.executable()), shared_data_dir(&app)?, warmup.clone());
+            let _ =
+                tauri::async_runtime::spawn_blocking(move || run_warmup(&runtime, &exe, &shared, &scratch))
+                    .await;
         }
         Ok::<(), String>(())
     }
@@ -279,9 +284,8 @@ async fn download_verified(
         .map_err(|e| format!("Download failed. Check your internet connection. ({e})"))?;
 
     let total = response.content_length().unwrap_or(0);
-    let mut file = tokio::fs::File::create(dest)
-        .await
-        .map_err(|e| format!("Could not save download: {e}"))?;
+    let mut file =
+        tokio::fs::File::create(dest).await.map_err(|e| format!("Could not save download: {e}"))?;
     let mut hasher = Sha256::new();
     let mut downloaded = 0u64;
     let mut last_percent = u64::MAX;
@@ -291,13 +295,11 @@ async fn download_verified(
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.map_err(|e| format!("Download interrupted: {e}"))?;
         hasher.update(&chunk);
-        file.write_all(&chunk)
-            .await
-            .map_err(|e| format!("Could not save download: {e}"))?;
+        file.write_all(&chunk).await.map_err(|e| format!("Could not save download: {e}"))?;
         downloaded += chunk.len() as u64;
 
         // Throttle events to whole-percent changes.
-        let percent = if total > 0 { downloaded * 100 / total } else { 0 };
+        let percent = (downloaded * 100).checked_div(total).unwrap_or(0);
         if percent != last_percent {
             last_percent = percent;
             emit("downloading", downloaded, total);
@@ -310,6 +312,22 @@ async fn download_verified(
         return Err("The download was corrupted or tampered with. Please try again.".into());
     }
     Ok(())
+}
+
+/// Deletes work files left by installs that were interrupted (the app closed
+/// or crashed) at least a day ago. Newer ones may belong to an install still
+/// running in another copy of prepcode.
+fn remove_stale_work(work: &Path) {
+    const STALE: Duration = Duration::from_secs(24 * 60 * 60);
+    let Ok(entries) = fs::read_dir(work) else { return };
+    for entry in entries.flatten() {
+        let modified = entry.metadata().and_then(|m| m.modified());
+        let age = modified.ok().and_then(|m| SystemTime::now().duration_since(m).ok());
+        if age.is_some_and(|age| age > STALE) {
+            let path = entry.path();
+            let _ = if path.is_dir() { fs::remove_dir_all(&path) } else { fs::remove_file(&path) };
+        }
+    }
 }
 
 fn unpack(archive: &Path, dest: &Path, kind: ArchiveKind) -> Result<(), String> {
@@ -349,11 +367,7 @@ fn run_warmup(runtime: &Runtime, exe: &Path, shared: &Path, scratch: &Path) {
             continue;
         }
         let mut command = step_command(step, runtime, exe, &vars);
-        command
-            .current_dir(scratch)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
+        command.current_dir(scratch).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
@@ -391,8 +405,8 @@ mod tests {
         let catalog = catalog::parse(catalog::BUNDLED).unwrap();
         let runtime = catalog.runtimes.iter().find(|r| r.id.starts_with(runtime_id)).unwrap();
         let download = runtime.download().expect("no build for this platform");
-        let dir = std::env::temp_dir()
-            .join(format!("prepcode-runtime-test-{}-{}", runtime.id, std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("prepcode-runtime-test-{}-{}", runtime.id, std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         let archive = dir.join("download");
@@ -420,4 +434,3 @@ mod tests {
         install_for_this_platform("zig-");
     }
 }
-

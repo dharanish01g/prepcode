@@ -19,10 +19,11 @@ use serde::Serialize;
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_opener::OpenerExt;
 
+use crate::catalog;
 use crate::db::Db;
 use crate::files;
-use crate::sync;
 use crate::github::{self, DeviceCode, GitHubError, Poll, User};
+use crate::sync;
 
 /// The signed-in workspace: `gh-<GitHub user id>` for a student, or
 /// `guest-<random>`. File commands read this instead of trusting a name sent
@@ -36,11 +37,7 @@ impl CurrentUser {
     }
 
     pub fn get(&self) -> Result<String, String> {
-        self.0
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone()
-            .ok_or_else(|| "You're not logged in.".into())
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).clone().ok_or_else(|| "You're not logged in.".into())
     }
 }
 
@@ -75,19 +72,17 @@ fn student_id(user: &User) -> String {
 }
 
 fn data_dir(app: &AppHandle) -> Result<PathBuf, String> {
-    app.path()
-        .app_data_dir()
-        .map_err(|e| format!("Could not locate app data folder: {e}"))
+    app.path().app_data_dir().map_err(|e| format!("Could not locate app data folder: {e}"))
 }
 
 pub fn workspace_dir(app: &AppHandle, id: &str) -> Result<PathBuf, String> {
     Ok(data_dir(app)?.join("workspaces").join(id))
 }
 
-fn open_workspace(app: &AppHandle, current: &CurrentUser, id: &str) -> Result<(), String> {
+fn open_workspace(app: &AppHandle, db: &Db, current: &CurrentUser, id: &str) -> Result<(), String> {
     let dir = workspace_dir(app, id)?;
     fs::create_dir_all(&dir).map_err(|e| format!("Could not open your workspace: {e}"))?;
-    files::tidy_workspace(&dir);
+    files::tidy_workspace(&dir, &db.with(|conn| catalog::extensions(conn))?);
     current.set(Some(id.to_owned()));
     Ok(())
 }
@@ -164,7 +159,16 @@ pub async fn restore_session(
     db: State<'_, Db>,
     current: State<'_, CurrentUser>,
 ) -> Result<Option<Session>, String> {
-    let (Some(mut user), Some(token)) = (saved_account(&db)?, saved_token().await?) else {
+    let token = match saved_token().await {
+        Ok(token) => token,
+        // E.g. a locked keychain, or no secret service on Linux: show the
+        // sign-in screen, but keep the saved sign-in for when it works again.
+        Err(e) => {
+            eprintln!("{e}");
+            return Ok(None);
+        }
+    };
+    let (Some(mut user), Some(token)) = (saved_account(&db)?, token) else {
         forget_sign_in(&db).await?;
         return Ok(None);
     };
@@ -180,7 +184,7 @@ pub async fn restore_session(
         }
         Err(_) => {}
     }
-    open_workspace(&app, &current, &student_id(&user))?;
+    open_workspace(&app, &db, &current, &student_id(&user))?;
     Ok(Some(Session::student(&user)))
 }
 
@@ -212,10 +216,11 @@ impl SignIn {
 /// Starts signing in: opens GitHub's code page in the browser and returns the
 /// code the student enters there.
 #[tauri::command]
-pub async fn start_github_sign_in(
-    app: AppHandle,
-    sign_in: State<'_, SignIn>,
-) -> Result<DeviceCode, String> {
+pub async fn start_github_sign_in(app: AppHandle, sign_in: State<'_, SignIn>) -> Result<DeviceCode, String> {
+    // The token is kept in the OS's secure store. Find out now if there isn't
+    // one (e.g. Linux without a secret service), not after the student has
+    // approved prepcode on GitHub.
+    saved_token().await?;
     let code = github::request_device_code().await.map_err(|e| e.message())?;
     let attempt = sign_in.attempts.fetch_add(1, Ordering::Relaxed) + 1;
     *sign_in.lock() = Some(PendingSignIn { attempt, code: code.clone() });
@@ -266,7 +271,7 @@ pub async fn finish_github_sign_in(
     let user = github::user(&token).await.map_err(|e| e.message())?;
     keyring(move |entry| entry.set_password(&token)).await?;
     save_account(&db, &user)?;
-    open_workspace(&app, &current, &student_id(&user))?;
+    open_workspace(&app, &db, &current, &student_id(&user))?;
     Ok(Some(Session::student(&user)))
 }
 

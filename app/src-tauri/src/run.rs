@@ -5,12 +5,14 @@
 use std::path::Path;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
 
 use serde::Serialize;
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Manager, State};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
-use tokio::process::{ChildStdin, Command};
+use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::{oneshot, watch, Mutex};
 
 use crate::auth::CurrentUser;
@@ -24,14 +26,22 @@ use crate::runtimes::{executable_path, shared_data_dir, step_command, write_step
 pub enum RunEvent {
     /// The student's program itself has started (after any compile step).
     Started,
-    Output { stream: &'static str, text: String },
+    Output {
+        stream: &'static str,
+        text: String,
+    },
     /// The run is over. `stage` is "compile" if compilation failed.
-    Exit { code: Option<i32>, stopped: bool, stage: &'static str },
+    Exit {
+        code: Option<i32>,
+        stopped: bool,
+        stage: &'static str,
+    },
 }
 
 struct ActiveRun {
     id: u64,
-    stdin: Option<ChildStdin>,
+    /// Its own lock, so a write the program isn't reading never holds up Runner.
+    stdin: Option<Arc<Mutex<ChildStdin>>>,
     stop: watch::Sender<bool>,
     /// Resolves once this run's `run_program` has returned and its process is gone.
     done: oneshot::Receiver<()>,
@@ -42,6 +52,9 @@ struct ActiveRun {
 pub struct Runner(Mutex<Option<ActiveRun>>);
 
 static NEXT_RUN_ID: AtomicU64 = AtomicU64::new(1);
+
+/// How long to wait for the last output once the program has exited.
+const OUTPUT_GRACE: Duration = Duration::from_secs(2);
 
 #[tauri::command]
 pub async fn run_program(
@@ -59,16 +72,13 @@ pub async fn run_program(
     }
     let extension = filename.rsplit_once('.').map(|(_, ext)| ext).unwrap_or_default();
     let (language, runtime) = db.with(|conn| {
-        let language = catalog::language(conn, extension)?
-            .ok_or_else(|| format!("Can't run .{extension} files."))?;
+        let language =
+            catalog::language(conn, extension)?.ok_or_else(|| format!("Can't run .{extension} files."))?;
         let runtime = catalog::runtime(conn, &language.runtime)?;
         Ok((language, runtime))
     })?;
     let exe = executable_path(&app, &runtime)?.ok_or_else(|| {
-        format!(
-            "{} isn't installed yet. Click New file, open Language, and download it.",
-            language.name
-        )
+        format!("{} isn't installed yet. Click New file, open Language, and download it.", language.name)
     })?;
 
     // Replace whatever was running before.
@@ -102,15 +112,17 @@ pub async fn run_program(
 /// Sends a line the student typed to the running program's stdin.
 #[tauri::command]
 pub async fn send_input(runner: State<'_, Runner>, text: String) -> Result<(), String> {
-    let mut active = runner.0.lock().await;
-    let stdin = active
-        .as_mut()
-        .and_then(|run| run.stdin.as_mut())
-        .ok_or("The program isn't waiting for input.")?;
-    stdin
-        .write_all(text.as_bytes())
+    // Runner isn't held while writing: the write waits for as long as the
+    // program doesn't read, and Stop needs Runner meanwhile.
+    let stdin = runner
+        .0
+        .lock()
         .await
-        .map_err(|_| "The program isn't reading input anymore.")?;
+        .as_ref()
+        .and_then(|run| run.stdin.clone())
+        .ok_or("The program isn't waiting for input.")?;
+    let mut stdin = stdin.lock().await;
+    stdin.write_all(text.as_bytes()).await.map_err(|_| "The program isn't reading input anymore.")?;
     stdin.flush().await.map_err(|_| "The program isn't reading input anymore.".into())
 }
 
@@ -201,6 +213,9 @@ impl RunContext<'_> {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
+        // Its own process group, so Stop also ends whatever it started.
+        #[cfg(unix)]
+        cmd.process_group(0);
         #[cfg(windows)]
         {
             const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -208,10 +223,12 @@ impl RunContext<'_> {
         }
 
         let mut child = cmd.spawn().map_err(|e| format!("Could not start the program: {e}"))?;
+        // Kept: once the program has been waited on, child.id() is None.
+        let pid = child.id();
 
         if let Some(stdin) = child.stdin.take() {
             if let Some(run) = self.runner.0.lock().await.as_mut().filter(|run| run.id == self.id) {
-                run.stdin = Some(stdin);
+                run.stdin = Some(Arc::new(Mutex::new(stdin)));
             }
         }
         if interactive {
@@ -225,14 +242,18 @@ impl RunContext<'_> {
         let (status, stopped) = tokio::select! {
             status = child.wait() => (status, false),
             _ = stop_requested(&mut stop) => {
-                let _ = child.kill().await;
+                kill_tree(&mut child, pid).await;
                 (child.wait().await, true)
             }
         };
-
-        // Let the pumps flush the last output before reporting the exit.
-        for pump in [stdout, stderr].into_iter().flatten() {
-            let _ = pump.await;
+        // Let the pumps flush the last output before reporting the exit, but
+        // not forever: something the program left running in the background
+        // (e.g. via fork() or system()) can hold the output open.
+        let deadline = tokio::time::Instant::now() + OUTPUT_GRACE;
+        for mut pump in [stdout, stderr].into_iter().flatten() {
+            if tokio::time::timeout_at(deadline, &mut pump).await.is_err() {
+                pump.abort();
+            }
         }
         if let Some(run) = self.runner.0.lock().await.as_mut().filter(|run| run.id == self.id) {
             run.stdin = None;
@@ -240,6 +261,39 @@ impl RunContext<'_> {
 
         let status = status.map_err(|e| format!("Lost track of the program: {e}"))?;
         Ok(Finished { code: status.code(), stopped })
+    }
+}
+
+/// Kills the program and every process it started.
+async fn kill_tree(child: &mut Child, pid: Option<u32>) {
+    #[cfg(unix)]
+    kill_group(pid);
+    #[cfg(windows)]
+    if let Some(pid) = pid {
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let taskkill = std::env::var_os("SystemRoot")
+            .map(|root| Path::new(&root).join("System32").join("taskkill.exe"))
+            .unwrap_or_else(|| "taskkill.exe".into());
+        let _ = Command::new(taskkill)
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .creation_flags(CREATE_NO_WINDOW)
+            .status()
+            .await;
+    }
+    let _ = child.kill().await;
+}
+
+/// Kills the process group led by `pid` (see `execute`). Only call it before
+/// the program has been waited on: until then its id, and so the group's,
+/// can't be reused by another process.
+#[cfg(unix)]
+fn kill_group(pid: Option<u32>) {
+    if let Some(pgid) = pid {
+        // SAFETY: kill(2) takes no pointers; a negative pid names a process group.
+        unsafe { libc::kill(-(pgid as libc::pid_t), libc::SIGKILL) };
     }
 }
 
@@ -304,6 +358,34 @@ fn take_utf8(bytes: &mut Vec<u8>) -> String {
 #[cfg(test)]
 mod tests {
     use super::take_utf8;
+
+    /// A program that started a background process: Stop must end both, or
+    /// the background one keeps the output open and the run never finishes.
+    #[cfg(unix)]
+    #[test]
+    fn stop_ends_processes_the_program_started() {
+        use std::process::Stdio;
+        use std::time::Duration;
+        use tokio::io::AsyncReadExt;
+
+        tauri::async_runtime::block_on(async {
+            let mut cmd = tokio::process::Command::new("sh");
+            cmd.args(["-c", "sleep 30 & echo started; while :; do :; done"])
+                .stdout(Stdio::piped())
+                .kill_on_drop(true)
+                .process_group(0);
+            let mut child = cmd.spawn().unwrap();
+            let pid = child.id();
+            let mut out = child.stdout.take().unwrap();
+            let mut first = [0u8; 8];
+            let _ = out.read(&mut first).await.unwrap();
+
+            super::kill_tree(&mut child, pid).await;
+            let mut rest = Vec::new();
+            let eof = tokio::time::timeout(Duration::from_secs(5), out.read_to_end(&mut rest)).await;
+            assert!(eof.is_ok(), "output still open: the background process survived Stop");
+        });
+    }
 
     #[test]
     fn keeps_split_multibyte_char_for_next_chunk() {

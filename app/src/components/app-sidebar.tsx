@@ -1,16 +1,16 @@
-"use client"
+"use client";
 
-import * as React from "react"
-import { flushSync } from "react-dom"
+import * as React from "react";
+import { flushSync } from "react-dom";
 
-import { NavUser } from "@/components/nav-user"
-import { DeleteFileDialog } from "@/components/delete-file-dialog"
-import { HistoryList } from "@/components/history-list"
-import { SyncList } from "@/components/sync-list"
-import { NewFileDialog } from "@/components/new-file-dialog"
-import { RenameFileDialog } from "@/components/rename-file-dialog"
-import { ZoomMenu } from "@/components/zoom-menu"
-import { Button } from "@/components/ui/button"
+import { NavUser } from "@/components/nav-user";
+import { DeleteFileDialog } from "@/components/delete-file-dialog";
+import { HistoryList } from "@/components/history-list";
+import { SyncList } from "@/components/sync-list";
+import { NewFileDialog } from "@/components/new-file-dialog";
+import { RenameFileDialog } from "@/components/rename-file-dialog";
+import { ZoomMenu } from "@/components/zoom-menu";
+import { Button } from "@/components/ui/button";
 import {
   Sidebar,
   SidebarContent,
@@ -23,15 +23,15 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
   useSidebar,
-} from "@/components/ui/sidebar"
-import { displayName, type Session } from "@/lib/auth"
-import { disposeEditorModel, editorModelPath } from "@/lib/monaco"
-import { useFilesQuery } from "@/lib/queries"
-import type { SyncStatus } from "@/lib/sync"
-import { FilesIcon, PlusIcon, MoonIcon, RefreshCwIcon, SunIcon } from "lucide-react"
-import { Spinner } from "@/components/ui/spinner"
-import { useTheme } from "@/hooks/use-theme"
-import logo from "@/assets/logo.png"
+} from "@/components/ui/sidebar";
+import { displayName, type Session } from "@/lib/auth";
+import { disposeEditorModel, editorModelPath } from "@/lib/monaco";
+import { useFilesQuery } from "@/lib/queries";
+import type { SyncStatus } from "@/lib/sync";
+import { FilesIcon, PlusIcon, MoonIcon, RefreshCwIcon, SunIcon } from "lucide-react";
+import { Spinner } from "@/components/ui/spinner";
+import { useTheme } from "@/hooks/use-theme";
+import logo from "@/assets/logo.png";
 
 const data = {
   navMain: [
@@ -40,7 +40,7 @@ const data = {
     // What isn't on GitHub yet, and the Sync button. Students only.
     { title: "Sync", icon: <RefreshCwIcon /> },
   ],
-}
+};
 
 export function AppSidebar({
   session,
@@ -54,40 +54,40 @@ export function AppSidebar({
   onSync,
   ...props
 }: React.ComponentProps<typeof Sidebar> & {
-  session: Session
-  onLogout: () => void
-  selectedFile: string | null
-  onSelectFile: (filename: string | null) => void
+  session: Session;
+  onLogout: () => void;
+  selectedFile: string | null;
+  onSelectFile: (filename: string | null) => void;
   /** Saves the editor's pending edits now (before a rename or delete). */
-  onFlushEdits: () => void
+  onFlushEdits: () => void;
   /** What isn't synced to GitHub yet; undefined for guests. */
-  syncStatus?: SyncStatus
+  syncStatus?: SyncStatus;
   /** Changes Sync would push, including deletions. */
-  unsynced: number
-  syncing: boolean
-  onSync: () => void
+  unsynced: number;
+  syncing: boolean;
+  onSync: () => void;
 }) {
   // Note: I'm using state to show active item.
   // IRL you should use the url/router.
-  const [activeItem, setActiveItem] = React.useState(data.navMain[0])
-  const navItems = data.navMain.filter((item) => !session.guest || item.title !== "Sync")
-  const { setOpen } = useSidebar()
-  const { theme, toggleTheme } = useTheme()
-  const filesQuery = useFilesQuery(session.id)
-  const files = filesQuery.data ?? []
-  const [search, setSearch] = React.useState("")
-  const [newFileOpen, setNewFileOpen] = React.useState(false)
-  const [renaming, setRenaming] = React.useState<string | null>(null)
-  const [deleting, setDeleting] = React.useState<string | null>(null)
+  const [activeItem, setActiveItem] = React.useState(data.navMain[0]);
+  const navItems = data.navMain.filter((item) => !session.guest || item.title !== "Sync");
+  const { setOpen } = useSidebar();
+  const { theme, toggleTheme } = useTheme();
+  const filesQuery = useFilesQuery(session.id);
+  const files = filesQuery.data ?? [];
+  const [search, setSearch] = React.useState("");
+  const [newFileOpen, setNewFileOpen] = React.useState(false);
+  const [renaming, setRenaming] = React.useState<string | null>(null);
+  const [deleting, setDeleting] = React.useState<string | null>(null);
 
   // Moves the editor off `oldFile` (synchronously, so Monaco has switched
   // models), then frees its model so a future file with that name starts fresh.
   function releaseFile(oldFile: string, next: string | null) {
-    if (selectedFile === oldFile) flushSync(() => onSelectFile(next))
-    disposeEditorModel(editorModelPath(session.id, oldFile))
+    if (selectedFile === oldFile) flushSync(() => onSelectFile(next));
+    disposeEditorModel(editorModelPath(session.id, oldFile));
   }
 
-  const query = search.trim().toLowerCase()
+  const query = search.trim().toLowerCase();
 
   return (
     <Sidebar
@@ -98,18 +98,11 @@ export function AppSidebar({
       {/* This is the first sidebar */}
       {/* We disable collapsible and adjust width to icon. */}
       {/* This will make the sidebar appear as icons. */}
-      <Sidebar
-        collapsible="none"
-        className="w-[calc(var(--sidebar-width-icon)+1px)]! border-r"
-      >
+      <Sidebar collapsible="none" className="w-[calc(var(--sidebar-width-icon)+1px)]! border-r">
         <SidebarHeader>
           <SidebarMenu>
             <SidebarMenuItem>
-              <SidebarMenuButton
-                size="lg"
-                className="md:h-8 md:p-0"
-                render={<a href="#" />}
-              >
+              <SidebarMenuButton size="lg" className="md:h-8 md:p-0" render={<a href="#" />}>
                 <img src={logo} alt="" className="size-8" />
                 <div className="grid flex-1 text-left text-sm leading-tight">
                   <span className="truncate font-medium">prepcode</span>
@@ -131,8 +124,8 @@ export function AppSidebar({
                         hidden: false,
                       }}
                       onClick={() => {
-                        setActiveItem(item)
-                        setOpen(true)
+                        setActiveItem(item);
+                        setOpen(true);
                       }}
                       isActive={activeItem.title === item.title}
                       className="px-2.5 md:px-2"
@@ -184,11 +177,14 @@ export function AppSidebar({
       <Sidebar collapsible="none" className="hidden flex-1 md:flex">
         <SidebarHeader className="gap-3.5 border-b p-4">
           <div className="flex w-full items-center justify-between">
-            <div className="text-base font-medium text-foreground">
-              {activeItem.title}
-            </div>
+            <div className="text-base font-medium text-foreground">{activeItem.title}</div>
             {activeItem.title === "Sync" ? (
-              <Button size="sm" disabled={syncing} onClick={onSync} title="Save your changes to GitHub">
+              <Button
+                size="sm"
+                disabled={syncing}
+                onClick={onSync}
+                title="Save your changes to GitHub"
+              >
                 {syncing ? <Spinner /> : <RefreshCwIcon />}
                 Sync
               </Button>
@@ -204,9 +200,9 @@ export function AppSidebar({
               userId={session.id}
               existingFiles={files}
               onCreated={(filename) => {
-                onSelectFile(filename)
-                setSearch("")
-                setNewFileOpen(false)
+                onSelectFile(filename);
+                setSearch("");
+                setNewFileOpen(false);
               }}
             />
           </div>
@@ -241,8 +237,8 @@ export function AppSidebar({
         onClose={() => setRenaming(null)}
         beforeRename={onFlushEdits}
         onRenamed={(oldFile, newFile) => {
-          setRenaming(null)
-          releaseFile(oldFile, newFile)
+          setRenaming(null);
+          releaseFile(oldFile, newFile);
         }}
       />
       <DeleteFileDialog
@@ -251,10 +247,10 @@ export function AppSidebar({
         onClose={() => setDeleting(null)}
         beforeDelete={onFlushEdits}
         onDeleted={(file) => {
-          setDeleting(null)
-          releaseFile(file, null)
+          setDeleting(null);
+          releaseFile(file, null);
         }}
       />
     </Sidebar>
-  )
+  );
 }

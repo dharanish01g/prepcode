@@ -1,0 +1,103 @@
+# Checks every push to main and every pull request: formatting, types, lints
+# and tests, with the Rust side built on all three platforms prepcode ships
+# for, so a Windows-only warning or error shows up here instead of in a release.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: pnpm
+          cache-dependency-path: app/pnpm-lock.yaml
+
+      - run: pnpm install --frozen-lockfile
+      - name: Formatting (Prettier)
+        run: pnpm format:check
+      - name: Types and build (tsc + Vite)
+        run: pnpm build
+
+  rust:
+    name: Rust (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux
+            platform: ubuntu-22.04
+          - name: macOS
+            platform: macos-latest
+          - name: Windows
+            platform: windows-latest
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libssl-dev
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: pnpm
+          cache-dependency-path: app/pnpm-lock.yaml
+
+      # tauri::generate_context! embeds app/dist, so the frontend is built first.
+      - name: Build frontend
+        working-directory: app
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri -> target
+
+      - name: Formatting (rustfmt)
+        if: runner.os == 'Linux'
+        working-directory: app/src-tauri
+        run: cargo fmt --check
+
+      - name: Lints (clippy, warnings are errors)
+        working-directory: app/src-tauri
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      - name: Tests
+        working-directory: app/src-tauri
+        run: cargo test --locked

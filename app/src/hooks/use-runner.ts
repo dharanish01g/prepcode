@@ -22,7 +22,9 @@ function exitMessage(event: Extract<RunEvent, { type: "exit" }>) {
   if (event.stopped) return "Program stopped.";
   if (event.stage === "compile") return "Compilation failed. Fix the errors above and run again.";
   if (event.code === 0) return null;
-  return event.code === null ? "Program ended unexpectedly." : `Program exited with code ${event.code}.`;
+  return event.code === null
+    ? "Program ended unexpectedly."
+    : `Program exited with code ${event.code}.`;
 }
 
 function append(entries: ConsoleEntry[], added: ConsoleEntry[]) {
@@ -71,10 +73,13 @@ export function useRunner() {
     });
   }, []);
 
-  useEffect(() => () => {
-    if (frame.current !== null) cancelAnimationFrame(frame.current);
-    clearTimeout(inputTimer.current);
-  }, []);
+  useEffect(
+    () => () => {
+      if (frame.current !== null) cancelAnimationFrame(frame.current);
+      clearTimeout(inputTimer.current);
+    },
+    [],
+  );
 
   const run = useCallback(
     async (filename: string) => {

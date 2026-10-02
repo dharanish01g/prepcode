@@ -20,11 +20,7 @@ import {
   BreadcrumbPage,
   BreadcrumbSeparator,
 } from "@/components/ui/breadcrumb";
-import {
-  ResizableHandle,
-  ResizablePanel,
-  ResizablePanelGroup,
-} from "@/components/ui/resizable";
+import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import {
   Empty,
   EmptyDescription,
@@ -35,29 +31,25 @@ import {
 import { Separator } from "@/components/ui/separator";
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { displayName, type Session } from "@/lib/auth";
-import { allowClose, isCloseBlocked, setUnsyncedForClose } from "@/lib/close-guard";
+import { allowClose, isCloseBlocked, setCloseGuarded } from "@/lib/close-guard";
 import { exportGuestFiles, whenSavesSettled } from "@/lib/files";
-import { useSyncStatusQuery } from "@/lib/queries";
+import { useFilesQuery, useSyncStatusQuery } from "@/lib/queries";
 import { unsyncedCount } from "@/lib/sync";
 import logo from "@/assets/logo.png";
 
-export function WorkspaceScreen({
-  session,
-  onLogout,
-}: {
-  session: Session;
-  onLogout: () => void;
-}) {
+export function WorkspaceScreen({ session, onLogout }: { session: Session; onLogout: () => void }) {
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const flushEditorRef = useRef<() => void>(() => {});
   const formatEditorRef = useRef<() => Promise<void>>(async () => {});
   const [formatting, setFormatting] = useState(false);
-  const [confirmGuestLogout, setConfirmGuestLogout] = useState(false);
+  // Logging out or closing, held back to warn that a guest's files go.
+  const [guestAction, setGuestAction] = useState<"log out" | "close" | null>(null);
   // Logging out or closing, held back by unsynced changes.
   const [unsyncedAction, setUnsyncedAction] = useState<"log out" | "close" | null>(null);
   const runner = useRunner();
   const syncStatus = useSyncStatusQuery(session.id, !session.guest);
   const unsynced = unsyncedCount(syncStatus.data);
+  const guestFiles = useFilesQuery(session.id).data?.length ?? 0;
   const sync = useSync({
     userId: session.id,
     selectedFile,
@@ -66,25 +58,28 @@ export function WorkspaceScreen({
   });
 
   // Bring down the student's files from GitHub (e.g. on a new computer).
+  const { pull } = sync;
   useEffect(() => {
-    if (!session.guest) sync.pull();
-  }, [session.id]);
+    if (!session.guest) pull();
+  }, [session.guest, pull]);
 
-  // Closing the window with unsynced changes asks first.
+  // Closing the window asks first if that would lose anything: unsynced
+  // changes, or (since they're deleted) a guest's files.
   useEffect(() => {
-    setUnsyncedForClose(session.guest ? 0 : unsynced);
-    return () => setUnsyncedForClose(0);
-  }, [session.guest, unsynced]);
+    setCloseGuarded(session.guest ? guestFiles > 0 : unsynced > 0);
+    return () => setCloseGuarded(false);
+  }, [session.guest, guestFiles, unsynced]);
   useEffect(() => {
     const listening = getCurrentWindow().onCloseRequested((event) => {
       if (!isCloseBlocked()) return;
       event.preventDefault();
-      setUnsyncedAction("close");
+      if (session.guest) setGuestAction("close");
+      else setUnsyncedAction("close");
     });
     return () => {
       listening.then((stop) => stop());
     };
-  }, []);
+  }, [session.guest]);
 
   function closeWindow() {
     allowClose();
@@ -126,7 +121,7 @@ export function WorkspaceScreen({
         session={session}
         onLogout={
           session.guest
-            ? () => setConfirmGuestLogout(true)
+            ? () => setGuestAction("log out")
             : unsynced > 0
               ? () => setUnsyncedAction("log out")
               : handleLogout
@@ -176,7 +171,7 @@ export function WorkspaceScreen({
           </div>
           <Button
             variant="outline"
-            disabled={!selectedFile || !canFormat(selectedFile) || formatting}
+            disabled={!selectedFile || !canFormat(selectedFile) || formatting || sync.syncing}
             onClick={handleFormat}
           >
             {formatting ? <Spinner /> : <WandSparklesIcon />}
@@ -201,6 +196,7 @@ export function WorkspaceScreen({
               <CodeEditor
                 userId={session.id}
                 filename={selectedFile}
+                readOnly={sync.syncing}
                 flushRef={flushEditorRef}
                 formatRef={formatEditorRef}
               />
@@ -261,8 +257,8 @@ export function WorkspaceScreen({
         }}
       />
       <GuestLogoutDialog
-        open={confirmGuestLogout}
-        onCancel={() => setConfirmGuestLogout(false)}
+        action={guestAction}
+        onCancel={() => setGuestAction(null)}
         onExport={async () => {
           // Include the last few keystrokes.
           flushEditorRef.current();
@@ -270,8 +266,10 @@ export function WorkspaceScreen({
           return exportGuestFiles();
         }}
         onConfirm={() => {
-          setConfirmGuestLogout(false);
-          handleLogout();
+          const action = guestAction;
+          setGuestAction(null);
+          if (action === "log out") handleLogout();
+          else closeWindow();
         }}
       />
     </SidebarProvider>

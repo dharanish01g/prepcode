@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useLayoutEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -22,33 +22,48 @@ export function useSync({
   flushEdits: () => void;
 }) {
   const queryClient = useQueryClient();
+  // True during the sign-in pull too: the editor is read-only meanwhile, so
+  // nothing typed is overwritten by what comes from GitHub.
   const [syncing, setSyncing] = useState(false);
 
+  // A report arrives long after the sync started: read the open file then,
+  // not when it started.
+  const selectedFileRef = useRef(selectedFile);
+  useLayoutEffect(() => {
+    selectedFileRef.current = selectedFile;
+  }, [selectedFile]);
+
   // Shows what came from GitHub: new text in open files, deleted files closed.
-  async function applyReport(report: SyncReport) {
-    for (const filename of report.updated) {
-      const content = await readFile(filename);
-      queryClient.setQueryData(queryKeys.fileContent(userId, filename), content);
-      setEditorModelText(editorModelPath(userId, filename), content);
-    }
-    for (const filename of report.deleted) {
-      if (selectedFile === filename) flushSync(() => onSelectFile(null));
-      queryClient.removeQueries({ queryKey: queryKeys.fileContent(userId, filename), exact: true });
-      disposeEditorModel(editorModelPath(userId, filename));
-    }
-    await Promise.all([
-      queryClient.invalidateQueries({ queryKey: queryKeys.files(userId) }),
-      queryClient.invalidateQueries({ queryKey: queryKeys.fileHistory(userId) }),
-      queryClient.invalidateQueries({ queryKey: queryKeys.syncStatus(userId) }),
-    ]);
-    for (const copy of report.conflicts) {
-      const original = copy.replace(/_conflict\d*(\.[^.]+)$/, "$1");
-      toast.warning(`${original} also changed on GitHub`, {
-        description: `GitHub's version is now ${original}. Your version was kept as ${copy}.`,
-        duration: Infinity,
-      });
-    }
-  }
+  const applyReport = useCallback(
+    async (report: SyncReport) => {
+      for (const filename of report.updated) {
+        const content = await readFile(filename);
+        queryClient.setQueryData(queryKeys.fileContent(userId, filename), content);
+        setEditorModelText(editorModelPath(userId, filename), content);
+      }
+      for (const filename of report.deleted) {
+        if (selectedFileRef.current === filename) flushSync(() => onSelectFile(null));
+        queryClient.removeQueries({
+          queryKey: queryKeys.fileContent(userId, filename),
+          exact: true,
+        });
+        disposeEditorModel(editorModelPath(userId, filename));
+      }
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.files(userId) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.fileHistory(userId) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.syncStatus(userId) }),
+      ]);
+      for (const copy of report.conflicts) {
+        const original = copy.replace(/_conflict\d*(\.[^.]+)$/, "$1");
+        toast.warning(`${original} also changed on GitHub`, {
+          description: `GitHub's version is now ${original}. Your version was kept as ${copy}.`,
+          duration: Infinity,
+        });
+      }
+    },
+    [queryClient, userId, onSelectFile],
+  );
 
   /** The Sync button: pull, then push everything as one commit. */
   async function sync() {
@@ -64,7 +79,8 @@ export function useSync({
         toast.success("Everything is already synced");
       } else {
         const parts = [];
-        if (report.pushed > 0) parts.push(`${report.pushed} ${plural(report.pushed, "change")} saved to GitHub`);
+        if (report.pushed > 0)
+          parts.push(`${report.pushed} ${plural(report.pushed, "change")} saved to GitHub`);
         if (received > 0) parts.push(`${received} ${plural(received, "change")} from GitHub`);
         toast.success("Synced", {
           description: parts.join(", ") + ".",
@@ -81,15 +97,18 @@ export function useSync({
   }
 
   /** At sign-in: bring down the student's files, quietly. */
-  async function pull() {
+  const pull = useCallback(async () => {
+    setSyncing(true);
     try {
       const report = await pullFromGitHub();
       await applyReport(report);
     } catch (err) {
       // Offline is fine: they'll sync later.
       console.error("Could not pull from GitHub:", err);
+    } finally {
+      setSyncing(false);
     }
-  }
+  }, [applyReport]);
 
   return { syncing, sync, pull };
 }

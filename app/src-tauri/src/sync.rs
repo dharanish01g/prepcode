@@ -25,7 +25,7 @@ use tauri::{AppHandle, State};
 use crate::auth::{self, workspace_dir, CurrentUser, GUEST_PREFIX};
 use crate::catalog;
 use crate::db::Db;
-use crate::files::{self, WorkspaceFile};
+use crate::files::{self, WorkspaceFile, WorkspaceLock};
 use crate::github::{self, GitHubError};
 
 /// Marks a repo as made by prepcode, so an unrelated repo that happens to be
@@ -54,9 +54,8 @@ struct Synced {
 
 /// Path (e.g. `02oct2026/code2.py`) -> the file at the last sync.
 fn synced(conn: &Connection, user: &str) -> Result<HashMap<String, Synced>, String> {
-    let mut stmt = conn
-        .prepare("SELECT path, sha, content FROM synced_files WHERE user_id = ?1")
-        .map_err(db_err)?;
+    let mut stmt =
+        conn.prepare("SELECT path, sha, content FROM synced_files WHERE user_id = ?1").map_err(db_err)?;
     let rows = stmt
         .query_map([user], |r| Ok((r.get(0)?, Synced { sha: r.get(1)?, content: r.get(2)? })))
         .map_err(db_err)?;
@@ -71,10 +70,9 @@ fn set_synced(conn: &Connection, user: &str, path: &str, file: Option<(&str, &[u
              ON CONFLICT (user_id, path) DO UPDATE SET sha = excluded.sha, content = excluded.content",
             params![user, path, sha, content],
         ),
-        None => conn.execute(
-            "DELETE FROM synced_files WHERE user_id = ?1 AND path = ?2",
-            params![user, path],
-        ),
+        None => {
+            conn.execute("DELETE FROM synced_files WHERE user_id = ?1 AND path = ?2", params![user, path])
+        }
     }
     .map(|_| ())
     .map_err(db_err)
@@ -266,12 +264,13 @@ pub async fn sync_now(
     current: State<'_, CurrentUser>,
     db: State<'_, Db>,
     lock: State<'_, SyncLock>,
+    workspace_lock: State<'_, WorkspaceLock>,
 ) -> Result<SyncReport, String> {
     let user = require_student(&current)?;
     let Ok(_guard) = lock.0.try_lock() else {
         return Err("Already syncing.".into());
     };
-    sync(&app, &db, &user, true).await
+    sync(&app, &db, &workspace_lock, &user, true).await
 }
 
 /// Brings down what changed on GitHub without pushing anything (at sign-in).
@@ -281,13 +280,20 @@ pub async fn pull_from_github(
     current: State<'_, CurrentUser>,
     db: State<'_, Db>,
     lock: State<'_, SyncLock>,
+    workspace_lock: State<'_, WorkspaceLock>,
 ) -> Result<SyncReport, String> {
     let user = require_student(&current)?;
     let _guard = lock.0.lock().await;
-    sync(&app, &db, &user, false).await
+    sync(&app, &db, &workspace_lock, &user, false).await
 }
 
-async fn sync(app: &AppHandle, db: &Db, user: &str, push: bool) -> Result<SyncReport, String> {
+async fn sync(
+    app: &AppHandle,
+    db: &Db,
+    workspace_lock: &WorkspaceLock,
+    user: &str,
+    push: bool,
+) -> Result<SyncReport, String> {
     let msg = |e: GitHubError| e.message();
     let token = auth::saved_token().await?.ok_or("Sign in with GitHub to sync.")?;
     let account = github::user(&token).await.map_err(msg)?;
@@ -336,7 +342,7 @@ async fn sync(app: &AppHandle, db: &Db, user: &str, push: bool) -> Result<SyncRe
             .map(|e| (e.path, e.sha))
             .collect();
 
-        let mut report = pull(app, db, user, &token, &owner, &remote).await?;
+        let mut report = pull(app, db, workspace_lock, user, &token, &owner, &remote).await?;
         report.repo_url = repo.html_url.clone();
         if !push {
             return Ok(report);
@@ -349,7 +355,8 @@ async fn sync(app: &AppHandle, db: &Db, user: &str, push: bool) -> Result<SyncRe
         let mut entries = Vec::new();
         // What each pushed path's synced state becomes.
         let mut pushed: Vec<(String, Option<&Local>)> = Vec::new();
-        let written = changes.added.iter().chain(&changes.modified).chain(changes.renamed.iter().map(|(_, to)| to));
+        let written =
+            changes.added.iter().chain(&changes.modified).chain(changes.renamed.iter().map(|(_, to)| to));
         for path in written {
             let file = &local[path];
             let content = String::from_utf8(file.bytes.clone())
@@ -365,7 +372,8 @@ async fn sync(app: &AppHandle, db: &Db, user: &str, push: bool) -> Result<SyncRe
             pushed.push((path.clone(), None));
         }
         if !has_marker {
-            entries.push(json!({ "path": MARKER, "mode": "100644", "type": "blob", "content": MARKER_CONTENT }));
+            entries
+                .push(json!({ "path": MARKER, "mode": "100644", "type": "blob", "content": MARKER_CONTENT }));
         }
         if entries.is_empty() {
             return Ok(report);
@@ -402,16 +410,21 @@ fn is_program_path(path: &str, extensions: &HashSet<String>) -> bool {
 }
 
 /// Applies what changed on GitHub since the last sync to the workspace.
+///
+/// The student can save while this runs, so each file is checked again,
+/// under `workspace_lock`, right before it's overwritten or deleted.
 async fn pull(
     app: &AppHandle,
     db: &Db,
+    workspace_lock: &WorkspaceLock,
     user: &str,
     token: &str,
     owner: &str,
     remote: &HashMap<String, String>,
 ) -> Result<SyncReport, String> {
     let workspace = workspace_dir(app, user)?;
-    let mut local = local_files(app, db, user)?;
+    let extensions = db.with(|conn| catalog::extensions(conn))?;
+    let local = local_files(app, db, user)?;
     let synced = db.with(|conn| synced(conn, user))?;
     let mut report = SyncReport::default();
 
@@ -433,37 +446,36 @@ async fn pull(
         if there == base {
             continue;
         }
-        // Changed on GitHub, and here too (in a different way): keep both.
-        // (Deleted on GitHub but changed here is handled below.)
-        if there.is_some() && here.is_some() && here != base {
-            if let Some(local_copy) = local.remove(&path) {
-                let taken = local.values().map(|l| l.file.filename.clone()).collect();
-                let new_name = conflict_name(&filename, &taken);
-                let target = local_copy.file.path.with_file_name(&new_name);
-                fs::rename(&local_copy.file.path, &target)
-                    .map_err(|e| format!("Could not keep your copy of {filename}: {e}"))?;
-                report.conflicts.push(new_name);
-            }
-        }
 
         match there {
             // New or changed on GitHub: download it.
             Some(sha) => {
+                let bytes = github::blob(token, owner, sha).await.map_err(|e| e.message())?;
+                let _guard = workspace_lock.lock();
+                // The files as they are now, not when the pull started.
+                let mut current = files::workspace_files(&workspace, &extensions)?;
+                let mut taken: HashSet<String> = current.iter().map(|f| f.filename.clone()).collect();
+
+                // Changed here too (in a different way): keep both.
+                if let Some(i) = current.iter().position(|f| f.relative == path) {
+                    let now = fs::read(&current[i].path)
+                        .map(|bytes| blob_sha(&bytes))
+                        .map_err(|e| format!("Could not read {filename}: {e}"))?;
+                    if Some(now.as_str()) != base && now != *sha {
+                        let copy = current.remove(i);
+                        report.conflicts.push(keep_copy(&copy, &mut taken)?);
+                    }
+                }
                 // A different local file with the same name (made separately
-                // on two computers) steps aside, as a conflict copy.
-                let clash = local
+                // on two computers) steps aside too.
+                if let Some(i) = current
                     .iter()
-                    .find(|(p, l)| **p != path && l.file.filename.eq_ignore_ascii_case(&filename))
-                    .map(|(p, _)| p.clone());
-                if let Some(clash) = clash.and_then(|p| local.remove(&p)) {
-                    let taken = local.values().map(|l| l.file.filename.clone()).collect();
-                    let new_name = conflict_name(&filename, &taken);
-                    fs::rename(&clash.file.path, clash.file.path.with_file_name(&new_name))
-                        .map_err(|e| format!("Could not keep your copy of {filename}: {e}"))?;
-                    report.conflicts.push(new_name);
+                    .position(|f| f.relative != path && f.filename.eq_ignore_ascii_case(&filename))
+                {
+                    let copy = current.remove(i);
+                    report.conflicts.push(keep_copy(&copy, &mut taken)?);
                 }
 
-                let bytes = github::blob(token, owner, sha).await.map_err(|e| e.message())?;
                 let target = workspace.join(&path);
                 if let Some(folder) = target.parent() {
                     fs::create_dir_all(folder).map_err(|e| format!("Could not save {filename}: {e}"))?;
@@ -474,9 +486,13 @@ async fn pull(
             }
             // Deleted on GitHub.
             None => {
-                if let Some(gone) = local.remove(&path) {
-                    if here == base {
-                        let _ = fs::remove_file(&gone.file.path);
+                if here.is_some() && here == base {
+                    let _guard = workspace_lock.lock();
+                    let target = workspace.join(&path);
+                    // Unless it was saved meanwhile.
+                    let unchanged =
+                        fs::read(&target).is_ok_and(|bytes| Some(blob_sha(&bytes).as_str()) == base);
+                    if unchanged && fs::remove_file(&target).is_ok() {
                         report.deleted.push(filename);
                     }
                 }
@@ -487,6 +503,16 @@ async fn pull(
     }
     remove_empty_folders(&workspace);
     Ok(report)
+}
+
+/// Renames the student's copy of a file out of the way, to a conflict name not
+/// in `taken` (which then includes it). Returns the new filename.
+fn keep_copy(file: &WorkspaceFile, taken: &mut HashSet<String>) -> Result<String, String> {
+    let new_name = conflict_name(&file.filename, taken);
+    fs::rename(&file.path, file.path.with_file_name(&new_name))
+        .map_err(|e| format!("Could not keep your copy of {}: {e}", file.filename))?;
+    taken.insert(new_name.clone());
+    Ok(new_name)
 }
 
 /// `code2.py` -> `code2_conflict.py` (or `_conflict2`, …), not in `taken`.
@@ -596,7 +622,10 @@ mod tests {
 
     #[test]
     fn commit_messages() {
-        assert_eq!(commit_message(&pending_of(&["loop.py"], &["code2.py"], &[], &[])), "Add loop.py, update code2.py");
+        assert_eq!(
+            commit_message(&pending_of(&["loop.py"], &["code2.py"], &[], &[])),
+            "Add loop.py, update code2.py"
+        );
         assert_eq!(commit_message(&pending_of(&[], &[], &[], &[("a.py", "b.py")])), "Rename a.py to b.py");
         assert_eq!(
             commit_message(&pending_of(&["a.py", "b.py", "c.py"], &[], &["d.py"], &[])),

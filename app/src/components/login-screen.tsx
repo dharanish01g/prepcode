@@ -15,11 +15,7 @@ import {
   type Session,
 } from "@/lib/auth";
 
-export function LoginScreen({
-  onAuthenticated,
-}: {
-  onAuthenticated: (session: Session) => void;
-}) {
+export function LoginScreen({ onAuthenticated }: { onAuthenticated: (session: Session) => void }) {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   // Set while the student approves the code on GitHub.

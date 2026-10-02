@@ -1,13 +1,13 @@
-import { PencilIcon, Trash2Icon } from "lucide-react"
-import { FileIcon } from "@/components/file-icon"
+import { PencilIcon, Trash2Icon } from "lucide-react";
+import { FileIcon } from "@/components/file-icon";
 import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
   ContextMenuSeparator,
   ContextMenuTrigger,
-} from "@/components/ui/context-menu"
-import { SidebarMenuButton, SidebarMenuItem } from "@/components/ui/sidebar"
+} from "@/components/ui/context-menu";
+import { SidebarMenuButton, SidebarMenuItem } from "@/components/ui/sidebar";
 
 /** A file in the sidebar: click to open, right-click to rename or delete. */
 export function FileMenuItem({
@@ -18,20 +18,18 @@ export function FileMenuItem({
   onRename,
   onDelete,
 }: {
-  file: string
-  isActive: boolean
+  file: string;
+  isActive: boolean;
   /** Small text on the right, e.g. the time it was last edited. */
-  detail?: string
-  onSelect: () => void
-  onRename: () => void
-  onDelete: () => void
+  detail?: string;
+  onSelect: () => void;
+  onRename: () => void;
+  onDelete: () => void;
 }) {
   return (
     <SidebarMenuItem>
       <ContextMenu>
-        <ContextMenuTrigger
-          render={<SidebarMenuButton isActive={isActive} onClick={onSelect} />}
-        >
+        <ContextMenuTrigger render={<SidebarMenuButton isActive={isActive} onClick={onSelect} />}>
           <FileIcon filename={file} />
           <span>{file}</span>
           {detail && (
@@ -53,5 +51,5 @@ export function FileMenuItem({
         </ContextMenuContent>
       </ContextMenu>
     </SidebarMenuItem>
-  )
+  );
 }

@@ -16,16 +16,17 @@ import {
 import { Spinner } from "@/components/ui/spinner";
 
 /**
- * A guest's files are deleted on log out, so make sure they mean it, and let
- * them export a zip of their files first.
+ * A guest's files are deleted on log out and when prepcode closes, so make
+ * sure they mean it, and let them export a zip of their files first.
  */
 export function GuestLogoutDialog({
-  open,
+  action,
   onCancel,
   onExport,
   onConfirm,
 }: {
-  open: boolean;
+  /** What's being held back; the dialog is open while this is set. */
+  action: "log out" | "close" | null;
   onCancel: () => void;
   /** Zips the guest's files into Downloads; resolves to the zip's path. */
   onExport: () => Promise<string>;
@@ -51,13 +52,15 @@ export function GuestLogoutDialog({
   }
 
   return (
-    <AlertDialog open={open} onOpenChange={(next) => !next && !exporting && onCancel()}>
+    <AlertDialog open={action !== null} onOpenChange={(next) => !next && !exporting && onCancel()}>
       <AlertDialogContent>
         <AlertDialogHeader>
           <AlertDialogMedia className="text-destructive">
             <LogOutIcon />
           </AlertDialogMedia>
-          <AlertDialogTitle>Log out of guest mode?</AlertDialogTitle>
+          <AlertDialogTitle>
+            {action === "close" ? "Close prepcode?" : "Log out of guest mode?"}
+          </AlertDialogTitle>
           <AlertDialogDescription>
             All your files will be deleted. Export them first to keep a copy as a zip in your
             Downloads folder.
@@ -70,7 +73,7 @@ export function GuestLogoutDialog({
             Export
           </AlertDialogAction>
           <AlertDialogAction variant="destructive" disabled={exporting} onClick={onConfirm}>
-            Delete files and log out
+            {action === "close" ? "Delete files and close" : "Delete files and log out"}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>

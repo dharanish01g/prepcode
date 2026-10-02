@@ -12,6 +12,15 @@ use tauri::{Manager, RunEvent};
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // Must come first. A second copy would delete the first one's guest
+        // files when it starts and exits, so focus the open window instead.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.unminimize();
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
@@ -20,6 +29,7 @@ pub fn run() {
         .manage(sync::SyncLock::default())
         .manage(runtimes::RuntimeInstalls::default())
         .manage(run::Runner::default())
+        .manage(files::WorkspaceLock::default())
         .setup(|app| {
             app.manage(db::open(app.handle())?);
             // Guest files from a session that ended without a clean exit.

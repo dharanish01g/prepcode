@@ -219,12 +219,10 @@ fn from_json<T: for<'de> Deserialize<'de>>(column: usize, raw: String) -> rusqli
 
 /// The version of the catalog in the database, or 0 if there's none yet.
 pub fn installed_version(conn: &Connection) -> Result<i64, String> {
-    conn.query_row("SELECT value FROM meta WHERE key = 'catalog_version'", [], |row| {
-        row.get::<_, String>(0)
-    })
-    .optional()
-    .map_err(db_err)
-    .map(|v| v.and_then(|v| v.parse().ok()).unwrap_or(0))
+    conn.query_row("SELECT value FROM meta WHERE key = 'catalog_version'", [], |row| row.get::<_, String>(0))
+        .optional()
+        .map_err(db_err)
+        .map(|v| v.and_then(|v| v.parse().ok()).unwrap_or(0))
 }
 
 /// Parses and validates a catalog document.
@@ -319,21 +317,15 @@ fn language_from_row(row: &rusqlite::Row) -> rusqlite::Result<Language> {
 
 /// Every supported language, in display order.
 pub fn languages(conn: &Connection) -> Result<Vec<Language>, String> {
-    let mut stmt = conn
-        .prepare(&format!("SELECT {LANGUAGE_COLUMNS} ORDER BY position"))
-        .map_err(db_err)?;
+    let mut stmt = conn.prepare(&format!("SELECT {LANGUAGE_COLUMNS} ORDER BY position")).map_err(db_err)?;
     let rows = stmt.query_map([], language_from_row).map_err(db_err)?;
     rows.collect::<rusqlite::Result<_>>().map_err(db_err)
 }
 
 pub fn language(conn: &Connection, extension: &str) -> Result<Option<Language>, String> {
-    conn.query_row(
-        &format!("SELECT {LANGUAGE_COLUMNS} WHERE extension = ?1"),
-        [extension],
-        language_from_row,
-    )
-    .optional()
-    .map_err(db_err)
+    conn.query_row(&format!("SELECT {LANGUAGE_COLUMNS} WHERE extension = ?1"), [extension], language_from_row)
+        .optional()
+        .map_err(db_err)
 }
 
 pub fn is_supported(conn: &Connection, extension: &str) -> Result<bool, String> {

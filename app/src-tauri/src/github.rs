@@ -46,7 +46,10 @@ pub enum GitHubError {
     Unauthorized,
     NotFound,
     /// GitHub understood but refused (e.g. a push that isn't a fast-forward).
-    Rejected { status: u16, message: String },
+    Rejected {
+        status: u16,
+        message: String,
+    },
     /// Anything else, with a message for the student.
     Other(String),
 }
@@ -87,10 +90,7 @@ async fn send(request: RequestBuilder) -> Result<Response, GitHubError> {
 }
 
 async fn json<T: for<'de> Deserialize<'de>>(response: Response) -> Result<T, GitHubError> {
-    response
-        .json()
-        .await
-        .map_err(|e| GitHubError::Other(format!("Unexpected response from GitHub: {e}")))
+    response.json().await.map_err(|e| GitHubError::Other(format!("Unexpected response from GitHub: {e}")))
 }
 
 // --- Device flow sign-in -----------------------------------------------------
@@ -222,18 +222,26 @@ pub async fn branch_head(token: &str, owner: &str, branch: &str) -> Result<Optio
 
 /// Adds one file with the contents API, which (unlike the Git data API) also
 /// works on an empty repo.
-pub async fn create_file(token: &str, owner: &str, path: &str, content: &str, message: &str) -> Result<(), GitHubError> {
+pub async fn create_file(
+    token: &str,
+    owner: &str,
+    path: &str,
+    content: &str,
+    message: &str,
+) -> Result<(), GitHubError> {
     use base64::Engine;
     let body = json!({
         "message": message,
         "content": base64::engine::general_purpose::STANDARD.encode(content),
     });
-    let request = api(reqwest::Method::PUT, &format!("/repos/{owner}/{REPO}/contents/{path}"), token)?.json(&body);
+    let request =
+        api(reqwest::Method::PUT, &format!("/repos/{owner}/{REPO}/contents/{path}"), token)?.json(&body);
     send(request).await.map(|_| ())
 }
 
 pub async fn commit_tree(token: &str, owner: &str, commit: &str) -> Result<String, GitHubError> {
-    let body: Value = json(send(get(&format!("/repos/{owner}/{REPO}/git/commits/{commit}"), token)?).await?).await?;
+    let body: Value =
+        json(send(get(&format!("/repos/{owner}/{REPO}/git/commits/{commit}"), token)?).await?).await?;
     body["tree"]["sha"]
         .as_str()
         .map(str::to_owned)
@@ -261,7 +269,8 @@ pub async fn tree(token: &str, owner: &str, tree: &str) -> Result<Vec<TreeEntry>
 
 pub async fn blob(token: &str, owner: &str, sha: &str) -> Result<Vec<u8>, GitHubError> {
     use base64::Engine;
-    let body: Value = json(send(get(&format!("/repos/{owner}/{REPO}/git/blobs/{sha}"), token)?).await?).await?;
+    let body: Value =
+        json(send(get(&format!("/repos/{owner}/{REPO}/git/blobs/{sha}"), token)?).await?).await?;
     // Base64 with line breaks every 60 characters.
     let encoded: String = body["content"].as_str().unwrap_or_default().split_whitespace().collect();
     base64::engine::general_purpose::STANDARD
@@ -270,18 +279,31 @@ pub async fn blob(token: &str, owner: &str, sha: &str) -> Result<Vec<u8>, GitHub
 }
 
 /// A new tree: `base` with `entries` added, changed or (with a null sha) removed.
-pub async fn create_tree(token: &str, owner: &str, base: &str, entries: Vec<Value>) -> Result<String, GitHubError> {
+pub async fn create_tree(
+    token: &str,
+    owner: &str,
+    base: &str,
+    entries: Vec<Value>,
+) -> Result<String, GitHubError> {
     let body = json!({ "base_tree": base, "tree": entries });
-    let created: Value = json(send(post(&format!("/repos/{owner}/{REPO}/git/trees"), token, body)?).await?).await?;
+    let created: Value =
+        json(send(post(&format!("/repos/{owner}/{REPO}/git/trees"), token, body)?).await?).await?;
     created["sha"]
         .as_str()
         .map(str::to_owned)
         .ok_or_else(|| GitHubError::Other("Unexpected response from GitHub: no tree".into()))
 }
 
-pub async fn create_commit(token: &str, owner: &str, message: &str, tree: &str, parent: &str) -> Result<String, GitHubError> {
+pub async fn create_commit(
+    token: &str,
+    owner: &str,
+    message: &str,
+    tree: &str,
+    parent: &str,
+) -> Result<String, GitHubError> {
     let body = json!({ "message": message, "tree": tree, "parents": [parent] });
-    let created: Value = json(send(post(&format!("/repos/{owner}/{REPO}/git/commits"), token, body)?).await?).await?;
+    let created: Value =
+        json(send(post(&format!("/repos/{owner}/{REPO}/git/commits"), token, body)?).await?).await?;
     created["sha"]
         .as_str()
         .map(str::to_owned)
@@ -290,7 +312,12 @@ pub async fn create_commit(token: &str, owner: &str, message: &str, tree: &str, 
 
 /// Moves the branch to `commit`. Returns false if the branch moved meanwhile
 /// (someone pushed from another computer), so the caller can pull and retry.
-pub async fn update_branch(token: &str, owner: &str, branch: &str, commit: &str) -> Result<bool, GitHubError> {
+pub async fn update_branch(
+    token: &str,
+    owner: &str,
+    branch: &str,
+    commit: &str,
+) -> Result<bool, GitHubError> {
     let body = json!({ "sha": commit, "force": false });
     let path = format!("/repos/{owner}/{REPO}/git/refs/heads/{branch}");
     match send(api(reqwest::Method::PATCH, &path, token)?.json(&body)).await {

@@ -116,7 +116,8 @@ function RenameFileForm({
       {error ? (
         <p className="text-xs text-destructive">{error}</p>
       ) : (
-        trimmed && !unchanged && (
+        trimmed &&
+        !unchanged && (
           <p className="text-xs text-muted-foreground">Will be renamed to {newFilename}</p>
         )
       )}

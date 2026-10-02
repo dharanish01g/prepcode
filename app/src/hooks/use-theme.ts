@@ -19,9 +19,7 @@ function getSystemTheme(): Theme {
 }
 
 export function useTheme() {
-  const [theme, setThemeState] = useState<Theme>(
-    () => getStoredTheme() ?? getSystemTheme(),
-  );
+  const [theme, setThemeState] = useState<Theme>(() => getStoredTheme() ?? getSystemTheme());
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", theme === "dark");

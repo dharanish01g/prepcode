@@ -24,7 +24,8 @@ impl Db {
 
 /// Schema changes, applied in order. `PRAGMA user_version` records how many
 /// have run. Only ever append: an installed app may have run the earlier ones.
-const MIGRATIONS: &[&str] = &["
+const MIGRATIONS: &[&str] = &[
+    "
     CREATE TABLE users (
         reg_no TEXT PRIMARY KEY,
         dob    TEXT NOT NULL
@@ -62,11 +63,13 @@ const MIGRATIONS: &[&str] = &["
         compile    TEXT,            -- JSON step, NULL if there's no compile step
         run        TEXT NOT NULL    -- JSON step
     );
-", "
+",
+    "
     -- Students sign in with GitHub now; drop the old register-number accounts
     -- and their dates of birth.
     DROP TABLE users;
-", "
+",
+    "
     -- For each of a student's files, the git blob sha it had when last synced
     -- with GitHub; see sync.rs.
     CREATE TABLE synced_files (
@@ -75,11 +78,13 @@ const MIGRATIONS: &[&str] = &["
         sha     TEXT NOT NULL,
         PRIMARY KEY (user_id, path)
     );
-", "
+",
+    "
     -- The content each file had when last synced, to recognise renames like
     -- git does (by comparing contents) after the old file is gone.
     ALTER TABLE synced_files ADD COLUMN content BLOB;
-"];
+",
+];
 
 fn migrate(conn: &mut Connection) -> rusqlite::Result<()> {
     conn.pragma_update(None, "foreign_keys", true)?;
@@ -104,10 +109,7 @@ pub fn open_in_memory() -> rusqlite::Result<Connection> {
 /// Opens (creating if needed) the database, brings it up to date, and loads
 /// the bundled catalog if it's newer than the one already there.
 pub fn open(app: &AppHandle) -> Result<Db, String> {
-    let dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Could not locate app data folder: {e}"))?;
+    let dir = app.path().app_data_dir().map_err(|e| format!("Could not locate app data folder: {e}"))?;
     fs::create_dir_all(&dir).map_err(|e| format!("Could not create app data folder: {e}"))?;
 
     let mut conn = Connection::open(dir.join("prepcode.db"))

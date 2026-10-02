@@ -40,6 +40,13 @@ export function AppUpdater() {
           action: {
             label: "Restart now",
             onClick: async () => {
+              // Something would be lost (unsynced changes, a guest's files):
+              // ask first, the same as closing. If they go ahead, the update
+              // installs on that close.
+              if (isCloseBlocked()) {
+                await getCurrentWindow().close();
+                return;
+              }
               await update.install();
               await relaunch();
             },

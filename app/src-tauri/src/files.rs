@@ -7,6 +7,7 @@ use std::collections::HashSet;
 use std::fs::{self, File, OpenOptions};
 use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
@@ -16,6 +17,17 @@ use crate::auth::{workspace_dir, CurrentUser, GUEST_PREFIX};
 use crate::catalog;
 use crate::db::Db;
 
+/// Held while changing files in a workspace, so Sync's check that a file is
+/// unchanged and its overwrite of it can't have a save land in between.
+#[derive(Default)]
+pub struct WorkspaceLock(Mutex<()>);
+
+impl WorkspaceLock {
+    pub fn lock(&self) -> MutexGuard<'_, ()> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner())
+    }
+}
+
 /// Letters, digits, `_` and `-`, not starting with `-`. The extension is added separately.
 fn validate_name(name: &str) -> Result<(), String> {
     if name.is_empty() {
@@ -24,11 +36,7 @@ fn validate_name(name: &str) -> Result<(), String> {
     if name.len() > 64 {
         return Err("File name is too long (max 64 characters).".into());
     }
-    if name.starts_with('-')
-        || !name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
-    {
+    if name.starts_with('-') || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
         return Err("Use only letters, numbers, _ and -.".into());
     }
     Ok(())
@@ -39,7 +47,9 @@ const MONTHS: [&str; 12] =
 
 /// A creation-date folder name: `ddmmmyyyy`, e.g. `02oct2026`.
 pub(crate) fn is_date_folder(name: &str) -> bool {
-    name.len() == 9
+    // ASCII first: slicing by byte below would panic inside a multi-byte character.
+    name.is_ascii()
+        && name.len() == 9
         && name[..2].chars().all(|c| c.is_ascii_digit())
         && MONTHS.contains(&&name[2..5])
         && name[5..].chars().all(|c| c.is_ascii_digit())
@@ -72,7 +82,10 @@ pub(crate) struct WorkspaceFile {
 }
 
 /// Every file with a supported extension in `dir`'s date folders.
-pub(crate) fn workspace_files(dir: &Path, extensions: &HashSet<String>) -> Result<Vec<WorkspaceFile>, String> {
+pub(crate) fn workspace_files(
+    dir: &Path,
+    extensions: &HashSet<String>,
+) -> Result<Vec<WorkspaceFile>, String> {
     let folders = match fs::read_dir(dir) {
         Ok(entries) => entries,
         Err(e) if e.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
@@ -100,13 +113,15 @@ pub(crate) fn workspace_files(dir: &Path, extensions: &HashSet<String>) -> Resul
     Ok(files)
 }
 
-/// Moves files sitting directly in the workspace (from before date folders)
-/// into the folder for the day they were last changed.
-pub(crate) fn tidy_workspace(dir: &Path) {
+/// Moves programs sitting directly in the workspace (from before date
+/// folders) into the folder for the day they were last changed. Other files,
+/// such as a program's input data, stay put.
+pub(crate) fn tidy_workspace(dir: &Path, extensions: &HashSet<String>) {
     let Ok(entries) = fs::read_dir(dir) else { return };
     for entry in entries.flatten() {
         let Ok(filename) = entry.file_name().into_string() else { continue };
-        if filename.starts_with('.') || !filename.contains('.') || !entry.path().is_file() {
+        let supported = filename.rsplit_once('.').is_some_and(|(_, ext)| extensions.contains(ext));
+        if filename.starts_with('.') || !supported || !entry.path().is_file() {
             continue;
         }
         let changed = entry.metadata().and_then(|m| m.modified()).unwrap_or(SystemTime::now());
@@ -123,26 +138,34 @@ fn current_files(app: &AppHandle, current: &CurrentUser, db: &Db) -> Result<Vec<
 }
 
 /// Path of the current student's file `<name>.<ext>`, in whichever date
-/// folder it's in. Validating the name (and the catalog validating
-/// extensions) rules out path separators.
+/// folder it's in, or None if there's no such file. Validating the name (and
+/// the catalog validating extensions) rules out path separators.
+fn find_file(
+    app: &AppHandle,
+    current: &CurrentUser,
+    db: &Db,
+    filename: &str,
+) -> Result<Option<PathBuf>, String> {
+    let (name, extension) =
+        filename.rsplit_once('.').ok_or_else(|| format!("Invalid file name: {filename}"))?;
+    validate_name(name)?;
+    if !db.with(|conn| catalog::is_supported(conn, extension))? {
+        return Err(format!("Unsupported file type: .{extension}"));
+    }
+    Ok(current_files(app, current, db)?
+        .into_iter()
+        .find(|file| file.filename == filename)
+        .map(|file| file.path))
+}
+
+/// Like `find_file`, but a missing file is an error.
 pub(crate) fn resolve_file(
     app: &AppHandle,
     current: &CurrentUser,
     db: &Db,
     filename: &str,
 ) -> Result<PathBuf, String> {
-    let (name, extension) = filename
-        .rsplit_once('.')
-        .ok_or_else(|| format!("Invalid file name: {filename}"))?;
-    validate_name(name)?;
-    if !db.with(|conn| catalog::is_supported(conn, extension))? {
-        return Err(format!("Unsupported file type: .{extension}"));
-    }
-    current_files(app, current, db)?
-        .into_iter()
-        .find(|file| file.filename == filename)
-        .map(|file| file.path)
-        .ok_or_else(|| format!("{filename} doesn't exist anymore."))
+    find_file(app, current, db, filename)?.ok_or_else(|| format!("{filename} doesn't exist anymore."))
 }
 
 #[tauri::command]
@@ -161,9 +184,11 @@ pub fn write_file(
     app: AppHandle,
     current: State<CurrentUser>,
     db: State<Db>,
+    lock: State<WorkspaceLock>,
     filename: String,
     content: String,
 ) -> Result<(), String> {
+    let _guard = lock.lock();
     let path = resolve_file(&app, &current, &db, &filename)?;
     // Write to a hidden temp file then rename, so a crash mid-save never leaves
     // a half-written program. list_files skips it (".tmp" isn't a supported type).
@@ -203,7 +228,7 @@ pub fn list_file_history(
             Some(FileHistoryEntry { filename: file.filename, modified })
         })
         .collect();
-    entries.sort_by(|a, b| b.modified.cmp(&a.modified));
+    entries.sort_by_key(|entry| std::cmp::Reverse(entry.modified));
     Ok(entries)
 }
 
@@ -214,10 +239,12 @@ pub fn create_file(
     app: AppHandle,
     current: State<CurrentUser>,
     db: State<Db>,
+    lock: State<WorkspaceLock>,
     name: String,
     extension: String,
     folder: String,
 ) -> Result<String, String> {
+    let _guard = lock.lock();
     let name = name.trim();
     validate_name(name)?;
     if !db.with(|conn| catalog::is_supported(conn, &extension))? {
@@ -233,9 +260,7 @@ pub fn create_file(
     let filename = format!("{name}.{extension}");
     // Across every date folder, and case-insensitive, so Hello.py and
     // hello.py can't both exist on any OS.
-    let taken = list_files(app.clone(), current, db)?
-        .iter()
-        .any(|f| f.eq_ignore_ascii_case(&filename));
+    let taken = list_files(app.clone(), current, db)?.iter().any(|f| f.eq_ignore_ascii_case(&filename));
     if taken {
         return Err(format!("{filename} already exists."));
     }
@@ -255,9 +280,11 @@ pub fn rename_file(
     app: AppHandle,
     current: State<CurrentUser>,
     db: State<Db>,
+    lock: State<WorkspaceLock>,
     filename: String,
     new_name: String,
 ) -> Result<String, String> {
+    let _guard = lock.lock();
     let old_path = resolve_file(&app, &current, &db, &filename)?;
     let new_name = new_name.trim();
     validate_name(new_name)?;
@@ -290,14 +317,14 @@ pub fn delete_file(
     app: AppHandle,
     current: State<CurrentUser>,
     db: State<Db>,
+    lock: State<WorkspaceLock>,
     filename: String,
 ) -> Result<(), String> {
-    let path = match resolve_file(&app, &current, &db, &filename) {
-        Ok(path) => path,
-        // Already gone is what the student wanted anyway.
-        Err(_) if !filename.is_empty() => return Ok(()),
-        Err(e) => return Err(e),
-    };
+    let _guard = lock.lock();
+    // Already gone is what the student wanted anyway. Any other problem (not
+    // logged in, a bad name, an unreadable workspace) is reported, so the
+    // file isn't shown as deleted while it's still there.
+    let Some(path) = find_file(&app, &current, &db, &filename)? else { return Ok(()) };
     match fs::remove_file(&path) {
         Ok(()) => Ok(()),
         // Already gone is what the student wanted anyway.
@@ -329,10 +356,8 @@ pub fn export_guest_files(
         return Err("There are no files to export.".into());
     }
 
-    let downloads = app
-        .path()
-        .download_dir()
-        .map_err(|e| format!("Could not find your Downloads folder: {e}"))?;
+    let downloads =
+        app.path().download_dir().map_err(|e| format!("Could not find your Downloads folder: {e}"))?;
     fs::create_dir_all(&downloads).map_err(|e| format!("Could not open your Downloads folder: {e}"))?;
     let zip_path = (1..)
         .map(|n| match n {
@@ -345,8 +370,8 @@ pub fn export_guest_files(
     let err = |e: &dyn std::fmt::Display| format!("Could not export your files: {e}");
     let result = (|| {
         let mut zip = zip::ZipWriter::new(File::create_new(&zip_path).map_err(|e| err(&e))?);
-        let options = zip::write::SimpleFileOptions::default()
-            .compression_method(zip::CompressionMethod::Deflated);
+        let options =
+            zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
         // Keep the date folders, like the GitHub repo.
         for file in &files {
             let contents = fs::read(&file.path).map_err(|e| err(&e))?;
@@ -377,6 +402,9 @@ mod tests {
         assert!(!is_date_folder("2oct2026"));
         assert!(!is_date_folder("02xyz2026"));
         assert!(!is_date_folder("../etc"));
+        // 9 bytes, with '€' straddling byte 2: used to panic.
+        assert!(!is_date_folder("a€bcdef"));
+        assert!(!is_date_folder("02oc€26"));
         // 2026-10-02T12:00:00Z
         let time = UNIX_EPOCH + Duration::from_secs(1_790_899_200 + 43_200);
         assert_eq!(date_folder_for(time), "02oct2026");
