@@ -21,7 +21,9 @@ use std::time::Duration;
 use futures_util::StreamExt;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use tauri::{AppHandle, Emitter, Manager, State};
+#[cfg(not(windows))]
+use tauri::Manager;
+use tauri::{AppHandle, Emitter, State};
 use tokio::io::AsyncWriteExt;
 
 use crate::catalog::{self, ArchiveKind, Download, Runtime, Step, Vars};
