@@ -451,6 +451,10 @@ async fn pull(
             // New or changed on GitHub: download it.
             Some(sha) => {
                 let bytes = github::blob(token, owner, sha).await.map_err(|e| e.message())?;
+                // Dated by its last change on GitHub, not by this download, so
+                // Programs lists it under the day it was written. Best effort:
+                // without it, the file just shows as changed now.
+                let changed = github::last_changed(token, owner, &path).await.ok().flatten();
                 let _guard = workspace_lock.lock();
                 // The files as they are now, not when the pull started.
                 let mut current = files::workspace_files(&workspace, &extensions)?;
@@ -481,6 +485,10 @@ async fn pull(
                     fs::create_dir_all(folder).map_err(|e| format!("Could not save {filename}: {e}"))?;
                 }
                 fs::write(&target, &bytes).map_err(|e| format!("Could not save {filename}: {e}"))?;
+                if let Some(changed) = changed {
+                    let _ =
+                        fs::File::options().write(true).open(&target).and_then(|f| f.set_modified(changed));
+                }
                 db.with(|conn| set_synced(conn, user, &path, Some((sha, bytes.as_slice()))))?;
                 report.updated.push(filename);
             }

@@ -7,7 +7,7 @@
 //! create and write the student's public `prepcode-programs` repo.
 
 use std::sync::OnceLock;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, USER_AGENT};
 use reqwest::{RequestBuilder, Response, StatusCode};
@@ -278,6 +278,46 @@ pub async fn blob(token: &str, owner: &str, sha: &str) -> Result<Vec<u8>, GitHub
         .map_err(|e| GitHubError::Other(format!("Could not read a file from GitHub: {e}")))
 }
 
+/// When `path` last changed: the date of the newest commit on the default
+/// branch that touched it. None if GitHub has no such commit or an odd date.
+pub async fn last_changed(token: &str, owner: &str, path: &str) -> Result<Option<SystemTime>, GitHubError> {
+    // Program paths are plain ASCII (see sync::is_program_path), so no escaping.
+    let url = format!("/repos/{owner}/{REPO}/commits?path={path}&per_page=1");
+    let body: Value = json(send(get(&url, token)?).await?).await?;
+    Ok(body[0]["commit"]["committer"]["date"].as_str().and_then(parse_time))
+}
+
+/// GitHub's timestamps, always UTC like `2026-10-02T09:11:02Z`.
+fn parse_time(text: &str) -> Option<SystemTime> {
+    let b = text.as_bytes();
+    let shape_ok = b.len() == 20
+        && b[4] == b'-'
+        && b[7] == b'-'
+        && b[10] == b'T'
+        && b[13] == b':'
+        && b[16] == b':'
+        && b[19] == b'Z';
+    if !shape_ok {
+        return None;
+    }
+    let num = |range: std::ops::Range<usize>| text.get(range)?.parse::<i64>().ok();
+    let (year, month, day) = (num(0..4)?, num(5..7)?, num(8..10)?);
+    let (hour, minute, second) = (num(11..13)?, num(14..16)?, num(17..19)?);
+    if !(1..=12).contains(&month) || !(1..=31).contains(&day) || hour > 23 || minute > 59 || second > 60 {
+        return None;
+    }
+    // Howard Hinnant's days-from-civil algorithm.
+    let y = if month <= 2 { year - 1 } else { year };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let mp = (month + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    let secs = days * 86_400 + hour * 3600 + minute * 60 + second;
+    Some(UNIX_EPOCH + Duration::from_secs(u64::try_from(secs).ok()?))
+}
+
 /// A new tree: `base` with `entries` added, changed or (with a null sha) removed.
 pub async fn create_tree(
     token: &str,
@@ -329,6 +369,22 @@ pub async fn update_branch(
 
 #[cfg(test)]
 mod tests {
+    use std::time::{Duration, UNIX_EPOCH};
+
+    use super::parse_time;
+
+    #[test]
+    fn parses_github_times() {
+        // `date -u -d 2026-10-02T09:11:02Z +%s`
+        assert_eq!(parse_time("2026-10-02T09:11:02Z"), Some(UNIX_EPOCH + Duration::from_secs(1_790_932_262)));
+        assert_eq!(parse_time("1970-01-01T00:00:00Z"), Some(UNIX_EPOCH));
+        // 2024-02-29 (leap day)
+        assert_eq!(parse_time("2024-02-29T00:00:00Z"), Some(UNIX_EPOCH + Duration::from_secs(1_709_164_800)));
+        assert_eq!(parse_time("2026-10-02T09:11:02+05:30"), None);
+        assert_eq!(parse_time("2026-13-02T09:11:02Z"), None);
+        assert_eq!(parse_time(""), None);
+    }
+
     #[test]
     #[ignore = "needs the network"]
     fn gets_a_device_code() {
