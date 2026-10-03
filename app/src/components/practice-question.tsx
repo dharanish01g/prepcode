@@ -10,6 +10,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { useIsDark } from "@/hooks/use-theme";
 import { findLanguage } from "@/lib/languages";
+import { EDITOR_FONT_SIZE, EDITOR_PADDING } from "@/lib/monaco";
 import type { Question } from "@/lib/practice";
 
 /** The question on the left; the editor and its input, output and tests on the right. */
@@ -51,7 +52,8 @@ export function PracticeQuestion({
               keepCurrentModel
               loading={null}
               options={{
-                fontSize: 14,
+                fontSize: EDITOR_FONT_SIZE,
+                padding: EDITOR_PADDING,
                 minimap: { enabled: false },
                 scrollBeyondLastLine: false,
                 automaticLayout: true,

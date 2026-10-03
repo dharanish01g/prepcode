@@ -1,7 +1,7 @@
 import { useCallback, useLayoutEffect, useRef } from "react";
 import Editor, { type OnMount } from "@monaco-editor/react";
 import { toast } from "sonner";
-import { editorModelPath } from "@/lib/monaco";
+import { EDITOR_FONT_SIZE, EDITOR_PADDING, editorModelPath } from "@/lib/monaco";
 import { useIsDark } from "@/hooks/use-theme";
 import { monacoLanguageOf } from "@/lib/files";
 import { formatCode, NoFormatterError } from "@/lib/format";
@@ -164,7 +164,8 @@ function FileEditor({
         timer.current = setTimeout(flush, AUTOSAVE_DELAY_MS);
       }}
       options={{
-        fontSize: 14,
+        fontSize: EDITOR_FONT_SIZE,
+        padding: EDITOR_PADDING,
         minimap: { enabled: false },
         scrollBeyondLastLine: false,
         automaticLayout: true,

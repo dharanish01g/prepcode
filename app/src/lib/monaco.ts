@@ -17,6 +17,12 @@ self.MonacoEnvironment = {
 
 loader.config({ monaco });
 
+/** Code text size in both editors. */
+export const EDITOR_FONT_SIZE = 13;
+
+/** Space above the first line and below the last, so code doesn't touch the borders. */
+export const EDITOR_PADDING = { top: 10, bottom: 10 };
+
 // Monaco caches character widths; re-measure after zooming so the cursor and
 // selections stay aligned with the text.
 onZoomApplied(() => monaco.editor.remeasureFonts());
