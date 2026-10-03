@@ -27,12 +27,20 @@ import { displayName, type Session } from "@/lib/auth";
 import { disposeEditorModel, editorModelPath } from "@/lib/monaco";
 import { useFilesQuery } from "@/lib/queries";
 import type { SyncStatus } from "@/lib/sync";
-import { CodeIcon, FilesIcon, PlusIcon, MoonIcon, RefreshCwIcon, SunIcon } from "lucide-react";
+import {
+  BriefcaseIcon,
+  CodeIcon,
+  FilesIcon,
+  PlusIcon,
+  MoonIcon,
+  RefreshCwIcon,
+  SunIcon,
+} from "lucide-react";
 import { Spinner } from "@/components/ui/spinner";
 import { useTheme } from "@/hooks/use-theme";
 import logo from "@/assets/logo.png";
 
-export type View = "Programs" | "Sync" | "Practice";
+export type View = "Programs" | "Sync" | "Practice" | "Jobs";
 
 const data: { navMain: { title: View; icon: React.ReactNode }[] } = {
   navMain: [
@@ -42,6 +50,8 @@ const data: { navMain: { title: View; icon: React.ReactNode }[] } = {
     { title: "Sync", icon: <RefreshCwIcon /> },
     // Questions to solve. Takes the whole main area, so this column hides.
     { title: "Practice", icon: <CodeIcon /> },
+    // Openings to search and apply to. Also takes the whole main area.
+    { title: "Jobs", icon: <BriefcaseIcon /> },
   ],
 };
 

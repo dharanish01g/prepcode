@@ -5,6 +5,7 @@ import { CodeEditor } from "@/components/code-editor";
 import { FileIcon } from "@/components/file-icon";
 import { ConsolePanel } from "@/components/console-panel";
 import { GuestLogoutDialog } from "@/components/guest-logout-dialog";
+import { JobsScreen } from "@/components/jobs-screen";
 import { PracticeScreen } from "@/components/practice-screen";
 import { SaveStatus } from "@/components/save-status";
 import { UnsyncedDialog } from "@/components/unsynced-dialog";
@@ -41,10 +42,10 @@ import logo from "@/assets/logo.png";
 export function WorkspaceScreen({ session, onLogout }: { session: Session; onLogout: () => void }) {
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [view, setView] = useState<View>("Programs");
-  // Practice uses the whole main area, so the sidebar's second column stays
-  // hidden there, and comes back as it was when leaving.
+  // Practice and Jobs use the whole main area, so the sidebar's second column
+  // stays hidden there, and comes back as it was when leaving.
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const practicing = view === "Practice";
+  const fullScreen = view === "Practice" || view === "Jobs";
   const flushEditorRef = useRef<() => void>(() => {});
   const formatEditorRef = useRef<() => Promise<void>>(async () => {});
   const [formatting, setFormatting] = useState(false);
@@ -120,14 +121,14 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
 
   function handleViewChange(next: View) {
     setView(next);
-    if (next !== "Practice") setSidebarOpen(true);
+    if (next !== "Practice" && next !== "Jobs") setSidebarOpen(true);
   }
 
   return (
     <SidebarProvider
-      open={sidebarOpen && !practicing}
+      open={sidebarOpen && !fullScreen}
       onOpenChange={(open) => {
-        if (!practicing) setSidebarOpen(open);
+        if (!fullScreen) setSidebarOpen(open);
       }}
       className="h-svh"
       style={{ "--sidebar-width": "350px" } as React.CSSProperties}
@@ -155,8 +156,11 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
           Monaco's pixel width (set while collapsed) holds it wide and pushes
           the header, including Run, off screen. */}
       <SidebarInset className="min-h-0 min-w-0">
-        {practicing ? (
+        {view === "Practice" ? (
           <PracticeScreen />
+        ) : view === "Jobs" ? (
+          // A guest logs in by logging out of the guest session.
+          <JobsScreen guest={session.guest} onLogin={() => setGuestAction("log out")} />
         ) : (
           <>
             <header className="flex h-16 shrink-0 items-center gap-2 border-b bg-background px-4">
