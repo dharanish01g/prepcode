@@ -114,7 +114,10 @@ export function AppSidebar({
       {/* This is the first sidebar */}
       {/* We disable collapsible and adjust width to icon. */}
       {/* This will make the sidebar appear as icons. */}
-      <Sidebar collapsible="none" className="w-[calc(var(--sidebar-width-icon)+1px)]! border-r">
+      <Sidebar
+        collapsible="none"
+        className="w-[calc(var(--sidebar-width-icon)+1px)]! shrink-0 border-r"
+      >
         <SidebarHeader>
           <SidebarMenu>
             <SidebarMenuItem>
@@ -186,8 +189,13 @@ export function AppSidebar({
       </Sidebar>
 
       {/* This is the second sidebar */}
-      {/* We disable collapsible and let it fill remaining space */}
-      <Sidebar collapsible="none" className="hidden flex-1 md:flex">
+      {/* We disable collapsible and give it its full open width, so opening
+          reveals it instead of squeezing (and re-wrapping) its text. Hidden
+          while collapsed (Practice, Jobs) so none of it shows beside the icons. */}
+      <Sidebar
+        collapsible="none"
+        className="hidden w-[calc(var(--sidebar-width)-var(--sidebar-width-icon)-1px)]! shrink-0 md:flex md:group-data-[collapsible=icon]:hidden"
+      >
         {/* h-16 and its bottom border line up with the main area's top bar. */}
         <SidebarHeader className="h-16 flex-row items-center justify-between border-b px-4 py-0">
           <div className="text-base font-medium text-foreground">{view}</div>
