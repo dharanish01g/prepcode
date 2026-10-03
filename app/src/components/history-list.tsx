@@ -5,7 +5,9 @@ import {
   SidebarGroupContent,
   SidebarGroupLabel,
   SidebarMenu,
+  SidebarMenuSkeleton,
 } from "@/components/ui/sidebar";
+import { Skeleton } from "@/components/ui/skeleton";
 import type { FileHistoryEntry } from "@/lib/files";
 import { useFileHistoryQuery } from "@/lib/queries";
 
@@ -31,6 +33,7 @@ function groupByDay(entries: FileHistoryEntry[]) {
 export function HistoryList({
   userId,
   search,
+  pulling,
   selectedFile,
   onSelectFile,
   onRename,
@@ -39,6 +42,8 @@ export function HistoryList({
   userId: string;
   /** Lowercased search text; empty shows everything. */
   search: string;
+  /** Files may still be coming from GitHub, so an empty list isn't final yet. */
+  pulling: boolean;
   selectedFile: string | null;
   onSelectFile: (filename: string) => void;
   onRename: (filename: string) => void;
@@ -53,7 +58,10 @@ export function HistoryList({
       </p>
     );
   }
-  if (!history.isSuccess) return null;
+  // Files already here show right away; the ones from GitHub join when they arrive.
+  if (!history.isSuccess || (pulling && history.data.length === 0)) {
+    return <HistoryListSkeleton />;
+  }
 
   const entries = history.data.filter((e) => e.filename.toLowerCase().includes(search));
   if (entries.length === 0) {
@@ -87,4 +95,23 @@ export function HistoryList({
       </SidebarGroupContent>
     </SidebarGroup>
   ));
+}
+
+/** Stands in for the list while it loads, or while files come from GitHub. */
+function HistoryListSkeleton() {
+  return (
+    <SidebarGroup className="py-0" aria-busy="true" aria-label="Loading your programs">
+      {/* Matches SidebarGroupLabel's height, with a day-label-sized bar in it. */}
+      <div className="flex h-8 items-center px-2">
+        <Skeleton className="h-3 w-16" />
+      </div>
+      <SidebarGroupContent>
+        <SidebarMenu>
+          {[0, 1, 2, 3, 4].map((i) => (
+            <SidebarMenuSkeleton key={i} showIcon />
+          ))}
+        </SidebarMenu>
+      </SidebarGroupContent>
+    </SidebarGroup>
+  );
 }

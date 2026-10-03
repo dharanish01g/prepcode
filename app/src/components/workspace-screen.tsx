@@ -65,9 +65,11 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
   });
 
   // Bring down the student's files from GitHub (e.g. on a new computer).
+  // Until that's done, Programs can't tell "no programs" from "not here yet".
+  const [pulled, setPulled] = useState(session.guest);
   const { pull } = sync;
   useEffect(() => {
-    if (!session.guest) pull();
+    if (!session.guest) pull().then(() => setPulled(true));
   }, [session.guest, pull]);
 
   // Closing the window asks first if that would lose anything: unsynced
@@ -147,6 +149,7 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
         selectedFile={selectedFile}
         onSelectFile={setSelectedFile}
         onFlushEdits={() => flushEditorRef.current()}
+        pulling={!pulled}
         syncStatus={syncStatus.data}
         unsynced={unsynced}
         syncing={sync.syncing}

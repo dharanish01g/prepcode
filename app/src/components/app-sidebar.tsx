@@ -63,6 +63,7 @@ export function AppSidebar({
   selectedFile,
   onSelectFile,
   onFlushEdits,
+  pulling,
   syncStatus,
   unsynced,
   syncing,
@@ -77,6 +78,8 @@ export function AppSidebar({
   onSelectFile: (filename: string | null) => void;
   /** Saves the editor's pending edits now (before a rename or delete). */
   onFlushEdits: () => void;
+  /** Still bringing down the student's files from GitHub at sign-in. */
+  pulling: boolean;
   /** What isn't synced to GitHub yet; undefined for guests. */
   syncStatus?: SyncStatus;
   /** Changes Sync would push, including deletions. */
@@ -232,6 +235,7 @@ export function AppSidebar({
             <HistoryList
               userId={session.id}
               search={query}
+              pulling={pulling}
               selectedFile={selectedFile}
               onSelectFile={onSelectFile}
               onRename={setRenaming}
