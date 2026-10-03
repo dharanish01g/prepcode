@@ -8,6 +8,7 @@ import {
   GraduationCapIcon,
   MapPinIcon,
   WalletIcon,
+  WrenchIcon,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Markdown } from "@/components/markdown";
@@ -26,6 +27,7 @@ export const WORK_MODE_LABELS: Record<Job["workMode"], string> = {
 
 export const JOB_TYPE_LABELS: Record<Job["jobType"], string> = {
   "full-time": "Full-time",
+  "part-time": "Part-time",
   internship: "Internship",
   contract: "Contract",
 };
@@ -35,6 +37,25 @@ export const EXPERIENCE_LABELS: Record<Job["experience"], string> = {
   "0-2 years": "0–2 years",
   "2-5 years": "2–5 years",
   "5+ years": "5+ years",
+  "not specified": "Experience not specified",
+};
+
+export const BRANCH_LABELS: Record<NonNullable<Job["branch"]>, string> = {
+  cs: "Computer Science",
+  it: "IT",
+  ai: "AI / ML",
+  ece: "ECE",
+  eee: "EEE",
+  mech: "Mechanical",
+  civil: "Civil",
+};
+
+/** The job APIs we sync from, credited with a link back as their terms ask. */
+const SOURCES: Partial<Record<Job["source"], { name: string; url: string }>> = {
+  arbeitnow: { name: "Arbeitnow", url: "https://www.arbeitnow.com" },
+  himalayas: { name: "Himalayas", url: "https://himalayas.app" },
+  jobicy: { name: "Jobicy", url: "https://jobicy.com" },
+  themuse: { name: "The Muse", url: "https://www.themuse.com" },
 };
 
 /** The company's logo, or a building when it has none or it fails to load. */
@@ -53,12 +74,31 @@ export function CompanyLogo({ job, className }: { job: Job; className?: string }
   );
 }
 
-/** "Today", "Yesterday" or e.g. "3 days ago". */
+/** E.g. "Just now", "25 minutes ago", "3 hours ago", "Yesterday" or "5 days ago". */
 export function postedAgo(postedAt: string) {
-  const days = Math.floor((Date.now() - new Date(postedAt).getTime()) / (24 * 60 * 60 * 1000));
-  if (days <= 0) return "Today";
-  if (days === 1) return "Yesterday";
-  return new Intl.RelativeTimeFormat(undefined, { numeric: "auto" }).format(-days, "day");
+  const minutes = Math.floor((Date.now() - new Date(postedAt).getTime()) / (60 * 1000));
+  if (minutes < 1) return "Just now";
+  const format = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
+  const hours = Math.floor(minutes / 60);
+  const ago =
+    minutes < 60
+      ? format.format(-minutes, "minute")
+      : hours < 24
+        ? format.format(-hours, "hour")
+        : format.format(-Math.floor(hours / 24), "day");
+  // "yesterday" comes back lowercase.
+  return ago.charAt(0).toUpperCase() + ago.slice(1);
+}
+
+/** E.g. "3 Oct 2026, 6:10 am", in the student's time zone. */
+function formatPostedAt(postedAt: string) {
+  return new Date(postedAt).toLocaleString(undefined, {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
 }
 
 /** E.g. "31 Oct 2026". */
@@ -71,16 +111,17 @@ function formatDeadline(deadline: string) {
   });
 }
 
-function apply(job: Job) {
-  openUrl(job.applyUrl).catch((err) =>
+function open(url: string, purpose: string) {
+  openUrl(url).catch((err) =>
     toast.error("Couldn't open your browser", {
-      description: `Go to ${job.applyUrl} to apply. (${err})`,
+      description: `Go to ${url}${purpose}. (${err})`,
     }),
   );
 }
 
 /** Everything about one job, with Apply. */
 export function JobDetails({ job }: { job: Job }) {
+  const source = SOURCES[job.source];
   const facts = [
     { icon: <MapPinIcon />, label: `${job.location} · ${WORK_MODE_LABELS[job.workMode]}` },
     { icon: <BriefcaseIcon />, label: JOB_TYPE_LABELS[job.jobType] },
@@ -90,6 +131,7 @@ export function JobDetails({ job }: { job: Job }) {
       icon: <CalendarIcon />,
       label: job.deadline ? `Apply by ${formatDeadline(job.deadline)}` : "Open until filled",
     },
+    ...(job.branch ? [{ icon: <WrenchIcon />, label: `For ${BRANCH_LABELS[job.branch]}` }] : []),
   ];
 
   return (
@@ -100,10 +142,23 @@ export function JobDetails({ job }: { job: Job }) {
           <div className="flex min-w-0 flex-1 flex-col gap-1">
             <h2 className="text-lg font-semibold">{job.title}</h2>
             <p className="text-sm text-muted-foreground">
-              {job.company} · Posted {postedAgo(job.postedAt).toLowerCase()}
+              {job.company} · Posted {formatPostedAt(job.postedAt)} (
+              {postedAgo(job.postedAt).toLowerCase()})
+              {source && (
+                <>
+                  {" · via "}
+                  <Button
+                    variant="link"
+                    className="h-auto p-0 text-sm font-normal text-muted-foreground"
+                    onClick={() => open(source.url, "")}
+                  >
+                    {source.name}
+                  </Button>
+                </>
+              )}
             </p>
           </div>
-          <Button onClick={() => apply(job)}>
+          <Button onClick={() => open(job.applyUrl, " to apply")}>
             Apply
             <ExternalLinkIcon />
           </Button>

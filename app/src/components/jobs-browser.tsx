@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { SearchIcon, WifiOffIcon, XIcon } from "lucide-react";
 import {
+  BRANCH_LABELS,
   CompanyLogo,
   EXPERIENCE_LABELS,
   JobDetails,
@@ -40,6 +41,7 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
+  BRANCHES,
   EXPERIENCE_LEVELS,
   JOB_TYPES,
   jobCities,
@@ -59,18 +61,26 @@ const PAGE_SIZE = 10;
 const ALL = "all";
 
 type Filters = {
+  branch: string;
   city: string;
   workMode: string;
   jobType: string;
   experience: string;
 };
 
-const NO_FILTERS: Filters = { city: ALL, workMode: ALL, jobType: ALL, experience: ALL };
+const NO_FILTERS: Filters = {
+  branch: ALL,
+  city: ALL,
+  workMode: ALL,
+  jobType: ALL,
+  experience: ALL,
+};
 
 function matches(job: Job, query: string, filters: Filters) {
   const text = [job.title, job.company, job.location, ...job.skills].join(" ").toLowerCase();
   return (
     text.includes(query) &&
+    (filters.branch === ALL || job.branch === filters.branch) &&
     (filters.city === ALL || jobCities(job).includes(filters.city)) &&
     (filters.workMode === ALL || job.workMode === filters.workMode) &&
     (filters.jobType === ALL || job.jobType === filters.jobType) &&
@@ -251,6 +261,12 @@ export function JobsBrowser() {
           />
         </div>
         <FilterSelect
+          allLabel="All branches"
+          options={BRANCHES.map((branch) => ({ value: branch, label: BRANCH_LABELS[branch] }))}
+          value={filters.branch}
+          onChange={setFilter("branch")}
+        />
+        <FilterSelect
           allLabel="All locations"
           options={cities.map((city) => ({ value: city, label: city }))}
           value={filters.city}
@@ -363,7 +379,7 @@ function JobsSkeleton() {
     <div className={JOBS_COLUMN}>
       <div className="flex shrink-0 flex-wrap gap-2">
         <Skeleton className="h-8 w-full max-w-xs" />
-        {[0, 1, 2, 3].map((i) => (
+        {[0, 1, 2, 3, 4].map((i) => (
           <Skeleton key={i} className="h-8 w-32" />
         ))}
       </div>
