@@ -4,6 +4,7 @@ import * as React from "react";
 import { flushSync } from "react-dom";
 
 import { NavUser } from "@/components/nav-user";
+import { ProfileDialog } from "@/components/profile-dialog";
 import { DeleteFileDialog } from "@/components/delete-file-dialog";
 import { HistoryList } from "@/components/history-list";
 import { SyncList } from "@/components/sync-list";
@@ -95,6 +96,7 @@ export function AppSidebar({
   const [newFileOpen, setNewFileOpen] = React.useState(false);
   const [renaming, setRenaming] = React.useState<string | null>(null);
   const [deleting, setDeleting] = React.useState<string | null>(null);
+  const [profileOpen, setProfileOpen] = React.useState(false);
 
   // Moves the editor off `oldFile` (synchronously, so Monaco has switched
   // models), then frees its model so a future file with that name starts fresh.
@@ -184,7 +186,13 @@ export function AppSidebar({
               </SidebarMenuButton>
             </SidebarMenuItem>
           </SidebarMenu>
-          <NavUser name={displayName(session)} avatarUrl={session.avatarUrl} onLogout={onLogout} />
+          <NavUser
+            name={displayName(session)}
+            avatarUrl={session.avatarUrl}
+            onOpenProfile={() => setProfileOpen(true)}
+            onLogout={onLogout}
+          />
+          <ProfileDialog session={session} open={profileOpen} onOpenChange={setProfileOpen} />
         </SidebarFooter>
       </Sidebar>
 
