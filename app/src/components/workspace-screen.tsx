@@ -115,6 +115,9 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
   }
 
   // Always run what's on screen: save pending edits first.
+  // The open program's console. Another program may be running meanwhile.
+  const fileConsole = selectedFile ? runner.consoleFor(selectedFile) : null;
+
   async function handleRun() {
     if (!selectedFile) return;
     flushEditorRef.current();
@@ -208,15 +211,15 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
                 {formatting ? <Spinner /> : <WandSparklesIcon />}
                 Format
               </Button>
-              {runner.loading && !runner.loadingLong ? (
+              {view === "Sync" ? null : fileConsole?.loading && !fileConsole.loadingLong ? (
                 // Until the console shows the output (see MIN_LOADING_MS).
                 <Button disabled>
                   <Spinner />
                   Run
                 </Button>
-              ) : runner.running ? (
+              ) : fileConsole?.running ? (
                 <Button variant="destructive" onClick={runner.stop}>
-                  {runner.loading ? <Spinner /> : <SquareIcon />}
+                  {fileConsole.loading ? <Spinner /> : <SquareIcon />}
                   Stop
                 </Button>
               ) : (
@@ -227,9 +230,9 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
               )}
             </header>
 
-            {selectedFile ? (
+            {selectedFile && fileConsole ? (
               <ResizablePanelGroup orientation="vertical" className="min-h-0 flex-1">
-                <ResizablePanel defaultSize="70%" minSize="20%">
+                <ResizablePanel id="editor" defaultSize="70%" minSize="20%">
                   <CodeEditor
                     userId={session.id}
                     filename={selectedFile}
@@ -238,17 +241,22 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
                     formatRef={formatEditorRef}
                   />
                 </ResizablePanel>
-                <ResizableHandle withHandle />
-                <ResizablePanel defaultSize="30%" minSize="10%">
-                  <ConsolePanel
-                    entries={runner.entries}
-                    loading={runner.loading}
-                    running={runner.running}
-                    acceptingInput={runner.acceptingInput}
-                    onSend={runner.send}
-                    onClear={runner.clear}
-                  />
-                </ResizablePanel>
+                {/* Sync is for reviewing changes, so no console (or Run) there. */}
+                {view !== "Sync" && (
+                  <>
+                    <ResizableHandle withHandle />
+                    <ResizablePanel id="console" defaultSize="30%" minSize="10%">
+                      <ConsolePanel
+                        entries={fileConsole.entries}
+                        loading={fileConsole.loading}
+                        running={fileConsole.running}
+                        acceptingInput={fileConsole.acceptingInput}
+                        onSend={runner.send}
+                        onClear={() => runner.clear(selectedFile)}
+                      />
+                    </ResizablePanel>
+                  </>
+                )}
               </ResizablePanelGroup>
             ) : (
               // Like VS Code's watermark: nothing to edit or run until a file is open.

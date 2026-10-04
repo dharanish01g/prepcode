@@ -65,7 +65,11 @@ function append(entries: ConsoleEntry[], added: ConsoleEntry[]) {
 
 /** Console state for running the student's programs, one at a time. */
 export function useRunner() {
-  const [entries, setEntries] = useState<ConsoleEntry[]>([]);
+  // Each program keeps the output of its own last run, by filename.
+  const [consoles, setConsoles] = useState<Partial<Record<string, ConsoleEntry[]>>>({});
+  // The program of the current (or last) run; the states below are about it.
+  const [runFile, setRunFile] = useState<string | null>(null);
+  const runFileRef = useRef<string | null>(null);
   const [running, setRunning] = useState(false);
   const [loading, setLoading] = useState(false);
   // Loading for a while (e.g. a slow compile): Stop is offered meanwhile.
@@ -83,15 +87,23 @@ export function useRunner() {
   const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
   const inputTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
+  const setEntries = useCallback(
+    (file: string, update: (prev: ConsoleEntry[]) => ConsoleEntry[]) =>
+      setConsoles((prev) => ({ ...prev, [file]: update(prev[file] ?? []) })),
+    [],
+  );
+
   const flush = useCallback(() => {
     if (holding.current || frame.current !== null) return;
     frame.current = requestAnimationFrame(() => {
       frame.current = null;
       const added = buffered.current;
       buffered.current = [];
-      setEntries((prev) => append(prev, added));
+      // Buffered output is always the current run's: a new run empties it.
+      const file = runFileRef.current;
+      if (file) setEntries(file, (prev) => append(prev, added));
     });
-  }, []);
+  }, [setEntries]);
 
   const push = useCallback(
     (entry: ConsoleEntry) => {
@@ -124,7 +136,9 @@ export function useRunner() {
       frame.current = null;
       clearTimers();
       buffered.current = [];
-      setEntries([]);
+      runFileRef.current = filename;
+      setRunFile(filename);
+      setEntries(filename, () => []);
       setRunning(true);
       setAcceptingInput(false);
 
@@ -155,7 +169,7 @@ export function useRunner() {
         // loader (not a frame later, which would flash the empty-console hint).
         const added = buffered.current;
         buffered.current = [];
-        setEntries((prev) => append(prev, added));
+        setEntries(filename, (prev) => append(prev, added));
         setLoading(false);
         setLoadingLong(false);
         if (exited) return;
@@ -204,7 +218,7 @@ export function useRunner() {
         }
       }
     },
-    [push, clearTimers],
+    [push, clearTimers, setEntries],
   );
 
   const send = useCallback(
@@ -220,10 +234,28 @@ export function useRunner() {
     stopProgram().catch((err) => push({ kind: "error", text: String(err) }));
   }, [push]);
 
-  const clear = useCallback(() => {
-    buffered.current = [];
-    setEntries([]);
-  }, []);
+  const clear = useCallback(
+    (file: string) => {
+      if (file === runFileRef.current) buffered.current = [];
+      setEntries(file, () => []);
+    },
+    [setEntries],
+  );
 
-  return { entries, running, loading, loadingLong, acceptingInput, run, send, stop, clear };
+  /**
+   * The console as `file` should show it: its own output, and the loader,
+   * running state and input box only if it's the program being run.
+   */
+  const consoleFor = (file: string) => {
+    const active = file === runFile;
+    return {
+      entries: consoles[file] ?? [],
+      running: active && running,
+      loading: active && loading,
+      loadingLong: active && loadingLong,
+      acceptingInput: active && acceptingInput,
+    };
+  };
+
+  return { running, consoleFor, run, send, stop, clear };
 }
