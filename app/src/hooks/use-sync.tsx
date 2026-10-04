@@ -56,7 +56,7 @@ export function useSync({
         queryClient.invalidateQueries({ queryKey: queryKeys.syncStatus(userId) }),
       ]);
       for (const copy of report.conflicts) {
-        const original = copy.replace(/_conflict\d*(\.[^.]+)$/, "$1");
+        const original = copy.replace(/_conflict\d*(\.[^/]+)$/, "$1");
         toast.warning(`${original} also changed on GitHub`, {
           description: `GitHub's version is now ${original}. Your version was kept as ${copy}.`,
           duration: Infinity,

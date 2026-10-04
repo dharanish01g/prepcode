@@ -44,7 +44,7 @@ export function useInstallingRuntimes() {
 
 export type RuntimeProgress = {
   extension: string;
-  stage: "downloading" | "unpacking" | "verifying";
+  stage: "downloading" | "unpacking" | "verifying" | "configuring";
   downloaded: number;
   total: number;
 };
@@ -83,6 +83,7 @@ export function progressLabel(p: RuntimeProgress | undefined) {
   if (!p) return "Starting…";
   if (p.stage === "unpacking") return "Unpacking…";
   if (p.stage === "verifying") return "Checking…";
+  if (p.stage === "configuring") return "Setting up…";
   if (p.total > 0) return `${Math.floor((p.downloaded / p.total) * 100)}%`;
   return `${(p.downloaded / 1_000_000).toFixed(0)} MB`;
 }

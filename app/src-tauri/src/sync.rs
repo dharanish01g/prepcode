@@ -25,7 +25,7 @@ use tauri::{AppHandle, State};
 use crate::auth::{self, workspace_dir, CurrentUser, GUEST_PREFIX};
 use crate::catalog;
 use crate::db::Db;
-use crate::files::{self, WorkspaceFile, WorkspaceLock};
+use crate::files::{self, split_extension, WorkspaceFile, WorkspaceLock};
 use crate::github::{self, GitHubError};
 
 /// Marks a repo as made by prepcode, so an unrelated repo that happens to be
@@ -160,7 +160,7 @@ fn pending(local: &HashMap<String, Local>, synced: &HashMap<String, Synced>) -> 
     changes.deleted = synced.keys().filter(|path| !local.contains_key(*path)).cloned().collect();
 
     // Pair deleted and new files of the same language, most similar first.
-    let ext = |path: &str| path.rsplit_once('.').map(|(_, ext)| ext.to_owned());
+    let ext = |path: &str| split_extension(filename_of(path)).map(|(_, ext)| ext.to_owned());
     let mut candidates = Vec::new();
     for old_path in &changes.deleted {
         let old = &synced[old_path];
@@ -400,7 +400,7 @@ async fn sync(
 /// Whether a repo path is one of the student's programs.
 fn is_program_path(path: &str, extensions: &HashSet<String>) -> bool {
     let Some((folder, filename)) = path.split_once('/') else { return false };
-    let Some((name, ext)) = filename.rsplit_once('.') else { return false };
+    let Some((name, ext)) = split_extension(filename) else { return false };
     files::is_date_folder(folder)
         && extensions.contains(ext)
         && !name.is_empty()
@@ -525,7 +525,7 @@ fn keep_copy(file: &WorkspaceFile, taken: &mut HashSet<String>) -> Result<String
 
 /// `code2.py` -> `code2_conflict.py` (or `_conflict2`, …), not in `taken`.
 fn conflict_name(filename: &str, taken: &HashSet<String>) -> String {
-    let (stem, ext) = filename.rsplit_once('.').unwrap_or((filename, ""));
+    let (stem, ext) = split_extension(filename).unwrap_or((filename, ""));
     let taken: HashSet<String> = taken.iter().map(|t| t.to_lowercase()).collect();
     (1..)
         .map(|n| {
@@ -611,6 +611,7 @@ mod tests {
         let taken: HashSet<String> = ["code2.py".into(), "Code2_conflict.py".into()].into();
         assert_eq!(conflict_name("code2.py", &taken), "code2_conflict2.py");
         assert_eq!(conflict_name("a.c", &HashSet::new()), "a_conflict.c");
+        assert_eq!(conflict_name("q.mysql.sql", &HashSet::new()), "q_conflict.mysql.sql");
         let long = format!("{}.py", "x".repeat(64));
         assert_eq!(conflict_name(&long, &HashSet::new()).len(), 64 + ".py".len());
     }
@@ -693,8 +694,10 @@ mod tests {
 
     #[test]
     fn program_paths() {
-        let ext: HashSet<String> = ["py".into(), "c".into()].into();
+        let ext: HashSet<String> = ["py".into(), "c".into(), "mysql.sql".into()].into();
         assert!(is_program_path("02oct2026/code2.py", &ext));
+        assert!(is_program_path("02oct2026/queries.mysql.sql", &ext));
+        assert!(!is_program_path("02oct2026/queries.sql", &ext));
         assert!(!is_program_path("code2.py", &ext));
         assert!(!is_program_path("README.md", &ext));
         assert!(!is_program_path("02oct2026/notes.txt", &ext));

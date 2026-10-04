@@ -18,6 +18,7 @@ const AUTOSAVE_DELAY_MS = 500;
 
 export type FlushRef = React.RefObject<() => void>;
 export type FormatRef = React.RefObject<() => Promise<void>>;
+export type CursorLineRef = React.RefObject<() => number | null>;
 
 type MonacoEditor = Parameters<OnMount>[0];
 
@@ -27,6 +28,7 @@ export function CodeEditor({
   readOnly,
   flushRef,
   formatRef,
+  cursorLineRef,
 }: {
   userId: string;
   filename: string;
@@ -36,6 +38,8 @@ export function CodeEditor({
   flushRef: FlushRef;
   /** Set to a function that formats the open file (used by the Format button). */
   formatRef: FormatRef;
+  /** Set to a function that returns the cursor's line (used by Run line). */
+  cursorLineRef: CursorLineRef;
 }) {
   // Not keyed by file on purpose: like VS Code, one editor stays mounted and
   // switching files just swaps its model, so there's no reload.
@@ -46,6 +50,7 @@ export function CodeEditor({
       readOnly={readOnly}
       flushRef={flushRef}
       formatRef={formatRef}
+      cursorLineRef={cursorLineRef}
     />
   );
 }
@@ -56,12 +61,14 @@ function FileEditor({
   readOnly,
   flushRef,
   formatRef,
+  cursorLineRef,
 }: {
   userId: string;
   filename: string;
   readOnly: boolean;
   flushRef: FlushRef;
   formatRef: FormatRef;
+  cursorLineRef: CursorLineRef;
 }) {
   const isDark = useIsDark();
   const editorRef = useRef<MonacoEditor | null>(null);
@@ -134,6 +141,13 @@ function FileEditor({
       formatRef.current = async () => {};
     };
   }, [format, formatRef]);
+
+  useLayoutEffect(() => {
+    cursorLineRef.current = () => editorRef.current?.getPosition()?.lineNumber ?? null;
+    return () => {
+      cursorLineRef.current = () => null;
+    };
+  }, [cursorLineRef]);
 
   if (content.isError) {
     return <EditorMessage>{String(content.error)}</EditorMessage>;

@@ -9,6 +9,7 @@ import {
   renameFile,
   writeFile,
 } from "@/lib/files";
+import { listTables, tableRows } from "@/lib/sql";
 import { syncStatus } from "@/lib/sync";
 
 // Keys include the workspace id so one student's cache can never be
@@ -18,7 +19,28 @@ export const queryKeys = {
   fileContent: (userId: string, filename: string) => ["file", userId, filename] as const,
   fileHistory: (userId: string) => ["file-history", userId] as const,
   syncStatus: (userId: string) => ["sync-status", userId] as const,
+  // `runs` counts finished query runs: any run may change the tables.
+  databaseTables: (database: string, runs: number) => ["database-tables", database, runs] as const,
+  tableRows: (database: string, table: string, runs: number) =>
+    ["table-rows", database, table, runs] as const,
 };
+
+/** The tables in the current database, refreshed after every run. */
+export function useDatabaseTablesQuery(database: string | null | undefined, runs: number) {
+  return useQuery({
+    queryKey: queryKeys.databaseTables(database ?? "", runs),
+    queryFn: listTables,
+    enabled: Boolean(database),
+  });
+}
+
+/** A table's rows, read when its tab opens and again after every run. */
+export function useTableRowsQuery(database: string, table: string, runs: number) {
+  return useQuery({
+    queryKey: queryKeys.tableRows(database, table, runs),
+    queryFn: () => tableRows(table),
+  });
+}
 
 export const SAVE_FILE_MUTATION_KEY = ["save-file"] as const;
 

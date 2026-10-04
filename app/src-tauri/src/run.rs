@@ -18,7 +18,7 @@ use tokio::sync::{oneshot, watch, Mutex};
 use crate::auth::CurrentUser;
 use crate::catalog::{self, Language, Runtime, Vars};
 use crate::db::Db;
-use crate::files::resolve_file;
+use crate::files::{resolve_file, split_extension};
 use crate::runtimes::{executable_path, shared_data_dir, step_command, write_step_files};
 
 #[derive(Clone, Serialize)]
@@ -70,10 +70,11 @@ pub async fn run_program(
     if !source.is_file() {
         return Err(format!("{filename} doesn't exist."));
     }
-    let extension = filename.rsplit_once('.').map(|(_, ext)| ext).unwrap_or_default();
+    let extension = split_extension(&filename).map(|(_, ext)| ext).unwrap_or_default();
     let (language, runtime) = db.with(|conn| {
-        let language =
-            catalog::language(conn, extension)?.ok_or_else(|| format!("Can't run .{extension} files."))?;
+        let language = catalog::language(conn, extension)?
+            .filter(|language| language.run.is_some())
+            .ok_or_else(|| format!("Can't run .{extension} files."))?;
         let runtime = catalog::runtime(conn, &language.runtime)?;
         Ok((language, runtime))
     })?;
@@ -164,6 +165,7 @@ impl RunContext<'_> {
         runtime: &Runtime,
         exe: &Path,
     ) -> Result<(), String> {
+        let run = language.run.as_ref().ok_or_else(|| format!("Can't run {filename}."))?;
         let workdir = source.parent().ok_or("Invalid file location.")?;
         let data = self
             .app
@@ -199,8 +201,8 @@ impl RunContext<'_> {
             }
         }
 
-        write_step_files(&language.run, &build_dir)?;
-        let mut program = Command::from(step_command(&language.run, runtime, exe, &vars));
+        write_step_files(run, &build_dir)?;
+        let mut program = Command::from(step_command(run, runtime, exe, &vars));
         program.current_dir(workdir);
         let finished = self.execute(program, true).await?;
         self.send(RunEvent::Exit { code: finished.code, stopped: finished.stopped, stage: "run" });

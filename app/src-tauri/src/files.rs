@@ -28,6 +28,13 @@ impl WorkspaceLock {
     }
 }
 
+/// `queries.mysql.sql` -> `("queries", "mysql.sql")`. Names never contain a
+/// dot (see `validate_name`), so everything after the first one is the
+/// extension, which may itself have dots.
+pub(crate) fn split_extension(filename: &str) -> Option<(&str, &str)> {
+    filename.split_once('.')
+}
+
 /// Letters, digits, `_` and `-`, not starting with `-`. The extension is added separately.
 fn validate_name(name: &str) -> Result<(), String> {
     if name.is_empty() {
@@ -100,7 +107,7 @@ pub(crate) fn workspace_files(
         let Ok(entries) = fs::read_dir(folder.path()) else { continue };
         for entry in entries.flatten() {
             let Ok(filename) = entry.file_name().into_string() else { continue };
-            let supported = filename.rsplit_once('.').is_some_and(|(_, ext)| extensions.contains(ext));
+            let supported = split_extension(&filename).is_some_and(|(_, ext)| extensions.contains(ext));
             if supported && entry.path().is_file() {
                 files.push(WorkspaceFile {
                     relative: format!("{folder_name}/{filename}"),
@@ -120,7 +127,7 @@ pub(crate) fn tidy_workspace(dir: &Path, extensions: &HashSet<String>) {
     let Ok(entries) = fs::read_dir(dir) else { return };
     for entry in entries.flatten() {
         let Ok(filename) = entry.file_name().into_string() else { continue };
-        let supported = filename.rsplit_once('.').is_some_and(|(_, ext)| extensions.contains(ext));
+        let supported = split_extension(&filename).is_some_and(|(_, ext)| extensions.contains(ext));
         if filename.starts_with('.') || !supported || !entry.path().is_file() {
             continue;
         }
@@ -147,7 +154,7 @@ fn find_file(
     filename: &str,
 ) -> Result<Option<PathBuf>, String> {
     let (name, extension) =
-        filename.rsplit_once('.').ok_or_else(|| format!("Invalid file name: {filename}"))?;
+        split_extension(filename).ok_or_else(|| format!("Invalid file name: {filename}"))?;
     validate_name(name)?;
     if !db.with(|conn| catalog::is_supported(conn, extension))? {
         return Err(format!("Unsupported file type: .{extension}"));
@@ -288,7 +295,7 @@ pub fn rename_file(
     let old_path = resolve_file(&app, &current, &db, &filename)?;
     let new_name = new_name.trim();
     validate_name(new_name)?;
-    let extension = filename.rsplit_once('.').map(|(_, ext)| ext).unwrap_or_default();
+    let extension = split_extension(&filename).map(|(_, ext)| ext).unwrap_or_default();
     let new_filename = format!("{new_name}.{extension}");
     if new_filename == filename {
         return Ok(new_filename);

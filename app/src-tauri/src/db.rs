@@ -84,6 +84,30 @@ const MIGRATIONS: &[&str] = &[
     -- git does (by comparing contents) after the old file is gone.
     ALTER TABLE synced_files ADD COLUMN content BLOB;
 ",
+    "
+    -- Databases join languages: a kind, per-account setup steps, and no run
+    -- step. The catalog is imported again on open, so start this table over.
+    DROP TABLE languages;
+    CREATE TABLE languages (
+        extension  TEXT PRIMARY KEY,
+        kind       TEXT NOT NULL,   -- JSON string: \"program\" or \"database\"
+        position   INTEGER NOT NULL,
+        name       TEXT NOT NULL,
+        monaco     TEXT NOT NULL,
+        formatter  TEXT,
+        icon       TEXT,
+        runtime_id TEXT NOT NULL REFERENCES runtimes (id),
+        compile    TEXT,            -- JSON step, NULL if there's no compile step
+        run        TEXT,            -- JSON step, NULL for databases
+        setup      TEXT NOT NULL    -- JSON array of steps, empty for programs
+    );
+    DELETE FROM meta WHERE key = 'catalog_version';
+",
+    "
+    -- How to start a database's server; NULL for programs.
+    ALTER TABLE languages ADD COLUMN server TEXT;
+    DELETE FROM meta WHERE key = 'catalog_version';
+",
 ];
 
 fn migrate(conn: &mut Connection) -> rusqlite::Result<()> {
