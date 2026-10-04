@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 
-const COMPANY = "Meikural Edu Tech India Private Limited";
+export const COMPANY = "Meikural Edu Tech India Private Limited";
 
 /** App name and version on the left, copyright on the right. */
 export function AuthFooter() {

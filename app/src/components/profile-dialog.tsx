@@ -1,5 +1,8 @@
 import * as React from "react";
-import { LanguagesIcon, UserIcon } from "lucide-react";
+import { getVersion } from "@tauri-apps/api/app";
+import { InfoIcon, LanguagesIcon, UserIcon } from "lucide-react";
+import logo from "@/assets/logo.png";
+import { COMPANY } from "@/components/auth-footer";
 import { FileIcon } from "@/components/file-icon";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
@@ -28,6 +31,7 @@ import {
   SidebarMenuItem,
   SidebarProvider,
 } from "@/components/ui/sidebar";
+import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Table,
@@ -41,11 +45,12 @@ import { displayName, type Session } from "@/lib/auth";
 import { getLanguages, type Language } from "@/lib/languages";
 import { useInstalledRuntimes } from "@/lib/runtimes";
 
-type Section = "Account" | "Languages";
+type Section = "Account" | "Languages" | "About";
 
 const nav: { name: Section; icon: React.ReactNode }[] = [
   { name: "Account", icon: <UserIcon /> },
   { name: "Languages", icon: <LanguagesIcon /> },
+  { name: "About", icon: <InfoIcon /> },
 ];
 
 /** The profile, opened from the avatar at the bottom of the sidebar. */
@@ -66,7 +71,7 @@ export function ProfileDialog({
         <DialogDescription className="sr-only">
           Your account and the languages installed on this computer.
         </DialogDescription>
-        <SidebarProvider className="items-start">
+        <SidebarProvider className="min-h-0 items-start">
           <Sidebar collapsible="none" className="hidden md:flex">
             <SidebarContent>
               <SidebarGroup>
@@ -89,7 +94,9 @@ export function ProfileDialog({
               </SidebarGroup>
             </SidebarContent>
           </Sidebar>
-          <main className="flex h-[480px] flex-1 flex-col overflow-hidden">
+          {/* The divider sits on the content, which fills the dialog's 500px; the
+              sidebar only grows as tall as its items. Like the sidebar, desktop only. */}
+          <main className="flex h-[500px] flex-1 flex-col overflow-hidden md:border-l">
             <header className="flex h-16 shrink-0 items-center gap-2 px-4">
               <Breadcrumb>
                 <BreadcrumbList>
@@ -102,7 +109,13 @@ export function ProfileDialog({
               </Breadcrumb>
             </header>
             <div className="flex flex-1 flex-col gap-4 overflow-y-auto p-4 pt-0">
-              {section === "Account" ? <AccountSection session={session} /> : <LanguagesSection />}
+              {section === "Account" ? (
+                <AccountSection session={session} />
+              ) : section === "Languages" ? (
+                <LanguagesSection />
+              ) : (
+                <AboutSection />
+              )}
             </div>
           </main>
         </SidebarProvider>
@@ -212,5 +225,58 @@ function LanguagesSection() {
         ))}
       </TableBody>
     </Table>
+  );
+}
+
+const FEATURES = [
+  {
+    title: "Programs",
+    text: "Write and run code in Python, JavaScript, C, C++, Java and Go. prepcode downloads each language for you, so there's nothing to set up.",
+  },
+  {
+    title: "Sync",
+    text: "Save your programs to your GitHub account and get them back on any computer.",
+  },
+  { title: "Practice", text: "Solve job-prep questions, grouped by topic." },
+  { title: "Jobs", text: "Find openings for your engineering branch." },
+];
+
+/** What prepcode is, its version and who makes it. */
+function AboutSection() {
+  const [version, setVersion] = React.useState("");
+
+  React.useEffect(() => {
+    // From tauri.conf.json, so it always matches the installed release.
+    getVersion()
+      .then(setVersion)
+      .catch(() => {});
+  }, []);
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="flex items-center gap-4">
+        <img src={logo} alt="" className="size-16" />
+        <div className="flex flex-col gap-1">
+          <span className="text-base font-medium">prepcode</span>
+          {version && <span className="text-muted-foreground">Version {version}</span>}
+        </div>
+      </div>
+      <p>
+        prepcode helps students get ready for placements. Write and run code without installing
+        anything, practice the questions companies ask, and find jobs, all in one place.
+      </p>
+      <div className="flex flex-col gap-3">
+        {FEATURES.map((feature) => (
+          <div key={feature.title} className="flex flex-col gap-0.5">
+            <span className="font-medium">{feature.title}</span>
+            <span className="text-muted-foreground">{feature.text}</span>
+          </div>
+        ))}
+      </div>
+      <Separator />
+      <p className="text-muted-foreground">
+        © {new Date().getFullYear()} {COMPANY}. All rights reserved.
+      </p>
+    </div>
   );
 }
