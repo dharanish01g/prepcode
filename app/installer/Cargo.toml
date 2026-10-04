@@ -1,0 +1,38 @@
+[package]
+name = "prepcode-setup"
+version = "0.1.0"
+description = "Online installer: downloads and runs the latest prepcode installer"
+edition = "2021"
+license = "GPL-3.0-only"
+publish = false
+
+[dependencies]
+base64 = "0.23"
+minisign-verify = "0.2"
+serde = { version = "1", features = ["derive"] }
+semver = "1"
+
+[target."cfg(windows)".dependencies]
+# Schannel (Windows' own TLS) and the system proxy, like the app's reqwest.
+ureq = { version = "3", default-features = false, features = ["json", "native-tls", "win-system-proxy"] }
+windows-sys = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_System_LibraryLoader",
+  "Win32_UI_Controls",
+  "Win32_UI_Shell",
+  "Win32_UI_WindowsAndMessaging",
+] }
+
+[target."cfg(not(windows))".dependencies]
+ureq = { version = "3", default-features = false, features = ["json", "native-tls"] }
+
+[build-dependencies]
+serde_json = "1"
+embed-resource = "3"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "z"
+panic = "abort"
+strip = true

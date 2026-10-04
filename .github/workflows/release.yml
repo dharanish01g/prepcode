@@ -88,9 +88,40 @@ jobs:
           releaseName: prepcode v__VERSION__
           releaseBody: |
             Download the installer for your computer:
-            - **Windows:** `.msi` or `-setup.exe`
+            - **Windows:** `prepcode-setup.exe` (recommended: always installs the newest version), or `.msi` / `-setup.exe`
             - **macOS (Apple Silicon, M1 and newer):** `aarch64.dmg`
             - **macOS (Intel):** `x64.dmg`
             - **Linux:** `.AppImage`, `.deb` or `.rpm`
           releaseDraft: true
           prerelease: false
+
+  # The online installer: a small prepcode-setup.exe that downloads and runs
+  # the newest Windows installer (see app/installer). Attached to every release
+  # under the same name, so .../releases/latest/download/prepcode-setup.exe
+  # always works, and old copies still install the latest version.
+  installer:
+    name: Online installer (Windows)
+    needs: build
+    permissions:
+      contents: write # upload to the release
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: app/installer -> target
+
+      - name: Build
+        working-directory: app/installer
+        run: cargo build --release --locked
+
+      - name: Attach to the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          version=$(jq -r .version app/src-tauri/tauri.conf.json)
+          gh release upload "v$version" app/installer/target/release/prepcode-setup.exe --clobber

@@ -101,3 +101,30 @@ jobs:
       - name: Tests
         working-directory: app/src-tauri
         run: cargo test --locked
+
+  # The online installer (app/installer) is Windows-only, so it's checked there.
+  installer:
+    name: Online installer (Windows)
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: app/installer
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: app/installer -> target
+
+      - name: Formatting (rustfmt)
+        run: cargo fmt --check
+
+      - name: Lints (clippy, warnings are errors)
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      - name: Build (with the icon and manifest)
+        run: cargo build --release --locked

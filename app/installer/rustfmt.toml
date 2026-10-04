@@ -1,0 +1,4 @@
+# Checked in CI (`cargo fmt --check`). Chosen to match how the code was
+# already written: wide lines, short expressions kept on one line.
+max_width = 110
+use_small_heuristics = "Max"
