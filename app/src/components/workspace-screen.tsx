@@ -5,6 +5,7 @@ import { CodeEditor } from "@/components/code-editor";
 import { FileIcon } from "@/components/file-icon";
 import { ConsolePanel } from "@/components/console-panel";
 import { GuestLogoutDialog } from "@/components/guest-logout-dialog";
+import { DatabaseScreen } from "@/components/database-screen";
 import { JobsScreen } from "@/components/jobs-screen";
 import { PracticeScreen } from "@/components/practice-screen";
 import { SaveStatus } from "@/components/save-status";
@@ -159,7 +160,9 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
           Monaco's pixel width (set while collapsed) holds it wide and pushes
           the header, including Run, off screen. */}
       <SidebarInset className="min-h-0 min-w-0">
-        {view === "Practice" ? (
+        {view === "Database" ? (
+          <DatabaseScreen />
+        ) : view === "Practice" ? (
           <PracticeScreen />
         ) : view === "Jobs" ? (
           // A guest logs in by logging out of the guest session.

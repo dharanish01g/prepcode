@@ -1,4 +1,10 @@
-import { ArrowRightIcon, ArrowUpIcon, PencilIcon, RefreshCwIcon, Trash2Icon } from "lucide-react";
+import {
+  ArrowRightIcon,
+  CloudUploadIcon,
+  PencilIcon,
+  RefreshCwIcon,
+  Trash2Icon,
+} from "lucide-react";
 import { FileIcon } from "@/components/file-icon";
 import {
   SidebarGroup,
@@ -10,7 +16,7 @@ import {
 import type { SyncStatus } from "@/lib/sync";
 
 const KINDS = {
-  new: { icon: ArrowUpIcon, label: "New: not on GitHub yet" },
+  new: { icon: CloudUploadIcon, label: "New: not on GitHub yet" },
   modified: { icon: RefreshCwIcon, label: "Changed since the last sync" },
   deleted: { icon: Trash2Icon, label: "Deleted here: Sync removes it from GitHub" },
   renamed: { icon: PencilIcon, label: "Renamed since the last sync" },

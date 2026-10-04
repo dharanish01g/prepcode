@@ -29,9 +29,10 @@ import { disposeEditorModel, editorModelPath } from "@/lib/monaco";
 import { useFilesQuery } from "@/lib/queries";
 import type { SyncStatus } from "@/lib/sync";
 import {
-  BriefcaseIcon,
-  CodeIcon,
-  FilesIcon,
+  BriefcaseBusinessIcon,
+  BookCheckIcon,
+  CodeXmlIcon,
+  DatabaseIcon,
   PlusIcon,
   MoonIcon,
   RefreshCwIcon,
@@ -41,18 +42,20 @@ import { Spinner } from "@/components/ui/spinner";
 import { useTheme } from "@/hooks/use-theme";
 import logo from "@/assets/logo.png";
 
-export type View = "Programs" | "Sync" | "Practice" | "Jobs";
+export type View = "Programs" | "Database" | "Sync" | "Practice" | "Jobs";
 
 const data: { navMain: { title: View; icon: React.ReactNode }[] } = {
   navMain: [
     // Every program by when it was last edited, newest first.
-    { title: "Programs", icon: <FilesIcon /> },
+    { title: "Programs", icon: <CodeXmlIcon /> },
+    // Database training, like Programs but for SQL. Coming soon.
+    { title: "Database", icon: <DatabaseIcon /> },
     // What isn't on GitHub yet, and the Sync button. Students only.
     { title: "Sync", icon: <RefreshCwIcon /> },
     // Questions to solve. Takes the whole main area, so this column hides.
-    { title: "Practice", icon: <CodeIcon /> },
+    { title: "Practice", icon: <BookCheckIcon /> },
     // Openings to search and apply to. Also takes the whole main area.
-    { title: "Jobs", icon: <BriefcaseIcon /> },
+    { title: "Jobs", icon: <BriefcaseBusinessIcon /> },
   ],
 };
 
@@ -217,7 +220,7 @@ export function AppSidebar({
               {syncing ? <Spinner /> : <RefreshCwIcon />}
               Sync
             </Button>
-          ) : (
+          ) : view === "Database" ? null : (
             <Button size="sm" onClick={() => setNewFileOpen(true)}>
               <PlusIcon />
               New file
@@ -245,7 +248,9 @@ export function AppSidebar({
           </SidebarHeader>
         )}
         <SidebarContent className="py-2">
-          {view === "Sync" ? (
+          {view === "Database" ? (
+            <p className="px-4 py-2 text-sm text-muted-foreground">Coming soon.</p>
+          ) : view === "Sync" ? (
             <SyncList status={syncStatus} selectedFile={selectedFile} onSelectFile={onSelectFile} />
           ) : (
             <HistoryList
