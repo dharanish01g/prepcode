@@ -4,13 +4,15 @@ import { AppSidebar, type View } from "@/components/app-sidebar";
 import { CodeEditor } from "@/components/code-editor";
 import { FileIcon } from "@/components/file-icon";
 import { ConsolePanel } from "@/components/console-panel";
+import { ResultsPanel } from "@/components/results-panel";
 import { GuestLogoutDialog } from "@/components/guest-logout-dialog";
 import { JobsScreen } from "@/components/jobs-screen";
 import { PracticeScreen } from "@/components/practice-screen";
 import { SaveStatus } from "@/components/save-status";
 import { UnsyncedDialog } from "@/components/unsynced-dialog";
-import { PlayIcon, SquareIcon, WandSparklesIcon } from "lucide-react";
+import { PlayIcon, SquareIcon, TextCursorIcon, WandSparklesIcon } from "lucide-react";
 import { Spinner } from "@/components/ui/spinner";
+import { useQueryRunner } from "@/hooks/use-query-runner";
 import { useRunner } from "@/hooks/use-runner";
 import { useSync } from "@/hooks/use-sync";
 import { canFormat } from "@/lib/format";
@@ -52,12 +54,14 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
   const fullScreen = view === "Practice" || view === "Jobs";
   const flushEditorRef = useRef<() => void>(() => {});
   const formatEditorRef = useRef<() => Promise<void>>(async () => {});
+  const cursorLineRef = useRef<() => number | null>(() => null);
   const [formatting, setFormatting] = useState(false);
   // Logging out or closing, held back to warn that a guest's files go.
   const [guestAction, setGuestAction] = useState<"log out" | "close" | null>(null);
   // Logging out or closing, held back by unsynced changes.
   const [unsyncedAction, setUnsyncedAction] = useState<"log out" | "close" | null>(null);
   const runner = useRunner();
+  const queries = useQueryRunner();
   const syncStatus = useSyncStatusQuery(session.id, !session.guest);
   const unsynced = unsyncedCount(syncStatus.data);
   const files = useFilesQuery(session.id).data;
@@ -109,6 +113,7 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
   // Save the last few keystrokes before the backend forgets who's logged in.
   async function handleLogout() {
     if (runner.running) runner.stop();
+    if (queries.busy) queries.stop();
     flushEditorRef.current();
     await whenSavesSettled();
     onLogout();
@@ -127,11 +132,22 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
   // Always run what's on screen: save pending edits first.
   // The open program's console. Another program may be running meanwhile.
   const fileConsole = selectedFile ? runner.consoleFor(selectedFile) : null;
-  // Only programs run, and only in Programs: Sync is for reviewing changes,
-  // and running queries comes to Database later. (Sync can open any file.)
+  // Programs run in Programs, and database files in Database. Sync is for
+  // reviewing changes, so nothing runs there. (Sync can open any file.)
   const runnable =
     view === "Programs" &&
     (!selectedFile || findLanguage(extensionOf(selectedFile))?.kind === "program");
+  const queryResults =
+    view === "Database" && selectedFile ? queries.resultsFor(selectedFile) : null;
+
+  /** Runs the whole file, or only the statement on the cursor's line. */
+  async function handleRunQueries(atCursor: boolean) {
+    if (!selectedFile) return;
+    const line = atCursor ? (cursorLineRef.current() ?? undefined) : undefined;
+    flushEditorRef.current();
+    await whenSavesSettled();
+    queries.run(selectedFile, line);
+  }
 
   async function handleRun() {
     if (!selectedFile) return;
@@ -224,7 +240,34 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
                 {formatting ? <Spinner /> : <WandSparklesIcon />}
                 Format
               </Button>
-              {!runnable ? null : fileConsole?.loading && !fileConsole.loadingLong ? (
+              {view === "Database" ? (
+                queryResults?.running ? (
+                  <Button variant="destructive" onClick={queries.stop}>
+                    <SquareIcon />
+                    Stop
+                  </Button>
+                ) : (
+                  <>
+                    <Button
+                      variant="outline"
+                      disabled={!selectedFile || queries.busy || sync.syncing}
+                      onClick={() => handleRunQueries(true)}
+                      title="Run only the statement where the cursor is"
+                    >
+                      <TextCursorIcon />
+                      Run line
+                    </Button>
+                    <Button
+                      disabled={!selectedFile || queries.busy || sync.syncing}
+                      onClick={() => handleRunQueries(false)}
+                      title="Run every statement in the file"
+                    >
+                      <PlayIcon />
+                      Run
+                    </Button>
+                  </>
+                )
+              ) : !runnable ? null : fileConsole?.loading && !fileConsole.loadingLong ? (
                 // Until the console shows the output (see MIN_LOADING_MS).
                 <Button disabled>
                   <Spinner />
@@ -252,8 +295,23 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
                     readOnly={sync.syncing}
                     flushRef={flushEditorRef}
                     formatRef={formatEditorRef}
+                    cursorLineRef={cursorLineRef}
                   />
                 </ResizablePanel>
+                {queryResults && (
+                  <>
+                    <ResizableHandle withHandle />
+                    <ResizablePanel id="results" defaultSize="30%" minSize="10%">
+                      <ResultsPanel
+                        results={queryResults}
+                        database={queries.database}
+                        runs={queries.runs}
+                        logs={queries.logs}
+                        onClearLogs={queries.clearLogs}
+                      />
+                    </ResizablePanel>
+                  </>
+                )}
                 {runnable && (
                   <>
                     <ResizableHandle withHandle />

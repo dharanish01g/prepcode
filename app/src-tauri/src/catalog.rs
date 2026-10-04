@@ -141,6 +141,10 @@ pub struct Language {
     /// `{data}`, run once per account (see databases.rs).
     #[serde(default)]
     pub setup: Vec<Step>,
+    /// Databases only: starts the account's server on `{data}`, listening on
+    /// 127.0.0.1:`{port}` (see sql.rs).
+    #[serde(default)]
+    pub server: Option<Step>,
 }
 
 fn db_err(e: rusqlite::Error) -> String {
@@ -231,8 +235,8 @@ pub fn validate(catalog: &Catalog) -> Result<(), String> {
                 if let Some(compile) = &language.compile {
                     validate_step(compile, &format!("Language .{ext} compile"))?;
                 }
-                if !language.setup.is_empty() {
-                    return Err(format!("Language .{ext}: only databases have setup steps"));
+                if !language.setup.is_empty() || language.server.is_some() {
+                    return Err(format!("Language .{ext}: only databases have setup and server steps"));
                 }
             }
             Kind::Database => {
@@ -242,6 +246,9 @@ pub fn validate(catalog: &Catalog) -> Result<(), String> {
                 for step in &language.setup {
                     validate_step(step, &format!("Database .{ext} setup"))?;
                 }
+                let server =
+                    language.server.as_ref().ok_or_else(|| format!("Database .{ext} has no server step"))?;
+                validate_step(server, &format!("Database .{ext} server"))?;
             }
         }
     }
@@ -313,8 +320,8 @@ pub fn import(conn: &mut Connection, catalog: &Catalog) -> Result<bool, String> 
     for (position, language) in catalog.languages.iter().enumerate() {
         tx.execute(
             "INSERT INTO languages
-               (extension, kind, position, name, monaco, formatter, icon, runtime_id, compile, run, setup)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+               (extension, kind, position, name, monaco, formatter, icon, runtime_id, compile, run, setup, server)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             params![
                 language.extension,
                 to_json(&language.kind),
@@ -327,6 +334,7 @@ pub fn import(conn: &mut Connection, catalog: &Catalog) -> Result<bool, String> 
                 language.compile.as_ref().map(to_json),
                 language.run.as_ref().map(to_json),
                 to_json(&language.setup),
+                language.server.as_ref().map(to_json),
             ],
         )
         .map_err(db_err)?;
@@ -343,7 +351,7 @@ pub fn import(conn: &mut Connection, catalog: &Catalog) -> Result<bool, String> 
 }
 
 const LANGUAGE_COLUMNS: &str =
-    "extension, kind, name, monaco, formatter, icon, runtime_id, compile, run, setup FROM languages";
+    "extension, kind, name, monaco, formatter, icon, runtime_id, compile, run, setup, server FROM languages";
 
 fn language_from_row(row: &rusqlite::Row) -> rusqlite::Result<Language> {
     Ok(Language {
@@ -357,6 +365,7 @@ fn language_from_row(row: &rusqlite::Row) -> rusqlite::Result<Language> {
         compile: row.get::<_, Option<String>>(7)?.map(|raw| from_json(7, raw)).transpose()?,
         run: row.get::<_, Option<String>>(8)?.map(|raw| from_json(8, raw)).transpose()?,
         setup: from_json(9, row.get(9)?)?,
+        server: row.get::<_, Option<String>>(10)?.map(|raw| from_json(10, raw)).transpose()?,
     })
 }
 
@@ -523,6 +532,7 @@ mod tests {
         assert_eq!(mysql.kind, Kind::Database);
         assert!(mysql.run.is_none());
         assert_eq!(mysql.setup.len(), 1);
+        assert!(mysql.server.is_some());
         assert_eq!(runtime(&conn, &mysql.runtime).unwrap().downloads.len(), 4);
     }
 

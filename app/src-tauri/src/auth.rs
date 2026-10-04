@@ -24,6 +24,7 @@ use crate::databases;
 use crate::db::Db;
 use crate::files;
 use crate::github::{self, DeviceCode, GitHubError, Poll, User};
+use crate::sql;
 use crate::sync;
 
 /// The signed-in workspace: `gh-<GitHub user id>` for a student, or
@@ -305,9 +306,11 @@ pub async fn logout(
     app: AppHandle,
     db: State<'_, Db>,
     current: State<'_, CurrentUser>,
+    servers: State<'_, sql::Servers>,
 ) -> Result<(), String> {
     let Ok(id) = current.get() else { return Ok(()) };
     current.set(None);
+    servers.stop().await;
     if id.starts_with(GUEST_PREFIX) {
         delete_guest_files(&app);
         return Ok(());
@@ -320,8 +323,9 @@ pub async fn logout(
 
 /// Deletes every guest workspace, the programs compiled for it, and the
 /// guest's databases. Runs when a guest logs out, when the app exits, and on
-/// startup (for anything left by a crash or a forced quit). Best effort: whatever can't be removed now (e.g.
-/// a program still running on Windows) goes on the next startup.
+/// startup (for anything left by a crash or a forced quit). Best effort:
+/// whatever can't be removed now (e.g. a program still running on Windows)
+/// goes on the next startup.
 pub fn delete_guest_files(app: &AppHandle) {
     let folders = [
         data_dir(app).map(|dir| dir.join("workspaces")),

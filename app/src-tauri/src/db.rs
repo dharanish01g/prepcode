@@ -103,6 +103,11 @@ const MIGRATIONS: &[&str] = &[
     );
     DELETE FROM meta WHERE key = 'catalog_version';
 ",
+    "
+    -- How to start a database's server; NULL for programs.
+    ALTER TABLE languages ADD COLUMN server TEXT;
+    DELETE FROM meta WHERE key = 'catalog_version';
+",
 ];
 
 fn migrate(conn: &mut Connection) -> rusqlite::Result<()> {

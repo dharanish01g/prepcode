@@ -57,7 +57,7 @@ pub fn set_up(
 /// Runs the database's setup steps into a scratch folder, then moves it to
 /// `target` with a single rename, so a half-made folder (the app closed
 /// midway) is never mistaken for a ready one; the next attempt starts over.
-fn set_up_in(
+pub(crate) fn set_up_in(
     target: &Path,
     language: &Language,
     runtime: &Runtime,
@@ -116,7 +116,8 @@ fn last_lines(stderr: &[u8], stdout: &[u8]) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
+    pub(crate) use super::set_up_in;
     use super::*;
     use crate::catalog::{self, Kind};
     use crate::runtimes::tests::install_for_this_platform;

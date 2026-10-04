@@ -1,5 +1,5 @@
 {
-  "version": 5,
+  "version": 6,
   "runtimes": [
     {
       "id": "python-3.13.15",
@@ -431,7 +431,23 @@
             "--innodb-redo-log-capacity=8M"
           ]
         }
-      ]
+      ],
+      "server": {
+        "args": [
+          "--no-defaults",
+          "--basedir={runtime}",
+          "--datadir={data}",
+          "--bind-address=127.0.0.1",
+          "--port={port}",
+          "--socket={socket}",
+          "--mysqlx=OFF",
+          "--log-error={log}",
+          "--innodb-redo-log-capacity=8M",
+          "--innodb-buffer-pool-size=64M",
+          "--performance-schema=OFF",
+          "--secure-file-priv=NULL"
+        ]
+      }
     }
   ]
 }

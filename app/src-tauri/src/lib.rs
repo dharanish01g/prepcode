@@ -6,6 +6,7 @@ mod files;
 mod github;
 mod run;
 mod runtimes;
+mod sql;
 mod sync;
 
 use tauri::{Manager, RunEvent};
@@ -30,6 +31,7 @@ pub fn run() {
         .manage(sync::SyncLock::default())
         .manage(runtimes::RuntimeInstalls::default())
         .manage(run::Runner::default())
+        .manage(sql::Servers::default())
         .manage(files::WorkspaceLock::default())
         .setup(|app| {
             app.manage(db::open(app.handle())?);
@@ -58,6 +60,10 @@ pub fn run() {
             run::run_program,
             run::send_input,
             run::stop_program,
+            sql::run_queries,
+            sql::stop_queries,
+            sql::list_tables,
+            sql::table_rows,
             sync::sync_status,
             sync::sync_now,
             sync::pull_from_github,
@@ -66,6 +72,8 @@ pub fn run() {
         .expect("error while building tauri application")
         .run(|app, event| {
             if let RunEvent::Exit = event {
+                // Before deleting guest files: a running server holds its own.
+                tauri::async_runtime::block_on(app.state::<sql::Servers>().stop());
                 auth::delete_guest_files(app);
             }
         });
