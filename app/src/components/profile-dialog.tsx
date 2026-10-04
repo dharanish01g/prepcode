@@ -167,7 +167,7 @@ function versionLabel(language: Language, languages: Language[]) {
 /** Languages installed on this computer, with the version prepcode runs. */
 function LanguagesSection() {
   const installed = useInstalledRuntimes();
-  const languages = getLanguages();
+  const languages = getLanguages("program");
 
   if (installed.isPending) {
     return (

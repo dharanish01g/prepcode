@@ -24,7 +24,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { FileIcon } from "@/components/file-icon";
 import { DownloadIcon } from "lucide-react";
 import { fileNameError } from "@/lib/files";
-import { getLanguages } from "@/lib/languages";
+import { getLanguages, type Language } from "@/lib/languages";
 import { useCreateFileMutation } from "@/lib/queries";
 import {
   progressLabel,
@@ -35,15 +35,34 @@ import {
   useRuntimeProgress,
 } from "@/lib/runtimes";
 
+/** Wording for each kind of file: a program in a language, or queries for a database. */
+const KINDS = {
+  program: {
+    description: "Give your program a name and pick its language.",
+    label: "Language",
+    placeholder: "Select a language",
+    noneInstalled: "No languages installed yet. Open Language and download one to get started.",
+  },
+  database: {
+    description: "Give your file a name and pick its database.",
+    label: "Database",
+    placeholder: "Select a database",
+    noneInstalled: "No databases installed yet. Open Database and download one to get started.",
+  },
+};
+
 export function NewFileDialog({
   open,
   onOpenChange,
+  kind,
   userId,
   existingFiles,
   onCreated,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** Offer languages (Programs) or databases (Database). */
+  kind: Language["kind"];
   userId: string;
   existingFiles: string[];
   onCreated: (filename: string) => void;
@@ -53,11 +72,16 @@ export function NewFileDialog({
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>New file</DialogTitle>
-          <DialogDescription>Give your program a name and pick its language.</DialogDescription>
+          <DialogDescription>{KINDS[kind].description}</DialogDescription>
         </DialogHeader>
         {/* Mounted only while open, so the form resets each time. */}
         {open && (
-          <NewFileForm userId={userId} existingFiles={existingFiles} onCreated={onCreated} />
+          <NewFileForm
+            kind={kind}
+            userId={userId}
+            existingFiles={existingFiles}
+            onCreated={onCreated}
+          />
         )}
       </DialogContent>
     </Dialog>
@@ -65,10 +89,12 @@ export function NewFileDialog({
 }
 
 function NewFileForm({
+  kind,
   userId,
   existingFiles,
   onCreated,
 }: {
+  kind: Language["kind"];
   userId: string;
   existingFiles: string[];
   onCreated: (filename: string) => void;
@@ -79,7 +105,8 @@ function NewFileForm({
   const submitting = createFile.isPending;
 
   const runtimes = useInstalledRuntimes();
-  const languages = getLanguages();
+  const languages = getLanguages(kind);
+  const text = KINDS[kind];
   const installed = languages.filter((lang) => runtimes.data?.includes(lang.extension));
   const notInstalled = languages.filter((lang) => !runtimes.data?.includes(lang.extension));
   // Default to the first installed language until the student picks one.
@@ -98,7 +125,11 @@ function NewFileForm({
     createFile.mutate({ name: trimmed, extension }, { onSuccess: onCreated });
   }
 
-  const error = nameError ?? (createFile.isError ? String(createFile.error) : null);
+  // Without this, a failed check would quietly list everything as not installed.
+  const error =
+    nameError ??
+    (createFile.isError ? String(createFile.error) : null) ??
+    (runtimes.isError ? `Could not check what's installed: ${String(runtimes.error)}` : null);
 
   return (
     <form onSubmit={handleSubmit} className="flex flex-col gap-5">
@@ -121,7 +152,7 @@ function NewFileForm({
       </div>
 
       <div className="flex flex-col gap-2">
-        <Label htmlFor="file-language">Language</Label>
+        <Label htmlFor="file-language">{text.label}</Label>
         <Select
           items={languages.map((lang) => ({ value: lang.extension, label: lang.name }))}
           value={extension}
@@ -131,7 +162,7 @@ function NewFileForm({
           }}
         >
           <SelectTrigger id="file-language" className="w-full" disabled={runtimes.isPending}>
-            <SelectValue placeholder="Select a language" />
+            <SelectValue placeholder={text.placeholder} />
           </SelectTrigger>
           <SelectContent>
             {installed.length > 0 && (
@@ -166,9 +197,7 @@ function NewFileForm({
       {error ? (
         <p className="text-xs text-destructive">{error}</p>
       ) : extension === null && runtimes.isSuccess ? (
-        <p className="text-xs text-muted-foreground">
-          No languages installed yet. Open Language and download one to get started.
-        </p>
+        <p className="text-xs text-muted-foreground">{text.noneInstalled}</p>
       ) : (
         trimmed && <p className="text-xs text-muted-foreground">Will be saved as {filename}</p>
       )}

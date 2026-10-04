@@ -1,8 +1,9 @@
 # Adding a language
 
-Languages are data, not code. Supporting a new one means adding entries to
-`catalog.json` and bumping its `version`; the app imports the catalog into its
-database on launch when the version is newer. The only code change ever needed
+Languages (and databases, see [Databases](#databases)) are data, not code.
+Supporting a new one means adding entries to `catalog.json` and bumping its
+`version`; the app imports the catalog into its database on launch when the
+version is newer. The only code change ever needed
 is a new formatter (see [Formatter](#formatter)).
 
 Use Go (`go-1.27.1` / `"go"`) in `catalog.json` as a worked example.
@@ -28,7 +29,7 @@ Use Go (`go-1.27.1` / `"go"`) in `catalog.json` as a worked example.
 
 | Need | Notes |
 |---|---|
-| **Extension** | Lowercase letters and digits, max 16. Also the language's id. |
+| **Extension** | Lowercase letters and digits (dot-separated parts allowed, e.g. `mysql.sql`), max 16. Also the language's id. |
 | **Name** | Shown to students, e.g. `Go`. |
 | **Monaco id** | Editor highlighting. Must be one of [Monaco's languages](https://github.com/microsoft/monaco-editor/tree/main/src/basic-languages), otherwise it shows as plain text. |
 | **Formatter** | One of the app's built-in formatters, or `null`. See [Formatter](#formatter). |
@@ -134,6 +135,54 @@ the new language, it's the one code change:
 Otherwise use `null`: the Format button is then disabled for that language.
 
 ---
+
+## Databases
+
+A database (MySQL so far) is a language entry with `"kind": "database"`. It
+shows in the Database view's New file dialog instead of Programs', and it gets
+its own extension because the extension is the id. Since they're all SQL,
+database extensions end in `.sql`: `queries.mysql.sql`, later `.pgsql.sql`, …
+(an extension may have dots; file names can't, so the first dot splits them).
+Its runtime is the database server, downloaded once per computer like any
+other. Use MySQL (`mysql-8.4.11` / `"mysql.sql"`) as the worked example.
+
+```jsonc
+// In "languages":
+{
+  "extension": "mysql.sql",
+  "kind": "database",
+  "name": "MySQL",
+  "monaco": "mysql",
+  "formatter": null,
+  "runtime": "mysql-8.4.11",
+  "icon": "<svg …>…</svg>",
+  // No compile or run step (yet). Instead, steps that create the signed-in
+  // account's own data folder, {data}, once per account:
+  "setup": [{ "args": ["--no-defaults", "--initialize-insecure",
+                       "--basedir={runtime}", "--datadir={data}"] }]
+}
+```
+
+Setup runs after the download, or on its own when another account on the PC
+already downloaded it. It writes into a scratch folder that's renamed to
+`{data}` only if every step succeeds. Setup steps also get these placeholders:
+
+| Placeholder | Value |
+|---|---|
+| `{data}` | The folder setup must create (it doesn't exist yet) |
+| `{runtime}` | The runtime's install folder, e.g. for MySQL's `--basedir` |
+
+Keep setup self-contained like the runtime: ignore system config files
+(`--no-defaults` for MySQL) and keep the data small, since every account on a
+lab PC gets its own copy (MySQL's `--innodb-redo-log-capacity=8M` makes it
+~100 MB instead of ~190 MB).
+
+**Checksums:** MySQL publishes MD5 files and GPG signatures (`<archive>.md5`,
+`<archive>.asc` next to each download), not SHA-256. Check the archive against
+both, then record the SHA-256 of that verified archive.
+
+**Windows:** MySQL needs the Microsoft Visual C++ runtime, which its zip doesn't
+include. Check on a freshly installed lab PC; without it, "Checking…" fails.
 
 ## 3. Verify
 

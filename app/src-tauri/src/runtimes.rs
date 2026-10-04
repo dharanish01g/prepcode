@@ -26,7 +26,9 @@ use tauri::Manager;
 use tauri::{AppHandle, Emitter, State};
 use tokio::io::AsyncWriteExt;
 
+use crate::auth::CurrentUser;
 use crate::catalog::{self, ArchiveKind, Download, Runtime, Step, Vars};
+use crate::databases;
 use crate::db::Db;
 
 /// Runtimes this app is downloading, so it never installs the same one twice at
@@ -114,21 +116,35 @@ fn runtimes_dir(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(shared_data_dir(app)?.join("runtimes"))
 }
 
+/// The runtime's folder (whether or not it's installed yet).
+pub fn runtime_dir(app: &AppHandle, runtime: &Runtime) -> Result<PathBuf, String> {
+    Ok(runtimes_dir(app)?.join(&runtime.id))
+}
+
 /// Full path of the runtime's executable, if it's installed.
 pub fn executable_path(app: &AppHandle, runtime: &Runtime) -> Result<Option<PathBuf>, String> {
-    let path = runtimes_dir(app)?.join(&runtime.id).join(runtime.executable());
+    let path = runtime_dir(app, runtime)?.join(runtime.executable());
     Ok(path.is_file().then_some(path))
 }
 
-/// Extensions whose runtime is installed on this computer.
+/// Extensions that are ready to use: the runtime is installed on this
+/// computer and, for a database, the signed-in account's data is set up.
 #[tauri::command]
-pub fn list_runtimes(app: AppHandle, db: State<Db>) -> Result<Vec<String>, String> {
+pub fn list_runtimes(
+    app: AppHandle,
+    current: State<CurrentUser>,
+    db: State<Db>,
+) -> Result<Vec<String>, String> {
     let languages = db.with(|conn| catalog::languages(conn))?;
-    let dir = runtimes_dir(&app)?;
+    let account = current.get().ok();
     let mut installed = Vec::new();
     for language in languages {
         let runtime = db.with(|conn| catalog::runtime(conn, &language.runtime))?;
-        if dir.join(&runtime.id).join(runtime.executable()).is_file() {
+        let set_up = match &account {
+            Some(account) => databases::is_set_up(&app, account, &language)?,
+            None => language.setup.is_empty(),
+        };
+        if set_up && executable_path(&app, &runtime)?.is_some() {
             installed.push(language.extension);
         }
     }
@@ -167,30 +183,56 @@ pub fn write_step_files(step: &Step, dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Downloads, verifies and unpacks the runtime for `extension`.
+/// Downloads, verifies and unpacks the runtime for `extension`, then, for a
+/// database, sets up the signed-in account's own data. Another account on
+/// this computer may have downloaded it already; then only the setup runs.
 #[tauri::command]
 pub async fn install_runtime(
     app: AppHandle,
+    current: State<'_, CurrentUser>,
     db: State<'_, Db>,
     installs: State<'_, RuntimeInstalls>,
     extension: String,
 ) -> Result<(), String> {
-    let runtime = db.with(|conn| {
+    let (language, runtime) = db.with(|conn| {
         let language = catalog::language(conn, &extension)?
             .ok_or_else(|| format!("Unsupported language: .{extension}"))?;
-        catalog::runtime(conn, &language.runtime)
+        let runtime = catalog::runtime(conn, &language.runtime)?;
+        Ok((language, runtime))
     })?;
-    if executable_path(&app, &runtime)?.is_some() {
+    let account = current.get()?;
+    let downloaded = executable_path(&app, &runtime)?.is_some();
+    if downloaded && databases::is_set_up(&app, &account, &language)? {
         return Ok(());
     }
-    let download = runtime.download().ok_or("This language isn't available for this computer yet.")?;
 
     if !installs.0.lock().unwrap_or_else(|e| e.into_inner()).insert(runtime.id.clone()) {
         return Err("Already downloading.".into());
     }
     let _guard = InstallGuard { installs: &installs, id: runtime.id.clone() };
 
-    let root = runtimes_dir(&app)?;
+    if !downloaded {
+        download_runtime(&app, &runtime, &extension).await?;
+    }
+    if !language.setup.is_empty() {
+        let _ = app.emit(
+            "runtime-progress",
+            Progress { extension: extension.clone(), stage: "configuring", downloaded: 0, total: 0 },
+        );
+        let exe = executable_path(&app, &runtime)?.ok_or("The download didn't finish. Please try again.")?;
+        tauri::async_runtime::spawn_blocking(move || {
+            databases::set_up(&app, &account, &language, &runtime, &exe)
+        })
+        .await
+        .map_err(|e| format!("Setup failed: {e}"))??;
+    }
+    Ok(())
+}
+
+/// Downloads, verifies and unpacks the runtime into its folder.
+async fn download_runtime(app: &AppHandle, runtime: &Runtime, extension: &str) -> Result<(), String> {
+    let download = runtime.download().ok_or("This language isn't available for this computer yet.")?;
+    let root = runtimes_dir(app)?;
     let work = root.join(".downloads");
     // Named for this process: on Windows another account's prepcode may be
     // installing the same runtime into the same folder right now.
@@ -207,7 +249,7 @@ pub async fn install_runtime(
         let emit = |stage, downloaded, total| {
             let _ = app.emit(
                 "runtime-progress",
-                Progress { extension: extension.clone(), stage, downloaded, total },
+                Progress { extension: extension.to_owned(), stage, downloaded, total },
             );
         };
 
@@ -232,12 +274,12 @@ pub async fn install_runtime(
         // The only step that makes the runtime visible: a single rename.
         // Another copy of prepcode may have finished first; then keep its
         // install (it may be running) and drop ours.
-        if executable_path(&app, &runtime)?.is_some() {
+        if executable_path(app, runtime)?.is_some() {
             return Ok(());
         }
         let _ = fs::remove_dir_all(&target);
         if let Err(e) = fs::rename(&unpacked_root, &target) {
-            if executable_path(&app, &runtime)?.is_some() {
+            if executable_path(app, runtime)?.is_some() {
                 return Ok(());
             }
             return Err(format!("Could not finish installing: {e}"));
@@ -248,7 +290,7 @@ pub async fn install_runtime(
         // still shows "Checking…".
         if !runtime.warmup.is_empty() {
             let (runtime, exe, shared, scratch) =
-                (runtime.clone(), target.join(runtime.executable()), shared_data_dir(&app)?, warmup.clone());
+                (runtime.clone(), target.join(runtime.executable()), shared_data_dir(app)?, warmup.clone());
             let _ =
                 tauri::async_runtime::spawn_blocking(move || run_warmup(&runtime, &exe, &shared, &scratch))
                     .await;
@@ -396,12 +438,13 @@ fn check_runs(exe: &Path, args: &[String]) -> Result<(), String> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     /// Real network install into a temp folder, using the same steps as
-    /// install_runtime. Run with: cargo test -- --ignored
-    fn install_for_this_platform(runtime_id: &str) {
+    /// install_runtime, then `then` with the unpacked runtime's folder.
+    /// Run with: cargo test -- --ignored
+    pub(crate) fn install_for_this_platform(runtime_id: &str, then: impl FnOnce(&Path)) {
         let catalog = catalog::parse(catalog::BUNDLED).unwrap();
         let runtime = catalog.runtimes.iter().find(|r| r.id.starts_with(runtime_id)).unwrap();
         let download = runtime.download().expect("no build for this platform");
@@ -417,6 +460,7 @@ mod tests {
         unpack(&archive, &staging, download.kind).expect("unpack failed");
         let root = single_top_level_dir(&staging).unwrap();
         check_runs(&root.join(runtime.executable()), &runtime.version_args).expect("didn't run");
+        then(&root);
 
         fs::remove_dir_all(&dir).unwrap();
     }
@@ -424,13 +468,13 @@ mod tests {
     #[test]
     #[ignore = "downloads ~20 MB"]
     fn installs_python() {
-        install_for_this_platform("python-");
+        install_for_this_platform("python-", |_| {});
     }
 
     /// Covers the .tar.xz path (Zig is the only runtime shipped that way).
     #[test]
     #[ignore = "downloads ~50 MB"]
     fn installs_zig() {
-        install_for_this_platform("zig-");
+        install_for_this_platform("zig-", |_| {});
     }
 }

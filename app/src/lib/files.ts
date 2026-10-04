@@ -2,8 +2,12 @@ import { invoke } from "@tauri-apps/api/core";
 import { format } from "date-fns";
 import { findLanguage } from "@/lib/languages";
 
+/**
+ * "queries.mysql.sql" -> "mysql.sql". Names never contain a dot, so everything
+ * after the first one is the extension, which may itself have dots.
+ */
 export function extensionOf(filename: string) {
-  return filename.slice(filename.lastIndexOf(".") + 1);
+  return filename.slice(filename.indexOf(".") + 1);
 }
 
 /** Monaco language id for a filename, e.g. "hello.py" -> "python". */

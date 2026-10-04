@@ -48,7 +48,7 @@ const data: { navMain: { title: View; icon: React.ReactNode }[] } = {
   navMain: [
     // Every program by when it was last edited, newest first.
     { title: "Programs", icon: <CodeXmlIcon /> },
-    // Database training, like Programs but for SQL. Coming soon.
+    // Database files (queries), like Programs but for databases such as MySQL.
     { title: "Database", icon: <DatabaseIcon /> },
     // What isn't on GitHub yet, and the Sync button. Students only.
     { title: "Sync", icon: <RefreshCwIcon /> },
@@ -220,7 +220,7 @@ export function AppSidebar({
               {syncing ? <Spinner /> : <RefreshCwIcon />}
               Sync
             </Button>
-          ) : view === "Database" ? null : (
+          ) : (
             <Button size="sm" onClick={() => setNewFileOpen(true)}>
               <PlusIcon />
               New file
@@ -229,6 +229,7 @@ export function AppSidebar({
           <NewFileDialog
             open={newFileOpen}
             onOpenChange={setNewFileOpen}
+            kind={view === "Database" ? "database" : "program"}
             userId={session.id}
             existingFiles={files}
             onCreated={(filename) => {
@@ -238,7 +239,7 @@ export function AppSidebar({
             }}
           />
         </SidebarHeader>
-        {view === "Programs" && (
+        {(view === "Programs" || view === "Database") && (
           <SidebarHeader className="p-4 pb-0">
             <SidebarInput
               placeholder="Search files..."
@@ -248,12 +249,11 @@ export function AppSidebar({
           </SidebarHeader>
         )}
         <SidebarContent className="py-2">
-          {view === "Database" ? (
-            <p className="px-4 py-2 text-sm text-muted-foreground">Coming soon.</p>
-          ) : view === "Sync" ? (
+          {view === "Sync" ? (
             <SyncList status={syncStatus} selectedFile={selectedFile} onSelectFile={onSelectFile} />
           ) : (
             <HistoryList
+              kind={view === "Database" ? "database" : "program"}
               userId={session.id}
               search={query}
               pulling={pulling}

@@ -1,5 +1,6 @@
 mod auth;
 mod catalog;
+mod databases;
 mod db;
 mod files;
 mod github;

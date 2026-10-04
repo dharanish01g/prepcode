@@ -8,7 +8,8 @@ import {
   SidebarMenuSkeleton,
 } from "@/components/ui/sidebar";
 import { Skeleton } from "@/components/ui/skeleton";
-import type { FileHistoryEntry } from "@/lib/files";
+import { extensionOf, type FileHistoryEntry } from "@/lib/files";
+import { findLanguage, type Language } from "@/lib/languages";
 import { useFileHistoryQuery } from "@/lib/queries";
 
 function dayLabel(day: Date) {
@@ -29,8 +30,9 @@ function groupByDay(entries: FileHistoryEntry[]) {
   return groups;
 }
 
-/** Every program, grouped by the day it was last edited, newest first. */
+/** Every program (or database file), grouped by the day it was last edited, newest first. */
 export function HistoryList({
+  kind,
   userId,
   search,
   pulling,
@@ -39,6 +41,8 @@ export function HistoryList({
   onRename,
   onDelete,
 }: {
+  /** Programs or database files: each has its own view. */
+  kind: Language["kind"];
   userId: string;
   /** Lowercased search text; empty shows everything. */
   search: string;
@@ -58,17 +62,18 @@ export function HistoryList({
       </p>
     );
   }
+  const files = history.data?.filter((e) => findLanguage(extensionOf(e.filename))?.kind === kind);
   // Files already here show right away; the ones from GitHub join when they arrive.
-  if (!history.isSuccess || (pulling && history.data.length === 0)) {
+  if (!files || (pulling && files.length === 0)) {
     return <HistoryListSkeleton />;
   }
 
-  const entries = history.data.filter((e) => e.filename.toLowerCase().includes(search));
+  const entries = files.filter((e) => e.filename.toLowerCase().includes(search));
   if (entries.length === 0) {
     return (
       <p className="px-4 py-2 text-sm text-muted-foreground">
-        {history.data.length === 0
-          ? "No programs yet. Click New file to create one."
+        {files.length === 0
+          ? `No ${kind === "program" ? "programs" : "database files"} yet. Click New file to create one.`
           : "No files match your search."}
       </p>
     );
@@ -100,7 +105,7 @@ export function HistoryList({
 /** Stands in for the list while it loads, or while files come from GitHub. */
 function HistoryListSkeleton() {
   return (
-    <SidebarGroup className="py-0" aria-busy="true" aria-label="Loading your programs">
+    <SidebarGroup className="py-0" aria-busy="true" aria-label="Loading your files">
       {/* Matches SidebarGroupLabel's height, with a day-label-sized bar in it. */}
       <div className="flex h-8 items-center px-2">
         <Skeleton className="h-3 w-16" />

@@ -43,7 +43,7 @@ export function PracticeScreen() {
     .find((c) => c.slug === categorySlug);
   const questions = QUESTIONS.filter((q) => q.category === categorySlug);
   const question = questions.find((q) => q.slug === slug);
-  const languages = getLanguages();
+  const languages = getLanguages("program");
 
   function showCategories() {
     setCategorySlug(null);

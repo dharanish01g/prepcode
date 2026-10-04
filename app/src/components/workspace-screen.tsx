@@ -5,7 +5,6 @@ import { CodeEditor } from "@/components/code-editor";
 import { FileIcon } from "@/components/file-icon";
 import { ConsolePanel } from "@/components/console-panel";
 import { GuestLogoutDialog } from "@/components/guest-logout-dialog";
-import { DatabaseScreen } from "@/components/database-screen";
 import { JobsScreen } from "@/components/jobs-screen";
 import { PracticeScreen } from "@/components/practice-screen";
 import { SaveStatus } from "@/components/save-status";
@@ -35,14 +34,18 @@ import { Separator } from "@/components/ui/separator";
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { displayName, type Session } from "@/lib/auth";
 import { allowClose, isCloseBlocked, setCloseGuarded } from "@/lib/close-guard";
-import { exportGuestFiles, whenSavesSettled } from "@/lib/files";
+import { exportGuestFiles, extensionOf, whenSavesSettled } from "@/lib/files";
+import { findLanguage } from "@/lib/languages";
 import { useFilesQuery, useSyncStatusQuery } from "@/lib/queries";
 import { unsyncedCount } from "@/lib/sync";
 import logo from "@/assets/logo.png";
 
 export function WorkspaceScreen({ session, onLogout }: { session: Session; onLogout: () => void }) {
-  const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [view, setView] = useState<View>("Programs");
+  // Programs and Sync share the open file; Database keeps its own, so each
+  // view comes back to the file it had open.
+  const [programFile, setProgramFile] = useState<string | null>(null);
+  const [databaseFile, setDatabaseFile] = useState<string | null>(null);
   // Practice and Jobs use the whole main area, so the sidebar's second column
   // stays hidden there, and comes back as it was when leaving.
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -57,7 +60,14 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
   const runner = useRunner();
   const syncStatus = useSyncStatusQuery(session.id, !session.guest);
   const unsynced = unsyncedCount(syncStatus.data);
-  const guestFiles = useFilesQuery(session.id).data?.length ?? 0;
+  const files = useFilesQuery(session.id).data;
+  const guestFiles = files?.length ?? 0;
+  // Syncing (from the Sync view) closes Programs' file if it deletes it;
+  // Database's file is closed here instead once it's gone.
+  const openDatabaseFile =
+    databaseFile && files && !files.includes(databaseFile) ? null : databaseFile;
+  const selectedFile = view === "Database" ? openDatabaseFile : programFile;
+  const setSelectedFile = view === "Database" ? setDatabaseFile : setProgramFile;
   const sync = useSync({
     userId: session.id,
     selectedFile,
@@ -117,6 +127,11 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
   // Always run what's on screen: save pending edits first.
   // The open program's console. Another program may be running meanwhile.
   const fileConsole = selectedFile ? runner.consoleFor(selectedFile) : null;
+  // Only programs run, and only in Programs: Sync is for reviewing changes,
+  // and running queries comes to Database later. (Sync can open any file.)
+  const runnable =
+    view === "Programs" &&
+    (!selectedFile || findLanguage(extensionOf(selectedFile))?.kind === "program");
 
   async function handleRun() {
     if (!selectedFile) return;
@@ -163,9 +178,7 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
           Monaco's pixel width (set while collapsed) holds it wide and pushes
           the header, including Run, off screen. */}
       <SidebarInset className="min-h-0 min-w-0">
-        {view === "Database" ? (
-          <DatabaseScreen />
-        ) : view === "Practice" ? (
+        {view === "Practice" ? (
           <PracticeScreen />
         ) : view === "Jobs" ? (
           // A guest logs in by logging out of the guest session.
@@ -211,7 +224,7 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
                 {formatting ? <Spinner /> : <WandSparklesIcon />}
                 Format
               </Button>
-              {view === "Sync" ? null : fileConsole?.loading && !fileConsole.loadingLong ? (
+              {!runnable ? null : fileConsole?.loading && !fileConsole.loadingLong ? (
                 // Until the console shows the output (see MIN_LOADING_MS).
                 <Button disabled>
                   <Spinner />
@@ -241,8 +254,7 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
                     formatRef={formatEditorRef}
                   />
                 </ResizablePanel>
-                {/* Sync is for reviewing changes, so no console (or Run) there. */}
-                {view !== "Sync" && (
+                {runnable && (
                   <>
                     <ResizableHandle withHandle />
                     <ResizablePanel id="console" defaultSize="30%" minSize="10%">
@@ -271,7 +283,9 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
                     prepcode
                   </EmptyTitle>
                   <EmptyDescription className="text-sm">
-                    Create or select a file to start coding.
+                    {view === "Database"
+                      ? "Create or select a file to write your queries."
+                      : "Create or select a file to start coding."}
                     {session.guest && (
                       <>
                         <br />

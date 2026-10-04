@@ -1,5 +1,6 @@
-//! The language catalog: which languages prepcode supports, the runtime that
-//! runs each one, and how to compile and run a program in it.
+//! The language catalog: which languages and databases prepcode supports, the
+//! runtime behind each one, and how to compile and run a program in it (or, for
+//! a database, how to set up each account's own data).
 //!
 //! Nothing here knows about any particular language. Everything comes from a
 //! catalog document (see `catalog/catalog.json`), imported into the database.
@@ -102,10 +103,22 @@ pub struct Step {
     pub files: BTreeMap<String, String>,
 }
 
+/// Programs are written and run in the Programs view; database files (queries)
+/// in the Database view.
+#[derive(Clone, Copy, Default, PartialEq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Kind {
+    #[default]
+    Program,
+    Database,
+}
+
 #[derive(Clone, Deserialize)]
 pub struct Language {
     /// File extension, e.g. "py". Also the language's id.
     pub extension: String,
+    #[serde(default)]
+    pub kind: Kind,
     /// Shown to students, e.g. "Python".
     pub name: String,
     /// Monaco editor language id.
@@ -121,7 +134,13 @@ pub struct Language {
     /// Optional compile step. It must write the program to `{binary}`.
     #[serde(default)]
     pub compile: Option<Step>,
-    pub run: Step,
+    /// How to run a program. Databases have none (yet).
+    #[serde(default)]
+    pub run: Option<Step>,
+    /// Databases only: commands that create an account's own data folder,
+    /// `{data}`, run once per account (see databases.rs).
+    #[serde(default)]
+    pub setup: Vec<Step>,
 }
 
 fn db_err(e: rusqlite::Error) -> String {
@@ -148,6 +167,15 @@ fn validate_step(step: &Step, what: &str) -> Result<(), String> {
         Some(name) => Err(format!("{what}: invalid file name {name:?}")),
         None => Ok(()),
     }
+}
+
+/// Lowercase letters and digits, optionally in dot-separated parts, e.g. `py`
+/// or `mysql.sql` (each database names its files `<name>.<database>.sql`).
+fn is_valid_extension(ext: &str) -> bool {
+    ext.len() <= 16
+        && ext.split('.').all(|part| {
+            !part.is_empty() && part.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+        })
 }
 
 /// Rejects a catalog that could escape prepcode's folders or skip verification.
@@ -184,10 +212,7 @@ pub fn validate(catalog: &Catalog) -> Result<(), String> {
     let mut extensions = HashSet::new();
     for language in &catalog.languages {
         let ext = &language.extension;
-        if ext.is_empty()
-            || ext.len() > 16
-            || !ext.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
-        {
+        if !is_valid_extension(ext) {
             return Err(format!("Invalid extension {ext:?}"));
         }
         if !extensions.insert(ext.as_str()) {
@@ -199,10 +224,26 @@ pub fn validate(catalog: &Catalog) -> Result<(), String> {
         if !runtime_ids.contains(language.runtime.as_str()) {
             return Err(format!("Language .{ext} uses unknown runtime {}", language.runtime));
         }
-        if let Some(compile) = &language.compile {
-            validate_step(compile, &format!("Language .{ext} compile"))?;
+        match language.kind {
+            Kind::Program => {
+                let run = language.run.as_ref().ok_or_else(|| format!("Language .{ext} has no run step"))?;
+                validate_step(run, &format!("Language .{ext} run"))?;
+                if let Some(compile) = &language.compile {
+                    validate_step(compile, &format!("Language .{ext} compile"))?;
+                }
+                if !language.setup.is_empty() {
+                    return Err(format!("Language .{ext}: only databases have setup steps"));
+                }
+            }
+            Kind::Database => {
+                if language.compile.is_some() || language.run.is_some() {
+                    return Err(format!("Database .{ext} can't have compile or run steps"));
+                }
+                for step in &language.setup {
+                    validate_step(step, &format!("Database .{ext} setup"))?;
+                }
+            }
         }
-        validate_step(&language.run, &format!("Language .{ext} run"))?;
     }
     Ok(())
 }
@@ -272,10 +313,11 @@ pub fn import(conn: &mut Connection, catalog: &Catalog) -> Result<bool, String> 
     for (position, language) in catalog.languages.iter().enumerate() {
         tx.execute(
             "INSERT INTO languages
-               (extension, position, name, monaco, formatter, icon, runtime_id, compile, run)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+               (extension, kind, position, name, monaco, formatter, icon, runtime_id, compile, run, setup)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             params![
                 language.extension,
+                to_json(&language.kind),
                 position as i64,
                 language.name,
                 language.monaco,
@@ -283,7 +325,8 @@ pub fn import(conn: &mut Connection, catalog: &Catalog) -> Result<bool, String> 
                 language.icon,
                 language.runtime,
                 language.compile.as_ref().map(to_json),
-                to_json(&language.run),
+                language.run.as_ref().map(to_json),
+                to_json(&language.setup),
             ],
         )
         .map_err(db_err)?;
@@ -300,22 +343,24 @@ pub fn import(conn: &mut Connection, catalog: &Catalog) -> Result<bool, String> 
 }
 
 const LANGUAGE_COLUMNS: &str =
-    "extension, name, monaco, formatter, icon, runtime_id, compile, run FROM languages";
+    "extension, kind, name, monaco, formatter, icon, runtime_id, compile, run, setup FROM languages";
 
 fn language_from_row(row: &rusqlite::Row) -> rusqlite::Result<Language> {
     Ok(Language {
         extension: row.get(0)?,
-        name: row.get(1)?,
-        monaco: row.get(2)?,
-        formatter: row.get(3)?,
-        icon: row.get(4)?,
-        runtime: row.get(5)?,
-        compile: row.get::<_, Option<String>>(6)?.map(|raw| from_json(6, raw)).transpose()?,
-        run: from_json(7, row.get(7)?)?,
+        kind: from_json(1, row.get(1)?)?,
+        name: row.get(2)?,
+        monaco: row.get(3)?,
+        formatter: row.get(4)?,
+        icon: row.get(5)?,
+        runtime: row.get(6)?,
+        compile: row.get::<_, Option<String>>(7)?.map(|raw| from_json(7, raw)).transpose()?,
+        run: row.get::<_, Option<String>>(8)?.map(|raw| from_json(8, raw)).transpose()?,
+        setup: from_json(9, row.get(9)?)?,
     })
 }
 
-/// Every supported language, in display order.
+/// Every supported language and database, in display order.
 pub fn languages(conn: &Connection) -> Result<Vec<Language>, String> {
     let mut stmt = conn.prepare(&format!("SELECT {LANGUAGE_COLUMNS} ORDER BY position")).map_err(db_err)?;
     let rows = stmt.query_map([], language_from_row).map_err(db_err)?;
@@ -382,6 +427,7 @@ pub fn runtime(conn: &Connection, id: &str) -> Result<Runtime, String> {
 #[derive(Serialize)]
 pub struct LanguageInfo {
     extension: String,
+    kind: Kind,
     name: String,
     monaco: String,
     formatter: Option<String>,
@@ -390,7 +436,7 @@ pub struct LanguageInfo {
     runtime: String,
 }
 
-/// Every supported language, in display order.
+/// Every supported language and database, in display order.
 #[tauri::command]
 pub fn list_languages(db: State<Db>) -> Result<Vec<LanguageInfo>, String> {
     let languages = db.with(|conn| languages(conn))?;
@@ -398,6 +444,7 @@ pub fn list_languages(db: State<Db>) -> Result<Vec<LanguageInfo>, String> {
         .into_iter()
         .map(|l| LanguageInfo {
             extension: l.extension,
+            kind: l.kind,
             name: l.name,
             monaco: l.monaco,
             formatter: l.formatter,
@@ -459,10 +506,11 @@ mod tests {
 
         let languages = languages(&conn).unwrap();
         let exts: Vec<_> = languages.iter().map(|l| l.extension.as_str()).collect();
-        assert_eq!(exts, ["py", "js", "c", "cpp", "java", "go"]);
+        assert_eq!(exts, ["py", "js", "c", "cpp", "java", "go", "mysql.sql"]);
 
         let c = language(&conn, "c").unwrap().unwrap();
-        assert_eq!(c.run.program.as_deref(), Some("{binary}"));
+        assert_eq!(c.kind, Kind::Program);
+        assert_eq!(c.run.unwrap().program.as_deref(), Some("{binary}"));
         assert!(c.compile.unwrap().files.contains_key("prepcode_prelude.h"));
 
         let zig = runtime(&conn, &c.runtime).unwrap();
@@ -470,6 +518,12 @@ mod tests {
         assert_eq!(zig.warmup.len(), 2);
         assert!(is_supported(&conn, "java").unwrap());
         assert!(!is_supported(&conn, "rb").unwrap());
+
+        let mysql = language(&conn, "mysql.sql").unwrap().unwrap();
+        assert_eq!(mysql.kind, Kind::Database);
+        assert!(mysql.run.is_none());
+        assert_eq!(mysql.setup.len(), 1);
+        assert_eq!(runtime(&conn, &mysql.runtime).unwrap().downloads.len(), 4);
     }
 
     #[test]
@@ -504,6 +558,25 @@ mod tests {
         let mut bad = bundled();
         bad.runtimes[0].downloads[0].url = "http://example.com/x.tar.gz".into();
         assert!(validate(&bad).is_err());
+
+        let mut bad = bundled();
+        bad.languages[0].run = None;
+        assert!(validate(&bad).is_err());
+
+        let mut bad = bundled();
+        let mysql = bad.languages.iter_mut().find(|l| l.kind == Kind::Database).unwrap();
+        mysql.setup[0].files.insert("../my.cnf".into(), String::new());
+        assert!(validate(&bad).is_err());
+    }
+
+    #[test]
+    fn checks_extensions() {
+        for ok in ["py", "cpp", "mysql.sql", "x2"] {
+            assert!(is_valid_extension(ok), "{ok}");
+        }
+        for bad in ["", ".sql", "mysql.", "mysql..sql", "SQL", "my-sql", "a/b", "abcdefghij.sqlxyz"] {
+            assert!(!is_valid_extension(bad), "{bad}");
+        }
     }
 
     #[test]
