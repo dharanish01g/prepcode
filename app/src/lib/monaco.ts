@@ -27,6 +27,61 @@ export const EDITOR_PADDING = { top: 10, bottom: 10 };
 // selections stay aligned with the text.
 onZoomApplied(() => monaco.editor.remeasureFonts());
 
+/**
+ * Editor options that keep students from copying or pasting code: no
+ * right-click menu, no dragging text around, and no Linux middle-click paste.
+ */
+export const NO_CLIPBOARD_OPTIONS = {
+  contextmenu: false,
+  dragAndDrop: false,
+  selectionClipboard: false,
+} satisfies monaco.editor.IStandaloneEditorConstructionOptions;
+
+// Typing and IME composition still go through; only these are blocked.
+const CLIPBOARD_INPUT_TYPES = new Set([
+  "insertFromPaste",
+  "insertFromPasteAsQuotation",
+  "insertFromDrop",
+  "insertFromYank",
+  "deleteByCut",
+  "deleteByDrag",
+]);
+
+/**
+ * Turns off copy, cut, paste and right-click inside an editor, on every OS.
+ * Pair with NO_CLIPBOARD_OPTIONS.
+ */
+export function blockClipboard(editor: monaco.editor.IStandaloneCodeEditor) {
+  const { KeyMod, KeyCode } = monaco;
+  // CtrlCmd is Cmd on macOS and Ctrl on Windows and Linux. The Insert/Delete
+  // shortcuts are the older Windows and Linux ones.
+  for (const keybinding of [
+    KeyMod.CtrlCmd | KeyCode.KeyC,
+    KeyMod.CtrlCmd | KeyCode.KeyX,
+    KeyMod.CtrlCmd | KeyCode.KeyV,
+    KeyMod.CtrlCmd | KeyMod.Shift | KeyCode.KeyV,
+    KeyMod.CtrlCmd | KeyCode.Insert,
+    KeyMod.Shift | KeyCode.Insert,
+    KeyMod.Shift | KeyCode.Delete,
+  ]) {
+    editor.addCommand(keybinding, () => {});
+  }
+
+  // Shortcuts aren't the only way in: the macOS Edit menu, the webview's own
+  // right-click menu and dropping text from elsewhere all arrive as these
+  // events, so stop them before Monaco sees them.
+  const node = editor.getDomNode();
+  if (!node) return;
+  const block = (e: Event) => {
+    if (e instanceof InputEvent && !CLIPBOARD_INPUT_TYPES.has(e.inputType)) return;
+    e.preventDefault();
+    e.stopPropagation();
+  };
+  for (const type of ["copy", "cut", "paste", "contextmenu", "dragover", "drop", "beforeinput"]) {
+    node.addEventListener(type, block, true);
+  }
+}
+
 /** Frees every open file's text, cursor and undo history (on logout). */
 export function disposeEditorModels() {
   for (const model of monaco.editor.getModels()) model.dispose();

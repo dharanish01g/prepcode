@@ -1,7 +1,13 @@
 import { useCallback, useLayoutEffect, useRef } from "react";
 import Editor, { type OnMount } from "@monaco-editor/react";
 import { toast } from "sonner";
-import { EDITOR_FONT_SIZE, EDITOR_PADDING, editorModelPath } from "@/lib/monaco";
+import {
+  blockClipboard,
+  EDITOR_FONT_SIZE,
+  EDITOR_PADDING,
+  editorModelPath,
+  NO_CLIPBOARD_OPTIONS,
+} from "@/lib/monaco";
 import { useIsDark } from "@/hooks/use-theme";
 import { monacoLanguageOf } from "@/lib/files";
 import { formatCode, NoFormatterError } from "@/lib/format";
@@ -150,6 +156,7 @@ function FileEditor({
       loading={null}
       onMount={(editor, monaco) => {
         editorRef.current = editor;
+        blockClipboard(editor);
         // Shift+Alt+F, the same shortcut as VS Code's Format Document.
         editor.addAction({
           id: "prepcode.format",
@@ -164,6 +171,7 @@ function FileEditor({
         timer.current = setTimeout(flush, AUTOSAVE_DELAY_MS);
       }}
       options={{
+        ...NO_CLIPBOARD_OPTIONS,
         fontSize: EDITOR_FONT_SIZE,
         padding: EDITOR_PADDING,
         minimap: { enabled: false },
