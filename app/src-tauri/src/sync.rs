@@ -270,7 +270,9 @@ pub async fn sync_now(
     let Ok(_guard) = lock.0.try_lock() else {
         return Err("Already syncing.".into());
     };
-    sync(&app, &db, &workspace_lock, &user, true).await
+    let result = sync(&app, &db, &workspace_lock, &user, true).await;
+    log_sync("Sync", &result);
+    result
 }
 
 /// Brings down what changed on GitHub without pushing anything (at sign-in).
@@ -284,7 +286,26 @@ pub async fn pull_from_github(
 ) -> Result<SyncReport, String> {
     let user = require_student(&current)?;
     let _guard = lock.0.lock().await;
-    sync(&app, &db, &workspace_lock, &user, false).await
+    let result = sync(&app, &db, &workspace_lock, &user, false).await;
+    log_sync("Pull from GitHub", &result);
+    result
+}
+
+/// Counts only for Sentry; the error (which may name a file) in the log file only.
+fn log_sync(what: &str, result: &Result<SyncReport, String>) {
+    match result {
+        Ok(report) => log::info!(
+            "{what}: {} pushed, {} updated, {} deleted, {} conflicts",
+            report.pushed,
+            report.updated.len(),
+            report.deleted.len(),
+            report.conflicts.len()
+        ),
+        Err(e) => {
+            log::warn!("{what} failed");
+            log::warn!(target: crate::reporting::LOCAL, "{what} failed: {e}");
+        }
+    }
 }
 
 async fn sync(

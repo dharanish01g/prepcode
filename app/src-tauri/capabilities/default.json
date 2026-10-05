@@ -10,6 +10,8 @@
     "opener:default",
     "updater:default",
     "process:default",
+    "sentry:default",
+    "log:default",
     "core:window:allow-close",
     "core:window:allow-destroy",
     "core:webview:allow-set-webview-zoom"

@@ -199,7 +199,8 @@ pub async fn run_queries(
     }
     // Not started yet, or it stopped (crashed, or killed from outside).
     if !guard.as_mut().is_some_and(|server| matches!(server.process.try_wait(), Ok(None))) {
-        *guard = Some(start(&app, &account, &language, &runtime).await?);
+        let server = start(&app, &account, &language, &runtime).await;
+        *guard = Some(server.inspect_err(|e| log::error!("Could not start {}: {e}", runtime.id))?);
     }
     let server = guard.as_mut().expect("started above");
     let mut conn = server.take_session().await?;

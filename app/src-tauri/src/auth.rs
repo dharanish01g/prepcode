@@ -166,7 +166,7 @@ pub async fn restore_session(
         // E.g. a locked keychain, or no secret service on Linux: show the
         // sign-in screen, but keep the saved sign-in for when it works again.
         Err(e) => {
-            eprintln!("{e}");
+            log::error!("Could not read the saved sign-in: {e}");
             return Ok(None);
         }
     };
@@ -181,10 +181,11 @@ pub async fn restore_session(
             save_account(&db, &user)?;
         }
         Ok(_) | Err(GitHubError::Unauthorized) => {
+            log::info!("The saved GitHub sign-in no longer works; signed out");
             forget_sign_in(&db).await?;
             return Ok(None);
         }
-        Err(_) => {}
+        Err(e) => log::warn!("Could not check the saved sign-in with GitHub, so it's trusted: {e:?}"),
     }
     open_workspace(&app, &db, &current, &student_id(&user))?;
     Ok(Some(Session::student(&user)))
@@ -228,7 +229,7 @@ pub async fn start_github_sign_in(app: AppHandle, sign_in: State<'_, SignIn>) ->
     *sign_in.lock() = Some(PendingSignIn { attempt, code: code.clone() });
     // The dialog's Open GitHub button tries again if this fails.
     if let Err(e) = app.opener().open_url(&code.verification_uri, None::<&str>) {
-        eprintln!("Could not open the browser: {e}");
+        log::warn!("Could not open the browser: {e}");
     }
     Ok(code)
 }
@@ -316,7 +317,7 @@ pub async fn logout(
         return Ok(());
     }
     if let Err(e) = sync::remove_synced_files(&app, &db, &id) {
-        eprintln!("Could not remove synced files: {e}");
+        log::error!("Could not remove synced files: {e}");
     }
     forget_sign_in(&db).await
 }

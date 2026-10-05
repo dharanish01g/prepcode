@@ -4,6 +4,7 @@ mod databases;
 mod db;
 mod files;
 mod github;
+mod reporting;
 mod run;
 mod runtimes;
 mod sql;
@@ -13,6 +14,9 @@ use tauri::{Manager, RunEvent};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // First, so a panic from here on is reported.
+    let sentry = reporting::init_sentry();
+
     tauri::Builder::default()
         // Must come first. A second copy would delete the first one's guest
         // files when it starts and exits, so focus the open window instead.
@@ -23,6 +27,7 @@ pub fn run() {
                 let _ = window.set_focus();
             }
         }))
+        .plugin(tauri_plugin_sentry::init(&sentry))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
@@ -34,7 +39,11 @@ pub fn run() {
         .manage(sql::Servers::default())
         .manage(files::WorkspaceLock::default())
         .setup(|app| {
+            reporting::init_logging(app.handle())?;
             app.manage(db::open(app.handle())?);
+            if let Err(e) = runtimes::check_installed(app.handle(), &app.state::<db::Db>()) {
+                log::error!("Could not check the installed languages: {e}");
+            }
             // Guest files from a session that ended without a clean exit.
             auth::delete_guest_files(app.handle());
             Ok(())
@@ -75,6 +84,7 @@ pub fn run() {
                 // Before deleting guest files: a running server holds its own.
                 tauri::async_runtime::block_on(app.state::<sql::Servers>().stop());
                 auth::delete_guest_files(app);
+                reporting::flush();
             }
         });
 }

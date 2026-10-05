@@ -79,6 +79,7 @@ pub async fn run_program(
         Ok((language, runtime))
     })?;
     let exe = executable_path(&app, &runtime)?.ok_or_else(|| {
+        log::warn!("Can't run a .{extension} file: {} isn't installed", runtime.id);
         format!("{} isn't installed yet. Click New file, open Language, and download it.", language.name)
     })?;
 
