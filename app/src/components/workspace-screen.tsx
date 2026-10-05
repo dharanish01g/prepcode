@@ -9,6 +9,7 @@ import { ResultsPanel } from "@/components/results-panel";
 import { GuestLogoutDialog } from "@/components/guest-logout-dialog";
 import { JobsScreen } from "@/components/jobs-screen";
 import { PracticeScreen } from "@/components/practice-screen";
+import { QuestionsScreen } from "@/components/questions-screen";
 import { RepoSetupSteps } from "@/components/repo-setup";
 import { SaveStatus } from "@/components/save-status";
 import { UnsyncedDialog } from "@/components/unsynced-dialog";
@@ -51,16 +52,19 @@ import { useFilesQuery, useSyncStatusQuery } from "@/lib/queries";
 import { unsyncedCount } from "@/lib/sync";
 import logo from "@/assets/logo.png";
 
+const FULL_SCREEN_VIEWS: View[] = ["Practice", "Jobs"];
+
 export function WorkspaceScreen({ session, onLogout }: { session: Session; onLogout: () => void }) {
   const [view, setView] = useState<View>("Programs");
   // Programs and Sync share the open file; Database keeps its own, so each
   // view comes back to the file it had open.
   const [programFile, setProgramFile] = useState<string | null>(null);
   const [databaseFile, setDatabaseFile] = useState<string | null>(null);
+  const [question, setQuestion] = useState<string | null>(null);
   // Practice and Jobs use the whole main area, so the sidebar's second column
   // stays hidden there, and comes back as it was when leaving.
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const fullScreen = view === "Practice" || view === "Jobs";
+  const fullScreen = FULL_SCREEN_VIEWS.includes(view);
   const flushEditorRef = useRef<() => void>(() => {});
   const formatEditorRef = useRef<() => Promise<void>>(async () => {});
   const cursorLineRef = useRef<() => number | null>(() => null);
@@ -171,7 +175,7 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
 
   function handleViewChange(next: View) {
     setView(next);
-    if (next !== "Practice" && next !== "Jobs") setSidebarOpen(true);
+    if (!FULL_SCREEN_VIEWS.includes(next)) setSidebarOpen(true);
   }
 
   return (
@@ -202,6 +206,8 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
         unsynced={unsynced}
         syncing={sync.syncing}
         onSync={sync.sync}
+        selectedQuestion={question}
+        onSelectQuestion={setQuestion}
       />
       {/* min-w-0: let the main area shrink when the sidebar expands. Without it,
           Monaco's pixel width (set while collapsed) holds it wide and pushes
@@ -209,6 +215,8 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
       <SidebarInset className="min-h-0 min-w-0">
         {view === "Practice" ? (
           <PracticeScreen />
+        ) : view === "Questions" ? (
+          <QuestionsScreen selectedQuestion={question} />
         ) : view === "Jobs" ? (
           // A guest logs in by logging out of the guest session.
           <JobsScreen guest={session.guest} onLogin={() => setGuestAction("log out")} />

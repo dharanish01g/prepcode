@@ -14,11 +14,10 @@ import {
   SquareTerminalIcon,
   StarIcon,
 } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
 import { Card, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
-import type { Question, Section } from "@/lib/practice";
+import type { Section } from "@/lib/practice";
 import { cn } from "@/lib/utils";
 
 // The icons a category's `icon` column can name. Others show a folder, so add
@@ -48,16 +47,8 @@ export const PRACTICE_COLUMN = "mx-auto w-full max-w-[61rem] p-4";
 // window would resize on every frame while the sidebar column slides shut.
 const CARD_GRID = "grid grid-cols-[repeat(auto-fill,--spacing(56))] justify-center gap-4";
 
-/** The categories as square cards under their sections, to pick which questions to see. */
-export function PracticeCategories({
-  sections,
-  questions,
-  onSelect,
-}: {
-  sections: Section[];
-  questions: Question[];
-  onSelect: (slug: string) => void;
-}) {
+/** The categories as square cards under their sections. */
+export function PracticeCategories({ sections }: { sections: Section[] }) {
   return (
     <ScrollArea className="min-h-0 flex-1">
       {/* One grid: each heading spans a whole row, so it lines up with the
@@ -70,44 +61,27 @@ export function PracticeCategories({
               <h2 className={cn("col-span-full text-sm font-medium", i > 0 && "mt-4")}>
                 {section.title}
               </h2>
-              {section.categories.map((category) => {
-                const count = questions.filter((q) => q.category === category.slug).length;
-                return (
-                  <button
-                    key={category.slug}
-                    type="button"
-                    className="text-left"
-                    // Nothing to open until the category has questions.
-                    disabled={count === 0}
-                    onClick={() => onSelect(category.slug)}
-                  >
-                    <Card className="size-56">
-                      <CardHeader>
-                        {category.logoUrl ? (
-                          <img src={category.logoUrl} alt="" className="size-4" />
-                        ) : (
-                          ((category.icon && CATEGORY_ICONS[category.icon]) ?? <FolderIcon />)
-                        )}
-                        <CardTitle>{category.title}</CardTitle>
-                        <CardDescription>{category.description}</CardDescription>
-                      </CardHeader>
-                      <CardFooter className="mt-auto">
-                        {count === 0 ? (
-                          <Badge variant="secondary">Coming soon</Badge>
-                        ) : (
-                          `${count} ${count === 1 ? "question" : "questions"}`
-                        )}
-                        {category.premium && (
-                          <StarIcon
-                            aria-label="Paid content"
-                            className="ml-auto size-3.5 fill-amber-500 text-amber-500"
-                          />
-                        )}
-                      </CardFooter>
-                    </Card>
-                  </button>
-                );
-              })}
+              {section.categories.map((category) => (
+                <Card key={category.slug} className="size-56">
+                  <CardHeader>
+                    {category.logoUrl ? (
+                      <img src={category.logoUrl} alt="" className="size-4" />
+                    ) : (
+                      ((category.icon && CATEGORY_ICONS[category.icon]) ?? <FolderIcon />)
+                    )}
+                    <CardTitle>{category.title}</CardTitle>
+                    <CardDescription>{category.description}</CardDescription>
+                  </CardHeader>
+                  {category.premium && (
+                    <CardFooter className="mt-auto">
+                      <StarIcon
+                        aria-label="Paid content"
+                        className="ml-auto size-3.5 fill-amber-500 text-amber-500"
+                      />
+                    </CardFooter>
+                  )}
+                </Card>
+              ))}
             </Fragment>
           ))}
       </div>

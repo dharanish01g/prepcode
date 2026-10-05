@@ -7,6 +7,7 @@ import { NavUser } from "@/components/nav-user";
 import { ProfileDialog } from "@/components/profile-dialog";
 import { DeleteFileDialog } from "@/components/delete-file-dialog";
 import { HistoryList } from "@/components/history-list";
+import { QuestionList } from "@/components/question-list";
 import { SyncList } from "@/components/sync-list";
 import { NewFileDialog } from "@/components/new-file-dialog";
 import { RenameFileDialog } from "@/components/rename-file-dialog";
@@ -33,6 +34,7 @@ import {
   BookCheckIcon,
   CodeXmlIcon,
   DatabaseIcon,
+  ListChecksIcon,
   PlusIcon,
   MoonIcon,
   RefreshCwIcon,
@@ -42,7 +44,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { useTheme } from "@/hooks/use-theme";
 import logo from "@/assets/logo.png";
 
-export type View = "Programs" | "Database" | "Sync" | "Practice" | "Jobs";
+export type View = "Programs" | "Database" | "Sync" | "Practice" | "Questions" | "Jobs";
 
 const data: { navMain: { title: View; icon: React.ReactNode }[] } = {
   navMain: [
@@ -54,6 +56,9 @@ const data: { navMain: { title: View; icon: React.ReactNode }[] } = {
     { title: "Sync", icon: <RefreshCwIcon /> },
     // Questions to solve. Takes the whole main area, so this column hides.
     { title: "Practice", icon: <BookCheckIcon /> },
+    // For now, where the question screens are built before moving into
+    // Practice. Lists the questions in this column. Students only.
+    { title: "Questions", icon: <ListChecksIcon /> },
     // Openings to search and apply to. Also takes the whole main area.
     { title: "Jobs", icon: <BriefcaseBusinessIcon /> },
   ],
@@ -72,6 +77,8 @@ export function AppSidebar({
   unsynced,
   syncing,
   onSync,
+  selectedQuestion,
+  onSelectQuestion,
   ...props
 }: React.ComponentProps<typeof Sidebar> & {
   session: Session;
@@ -90,12 +97,19 @@ export function AppSidebar({
   unsynced: number;
   syncing: boolean;
   onSync: () => void;
+  /** The question open in Questions. */
+  selectedQuestion: string | null;
+  onSelectQuestion: (slug: string) => void;
 }) {
-  const navItems = data.navMain.filter((item) => !session.guest || item.title !== "Sync");
+  const navItems = data.navMain.filter(
+    (item) => !session.guest || (item.title !== "Sync" && item.title !== "Questions"),
+  );
   const { theme, toggleTheme } = useTheme();
   const filesQuery = useFilesQuery(session.id);
   const files = filesQuery.data ?? [];
   const [search, setSearch] = React.useState("");
+  // Its own, so a file search doesn't carry over to the questions.
+  const [questionSearch, setQuestionSearch] = React.useState("");
   const [newFileOpen, setNewFileOpen] = React.useState(false);
   const [renaming, setRenaming] = React.useState<string | null>(null);
   const [deleting, setDeleting] = React.useState<string | null>(null);
@@ -220,7 +234,7 @@ export function AppSidebar({
               {syncing ? <Spinner /> : <RefreshCwIcon />}
               Sync
             </Button>
-          ) : (
+          ) : view === "Questions" ? null : (
             <Button size="sm" onClick={() => setNewFileOpen(true)}>
               <PlusIcon />
               New file
@@ -248,9 +262,24 @@ export function AppSidebar({
             />
           </SidebarHeader>
         )}
+        {view === "Questions" && (
+          <SidebarHeader className="p-4 pb-0">
+            <SidebarInput
+              placeholder="Search by title or number..."
+              value={questionSearch}
+              onChange={(e) => setQuestionSearch(e.currentTarget.value)}
+            />
+          </SidebarHeader>
+        )}
         <SidebarContent className="py-2">
           {view === "Sync" ? (
             <SyncList status={syncStatus} selectedFile={selectedFile} onSelectFile={onSelectFile} />
+          ) : view === "Questions" ? (
+            <QuestionList
+              search={questionSearch.trim().toLowerCase()}
+              selectedQuestion={selectedQuestion}
+              onSelectQuestion={onSelectQuestion}
+            />
           ) : (
             <HistoryList
               kind={view === "Database" ? "database" : "program"}
