@@ -3,15 +3,18 @@
 import { loader } from "@monaco-editor/react";
 import * as monaco from "monaco-editor";
 import EditorWorker from "monaco-editor/editor/editor.worker?worker";
+import TypeScriptWorker from "monaco-editor/languages/features/typescript/ts.worker?worker";
 import { onZoomApplied } from "@/hooks/use-zoom";
 
 self.MonacoEnvironment = {
-  // Monaco 0.57+ bundles its language workers (TypeScript, JSON, ...) itself via
-  // `new URL(..., import.meta.url)`, but not the base editor worker. Returning
-  // undefined for other labels falls back to Monaco's own loading.
+  // Once getWorker is set, Monaco asks it for every worker and never falls
+  // back to its own loading, so each one the catalog's languages use must be
+  // here. JavaScript's (errors and suggestions) is the only language worker;
+  // the others are highlighting only.
   getWorker(_workerId, label) {
     if (label === "editorWorkerService") return new EditorWorker();
-    return undefined as unknown as Worker;
+    if (label === "javascript" || label === "typescript") return new TypeScriptWorker();
+    throw new Error(`No Monaco worker for ${label}: add it to MonacoEnvironment in monaco.ts`);
   },
 };
 
