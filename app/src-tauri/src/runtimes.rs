@@ -8,7 +8,7 @@
 //! On Windows the shared data folder is machine-wide, so a lab PC downloads
 //! each language once for every Windows account instead of once per account.
 
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::fs::{self, File};
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
@@ -19,6 +19,7 @@ use std::sync::OnceLock;
 use std::time::{Duration, SystemTime};
 
 use futures_util::StreamExt;
+use rusqlite::OptionalExtension;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 #[cfg(not(windows))]
@@ -148,7 +149,72 @@ pub fn list_runtimes(
             installed.push(language.extension);
         }
     }
+    log::info!("Installed: {}", installed.join(", "));
+    check_installed(&app, &db)?;
     Ok(installed)
+}
+
+/// Where `check_installed` keeps the runtimes it last found installed.
+const INSTALLED_KEY: &str = "installed_runtimes";
+
+/// Reports, as an error, any runtime that was installed at the last check and
+/// isn't now. Students only see "not installed", so without this nobody would
+/// know it happened, or why: the report says what's left of its folder (gone
+/// completely, or there without its program, which is what antivirus does).
+/// Runs on launch and whenever the frontend asks what's installed.
+pub fn check_installed(app: &AppHandle, db: &Db) -> Result<(), String> {
+    let runtimes = db.with(|conn| {
+        let ids: BTreeSet<String> = catalog::languages(conn)?.into_iter().map(|l| l.runtime).collect();
+        ids.iter().map(|id| catalog::runtime(conn, id)).collect::<Result<Vec<_>, _>>()
+    })?;
+    let mut installed = BTreeSet::new();
+    for runtime in &runtimes {
+        if executable_path(app, runtime)?.is_some() {
+            installed.insert(runtime.id.clone());
+        }
+    }
+
+    let saved: Option<String> = db.with(|conn| {
+        conn.query_row("SELECT value FROM meta WHERE key = ?1", [INSTALLED_KEY], |row| row.get(0))
+            .optional()
+            .map_err(|e| format!("Could not read the installed languages: {e}"))
+    })?;
+    let before: BTreeSet<String> = saved.and_then(|raw| serde_json::from_str(&raw).ok()).unwrap_or_default();
+    for runtime in runtimes.iter().filter(|r| before.contains(&r.id) && !installed.contains(&r.id)) {
+        log::error!("{} disappeared: {}", runtime.id, what_is_left(&runtime_dir(app, runtime)?, runtime));
+    }
+
+    if installed != before {
+        let raw = serde_json::to_string(&installed).map_err(|e| e.to_string())?;
+        db.with(|conn| {
+            conn.execute(
+                "INSERT INTO meta (key, value) VALUES (?1, ?2)
+                 ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+                [INSTALLED_KEY, &raw],
+            )
+            .map(|_| ())
+            .map_err(|e| format!("Could not save the installed languages: {e}"))
+        })?;
+    }
+    Ok(())
+}
+
+/// What's left of a runtime's folder whose program is missing.
+fn what_is_left(dir: &Path, runtime: &Runtime) -> String {
+    if !dir.exists() {
+        return "its folder is gone".into();
+    }
+    fn count_files(dir: &Path) -> usize {
+        let Ok(entries) = fs::read_dir(dir) else { return 0 };
+        entries
+            .flatten()
+            .map(|entry| match entry.file_type() {
+                Ok(kind) if kind.is_dir() => count_files(&entry.path()),
+                _ => 1,
+            })
+            .sum()
+    }
+    format!("its folder has {} files, but not {}", count_files(dir), runtime.executable())
 }
 
 /// A command for one step: the step's program (or the runtime's executable),
@@ -212,7 +278,12 @@ pub async fn install_runtime(
     let _guard = InstallGuard { installs: &installs, id: runtime.id.clone() };
 
     if !downloaded {
-        download_runtime(&app, &runtime, &extension).await?;
+        log::info!("Downloading {}", runtime.id);
+        if let Err(e) = download_runtime(&app, &runtime, &extension).await {
+            log::error!("Could not install {}: {e}", runtime.id);
+            return Err(e);
+        }
+        log::info!("Installed {}", runtime.id);
     }
     if !language.setup.is_empty() {
         let _ = app.emit(
@@ -220,11 +291,14 @@ pub async fn install_runtime(
             Progress { extension: extension.clone(), stage: "configuring", downloaded: 0, total: 0 },
         );
         let exe = executable_path(&app, &runtime)?.ok_or("The download didn't finish. Please try again.")?;
+        let id = runtime.id.clone();
         tauri::async_runtime::spawn_blocking(move || {
             databases::set_up(&app, &account, &language, &runtime, &exe)
         })
         .await
-        .map_err(|e| format!("Setup failed: {e}"))??;
+        .map_err(|e| format!("Setup failed: {e}"))
+        .flatten()
+        .inspect_err(|e| log::error!("Could not set up {id}: {e}"))?;
     }
     Ok(())
 }
@@ -276,6 +350,9 @@ async fn download_runtime(app: &AppHandle, runtime: &Runtime, extension: &str) -
         // install (it may be running) and drop ours.
         if executable_path(app, runtime)?.is_some() {
             return Ok(());
+        }
+        if target.exists() {
+            log::warn!("Replacing {}, which was there without its program", runtime.id);
         }
         let _ = fs::remove_dir_all(&target);
         if let Err(e) = fs::rename(&unpacked_root, &target) {
