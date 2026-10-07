@@ -33,7 +33,7 @@ export function ZoomMenu() {
           render={
             <SidebarMenuButton
               tooltip={{ children: `Zoom (${zoomLabel(zoom)})`, hidden: false }}
-              className="px-2.5 md:px-2"
+              className="px-2"
             />
           }
         >
