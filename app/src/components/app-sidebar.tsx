@@ -126,7 +126,7 @@ export function AppSidebar({
         <SidebarHeader>
           <SidebarMenu>
             <SidebarMenuItem>
-              <SidebarMenuButton size="lg" className="md:h-8 md:p-0" render={<a href="#" />}>
+              <SidebarMenuButton size="lg" className="h-8 p-0" render={<a href="#" />}>
                 <img src={logo} alt="" className="size-8" />
                 <div className="grid flex-1 text-left text-sm leading-tight">
                   <span className="truncate font-medium">prepcode</span>
@@ -137,7 +137,7 @@ export function AppSidebar({
         </SidebarHeader>
         <SidebarContent>
           <SidebarGroup>
-            <SidebarGroupContent className="px-1.5 md:px-0">
+            <SidebarGroupContent className="px-0">
               {/* gap-2 matches the footer's icons below. */}
               <SidebarMenu className="gap-2">
                 {navItems.map((item) => (
@@ -149,7 +149,7 @@ export function AppSidebar({
                       }}
                       onClick={() => onViewChange(item.title)}
                       isActive={view === item.title}
-                      className="px-2.5 md:px-2"
+                      className="px-2"
                     >
                       {item.title === "Sync" && unsynced > 0 ? (
                         // How many changes aren't on GitHub yet, at the
@@ -182,7 +182,7 @@ export function AppSidebar({
                   hidden: false,
                 }}
                 onClick={toggleTheme}
-                className="px-2.5 md:px-2"
+                className="px-2"
               >
                 {theme === "dark" ? <SunIcon /> : <MoonIcon />}
                 <span>{theme === "dark" ? "Light theme" : "Dark theme"}</span>
@@ -205,7 +205,7 @@ export function AppSidebar({
           while collapsed (Practice, Jobs) so none of it shows beside the icons. */}
       <Sidebar
         collapsible="none"
-        className="hidden w-[calc(var(--sidebar-width)-var(--sidebar-width-icon)-1px)]! shrink-0 md:flex md:group-data-[collapsible=icon]:hidden"
+        className="flex w-[calc(var(--sidebar-width)-var(--sidebar-width-icon)-1px)]! shrink-0 group-data-[collapsible=icon]:hidden"
       >
         {/* h-16 and its bottom border line up with the main area's top bar. */}
         <SidebarHeader className="h-16 flex-row items-center justify-between border-b px-4 py-0">

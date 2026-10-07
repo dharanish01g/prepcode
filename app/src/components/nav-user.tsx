@@ -21,7 +21,7 @@ export function NavUser({
         <SidebarMenuButton
           tooltip={{ children: name, hidden: false }}
           onClick={onOpenProfile}
-          className="px-2.5 md:px-2"
+          className="px-2"
         >
           <Avatar className="size-4">
             {avatarUrl && <AvatarImage src={avatarUrl} alt="" />}
@@ -35,7 +35,7 @@ export function NavUser({
         <SidebarMenuButton
           tooltip={{ children: "Log out", hidden: false }}
           onClick={onLogout}
-          className="px-2.5 text-destructive hover:bg-destructive/10 hover:text-destructive md:px-2"
+          className="px-2 text-destructive hover:bg-destructive/10 hover:text-destructive"
         >
           <LogOutIcon />
           <span>Log out</span>
