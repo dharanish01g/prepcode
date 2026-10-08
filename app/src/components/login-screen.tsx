@@ -2,7 +2,7 @@ import { useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { toast } from "sonner";
 import { AuthHeader } from "@/components/auth-header";
-import { GitHubCodeDialog } from "@/components/github-code-dialog";
+import { GitHubSignInDialog } from "@/components/github-sign-in-dialog";
 import { GitHubIcon } from "@/components/github-icon";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
@@ -11,28 +11,27 @@ import {
   finishGitHubSignIn,
   guestLogin,
   startGitHubSignIn,
-  type DeviceCode,
+  type SignInLink,
   type Session,
 } from "@/lib/auth";
 
 export function LoginScreen({ onAuthenticated }: { onAuthenticated: (session: Session) => void }) {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  // Set while the student approves the code on GitHub.
-  const [code, setCode] = useState<DeviceCode | null>(null);
+  // Set while the student approves prepcode on GitHub in the browser.
+  const [link, setLink] = useState<SignInLink | null>(null);
 
   async function handleGitHub() {
     setError("");
     setBusy(true);
     try {
-      const next = await startGitHubSignIn();
-      setCode(next);
+      setLink(await startGitHubSignIn());
       const session = await finishGitHubSignIn();
       if (session) onAuthenticated(session);
     } catch (err) {
       setError(String(err));
     } finally {
-      setCode(null);
+      setLink(null);
       setBusy(false);
     }
   }
@@ -40,7 +39,7 @@ export function LoginScreen({ onAuthenticated }: { onAuthenticated: (session: Se
   function handleCancel() {
     // finishGitHubSignIn then resolves to null, which ends handleGitHub.
     cancelGitHubSignIn().catch((err) => console.error("Cancel failed:", err));
-    setCode(null);
+    setLink(null);
   }
 
   async function handleGuest() {
@@ -66,7 +65,7 @@ export function LoginScreen({ onAuthenticated }: { onAuthenticated: (session: Se
 
       <div className="flex w-full flex-col gap-3">
         <Button size="lg" className="w-full" disabled={busy} onClick={handleGitHub}>
-          {busy && code === null ? <Spinner /> : <GitHubIcon />}
+          {busy && link === null ? <Spinner /> : <GitHubIcon />}
           Sign in with GitHub
         </Button>
         <Button
@@ -92,7 +91,7 @@ export function LoginScreen({ onAuthenticated }: { onAuthenticated: (session: Se
         </Button>
       </p>
 
-      <GitHubCodeDialog code={code} onCancel={handleCancel} />
+      <GitHubSignInDialog link={link} onCancel={handleCancel} />
     </div>
   );
 }

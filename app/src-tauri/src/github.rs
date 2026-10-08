@@ -1,22 +1,14 @@
-//! Talking to GitHub: signing in with the device flow, and (for syncing) the
-//! REST API.
-//!
-//! prepcode is a GitHub OAuth App. Its client ID isn't a secret: the device
-//! flow needs no client secret, which is why it suits a desktop app that
-//! anyone can read the source of. The app asks for `public_repo`, enough to
-//! create and write the student's public `prepcode-programs` repo.
+//! Talking to GitHub's REST API, for syncing a student's `prepcode-programs`
+//! repo. Signing in goes through the account system instead (account.rs).
 
 use std::sync::OnceLock;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, USER_AGENT};
 use reqwest::{RequestBuilder, Response, StatusCode};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::{json, Value};
 
-/// prepcode's OAuth App (github.com/settings/developers), with device flow on.
-const CLIENT_ID: &str = "Ov23liaNtg95eH6OmyHG";
-const SCOPE: &str = "public_repo";
 const API: &str = "https://api.github.com";
 
 fn client() -> Result<&'static reqwest::Client, GitHubError> {
@@ -93,72 +85,27 @@ async fn json<T: for<'de> Deserialize<'de>>(response: Response) -> Result<T, Git
     response.json().await.map_err(|e| GitHubError::Other(format!("Unexpected response from GitHub: {e}")))
 }
 
-// --- Device flow sign-in -----------------------------------------------------
-
-/// The code the student types at `verification_uri` to approve prepcode.
-#[derive(Clone, Deserialize, Serialize)]
-pub struct DeviceCode {
-    /// Identifies this sign-in when polling; never shown.
-    #[serde(skip_serializing)]
-    pub device_code: String,
-    pub user_code: String,
-    pub verification_uri: String,
-    /// Seconds until the code stops working.
-    pub expires_in: u64,
-    /// Seconds to wait between polls.
-    pub interval: u64,
-}
-
-pub async fn request_device_code() -> Result<DeviceCode, GitHubError> {
-    let request = client()?
-        .post("https://github.com/login/device/code")
-        .json(&json!({ "client_id": CLIENT_ID, "scope": SCOPE }));
-    json(send(request).await?).await
-}
-
-/// Where a device-flow sign-in is up to.
-pub enum Poll {
-    /// The student hasn't approved yet.
-    Pending,
-    /// Polling too fast: wait longer between polls.
-    SlowDown,
-    Expired,
-    Denied,
-    Approved(String),
-}
-
-pub async fn poll_for_token(device_code: &str) -> Result<Poll, GitHubError> {
-    let request = client()?.post("https://github.com/login/oauth/access_token").json(&json!({
-        "client_id": CLIENT_ID,
-        "device_code": device_code,
-        "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
-    }));
-    // Errors come back as 200 with an "error" field.
-    let body: Value = json(send(request).await?).await?;
-    if let Some(token) = body["access_token"].as_str() {
-        return Ok(Poll::Approved(token.to_owned()));
-    }
-    match body["error"].as_str().unwrap_or_default() {
-        "authorization_pending" => Ok(Poll::Pending),
-        "slow_down" => Ok(Poll::SlowDown),
-        "expired_token" => Ok(Poll::Expired),
-        "access_denied" => Ok(Poll::Denied),
-        other => Err(GitHubError::Other(format!("GitHub sign-in failed: {other}"))),
-    }
-}
-
 // --- REST API ------------------------------------------------------------------
 
-/// The signed-in GitHub account.
-#[derive(Clone, Deserialize, Serialize)]
-pub struct User {
-    /// Never changes, unlike `login`, so it names the student's folder.
-    pub id: u64,
-    pub login: String,
-    pub avatar_url: Option<String>,
+/// Who a commit is credited to: the student, by their GitHub noreply
+/// address, so it counts on their GitHub profile even though the prepcodes app
+/// makes it.
+pub struct Author {
+    name: String,
+    email: String,
 }
 
-/// A REST API request as the signed-in student.
+impl Author {
+    pub fn student(github_id: u64, login: &str) -> Self {
+        Author { name: login.to_owned(), email: format!("{github_id}+{login}@users.noreply.github.com") }
+    }
+
+    fn json(&self) -> Value {
+        json!({ "name": self.name, "email": self.email })
+    }
+}
+
+/// A REST API request with a token for the student's repo.
 fn api(method: reqwest::Method, path: &str, token: &str) -> Result<RequestBuilder, GitHubError> {
     Ok(client()?
         .request(method, format!("{API}{path}"))
@@ -172,10 +119,6 @@ fn get(path: &str, token: &str) -> Result<RequestBuilder, GitHubError> {
 
 fn post(path: &str, token: &str, body: Value) -> Result<RequestBuilder, GitHubError> {
     Ok(api(reqwest::Method::POST, path, token)?.json(&body))
-}
-
-pub async fn user(token: &str) -> Result<User, GitHubError> {
-    json(send(get("/user", token)?).await?).await
 }
 
 /// The student's repo, which prepcode syncs with.
@@ -193,17 +136,6 @@ pub async fn get_repo(token: &str, owner: &str) -> Result<Option<Repo>, GitHubEr
         Err(GitHubError::NotFound) => Ok(None),
         Err(e) => Err(e),
     }
-}
-
-pub async fn create_repo(token: &str) -> Result<Repo, GitHubError> {
-    let body = json!({
-        "name": REPO,
-        "description": "My programs, saved from prepcode",
-        "private": false,
-        // Starts the repo with a README, so it has a branch to commit to.
-        "auto_init": true,
-    });
-    json(send(post("/user/repos", token, body)?).await?).await
 }
 
 /// The commit the branch points at, or None if the repo has no commits yet.
@@ -228,11 +160,13 @@ pub async fn create_file(
     path: &str,
     content: &str,
     message: &str,
+    author: &Author,
 ) -> Result<(), GitHubError> {
     use base64::Engine;
     let body = json!({
         "message": message,
         "content": base64::engine::general_purpose::STANDARD.encode(content),
+        "author": author.json(),
     });
     let request =
         api(reqwest::Method::PUT, &format!("/repos/{owner}/{REPO}/contents/{path}"), token)?.json(&body);
@@ -288,7 +222,7 @@ pub async fn last_changed(token: &str, owner: &str, path: &str) -> Result<Option
 }
 
 /// GitHub's timestamps, always UTC like `2026-10-02T09:11:02Z`.
-fn parse_time(text: &str) -> Option<SystemTime> {
+pub(crate) fn parse_time(text: &str) -> Option<SystemTime> {
     let b = text.as_bytes();
     let shape_ok = b.len() == 20
         && b[4] == b'-'
@@ -340,8 +274,9 @@ pub async fn create_commit(
     message: &str,
     tree: &str,
     parent: &str,
+    author: &Author,
 ) -> Result<String, GitHubError> {
-    let body = json!({ "message": message, "tree": tree, "parents": [parent] });
+    let body = json!({ "message": message, "tree": tree, "parents": [parent], "author": author.json() });
     let created: Value =
         json(send(post(&format!("/repos/{owner}/{REPO}/git/commits"), token, body)?).await?).await?;
     created["sha"]
@@ -383,13 +318,5 @@ mod tests {
         assert_eq!(parse_time("2026-10-02T09:11:02+05:30"), None);
         assert_eq!(parse_time("2026-13-02T09:11:02Z"), None);
         assert_eq!(parse_time(""), None);
-    }
-
-    #[test]
-    #[ignore = "needs the network"]
-    fn gets_a_device_code() {
-        let code = tauri::async_runtime::block_on(super::request_device_code()).unwrap();
-        assert!(code.verification_uri.starts_with("https://github.com/"));
-        assert!(code.user_code.contains('-'));
     }
 }

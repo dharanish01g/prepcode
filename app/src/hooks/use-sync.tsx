@@ -9,6 +9,11 @@ import { disposeEditorModel, editorModelPath, setEditorModelText } from "@/lib/m
 import { queryKeys } from "@/lib/queries";
 import { pullFromGitHub, syncNow, type SyncReport } from "@/lib/sync";
 
+/** How sync errors that are fixed on GitHub start (see account.rs). */
+const CONNECT_GITHUB = "Connect GitHub:";
+/** Where a student gives the prepcodes GitHub App their repo. */
+const INSTALL_URL = "https://github.com/apps/prepcodes/installations/new";
+
 /** Syncing the signed-in student's files with their GitHub repo. */
 export function useSync({
   userId,
@@ -28,11 +33,15 @@ export function useSync({
   const [syncing, setSyncing] = useState(false);
 
   // A report arrives long after the sync started: read the open file then,
-  // not when it started.
+  // not when it started. Refs also keep `pull` the same function across
+  // renders (onSelectFile changes with the view), so the workspace's sign-in
+  // pull runs once, not on every view switch.
   const selectedFileRef = useRef(selectedFile);
+  const onSelectFileRef = useRef(onSelectFile);
   useLayoutEffect(() => {
     selectedFileRef.current = selectedFile;
-  }, [selectedFile]);
+    onSelectFileRef.current = onSelectFile;
+  }, [selectedFile, onSelectFile]);
 
   // Shows what came from GitHub: new text in open files, deleted files closed.
   const applyReport = useCallback(
@@ -43,7 +52,7 @@ export function useSync({
         setEditorModelText(editorModelPath(userId, filename), content);
       }
       for (const filename of report.deleted) {
-        if (selectedFileRef.current === filename) flushSync(() => onSelectFile(null));
+        if (selectedFileRef.current === filename) flushSync(() => onSelectFileRef.current(null));
         queryClient.removeQueries({
           queryKey: queryKeys.fileContent(userId, filename),
           exact: true,
@@ -63,7 +72,7 @@ export function useSync({
         });
       }
     },
-    [queryClient, userId, onSelectFile],
+    [queryClient, userId],
   );
 
   /** The Sync button: pull, then push everything as one commit. */
@@ -99,7 +108,23 @@ export function useSync({
       }
       return true;
     } catch (err) {
-      toast.error("Couldn't sync", { description: String(err) });
+      const message = String(err);
+      // Fixed on GitHub: give the prepcodes app the student's repo.
+      const connect = message.startsWith(CONNECT_GITHUB);
+      const id = toast.error("Couldn't sync", {
+        description: connect ? message.slice(CONNECT_GITHUB.length).trim() : message,
+        duration: connect ? Infinity : undefined,
+        action: connect ? (
+          <Button
+            onClick={() => {
+              toast.dismiss(id);
+              openUrl(INSTALL_URL);
+            }}
+          >
+            Connect GitHub
+          </Button>
+        ) : undefined,
+      });
       return false;
     } finally {
       setSyncing(false);

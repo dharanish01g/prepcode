@@ -10,12 +10,9 @@ export type Session = {
   guest: boolean;
 };
 
-/** The code a student enters on GitHub to approve prepcode. */
-export type DeviceCode = {
-  user_code: string;
-  verification_uri: string;
-  /** Seconds until the code stops working. */
-  expires_in: number;
+/** The sign-in page in the browser, to open again if the browser didn't. */
+export type SignInLink = {
+  url: string;
 };
 
 /** How to show who's signed in. */
@@ -28,14 +25,14 @@ export function restoreSession() {
   return invoke<Session | null>("restore_session");
 }
 
-/** Starts signing in with GitHub. Rejects with a user-facing message. */
+/** Opens GitHub in the browser to sign in. Rejects with a user-facing message. */
 export function startGitHubSignIn() {
-  return invoke<DeviceCode>("start_github_sign_in");
+  return invoke<SignInLink>("start_github_sign_in");
 }
 
 /**
- * Resolves once the student approves the code on GitHub, or to null if the
- * sign-in was cancelled. Rejects with a user-facing message.
+ * Resolves once the student approves on GitHub and the browser comes back, or
+ * to null if the sign-in was cancelled. Rejects with a user-facing message.
  */
 export function finishGitHubSignIn() {
   return invoke<Session | null>("finish_github_sign_in");

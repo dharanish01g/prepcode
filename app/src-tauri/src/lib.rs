@@ -1,3 +1,4 @@
+mod account;
 mod auth;
 mod catalog;
 mod databases;
@@ -33,7 +34,9 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .manage(auth::CurrentUser::default())
         .manage(auth::SignIn::default())
+        .manage(auth::AccessToken::default())
         .manage(sync::SyncLock::default())
+        .manage(sync::RepoTokens::default())
         .manage(runtimes::RuntimeInstalls::default())
         .manage(run::Runner::default())
         .manage(sql::Servers::default())
