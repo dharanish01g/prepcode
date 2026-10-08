@@ -312,6 +312,63 @@ pub async fn unlink(access_token: &str, identity_id: &str) -> Result<(), Account
     send(request).await.map(|_| ())
 }
 
+// --- Email and password ----------------------------------------------------------------
+
+/// What a code sent by email is for.
+#[derive(Clone, Copy)]
+pub enum EmailCode {
+    /// Confirming the email of a new account.
+    SignUp,
+    /// Resetting a forgotten password.
+    Reset,
+}
+
+/// Creates an account with email and password. Supabase then emails a code
+/// to confirm it (`verify_email_code`). For an email that already has an
+/// account Supabase answers the same but sends nothing, so nobody can find
+/// out which emails have accounts.
+pub async fn sign_up(email: &str, password: &str, name: Option<&str>) -> Result<(), AccountError> {
+    let data = name.map(|name| json!({ "full_name": name })).unwrap_or_else(|| json!({}));
+    let body = json!({ "email": email, "password": password, "data": data });
+    send(post("/auth/v1/signup")?.json(&body)).await.map(|_| ())
+}
+
+/// Sends the sign-up code again.
+pub async fn resend_sign_up_code(email: &str) -> Result<(), AccountError> {
+    send(post("/auth/v1/resend")?.json(&json!({ "type": "signup", "email": email }))).await.map(|_| ())
+}
+
+/// Emails a code for resetting the password. Answers the same whether or not
+/// the email has an account.
+pub async fn send_reset_code(email: &str) -> Result<(), AccountError> {
+    send(post("/auth/v1/recover")?.json(&json!({ "email": email }))).await.map(|_| ())
+}
+
+/// Checks a code from an email, which signs the student in.
+pub async fn verify_email_code(email: &str, code: &str, what: EmailCode) -> Result<Tokens, AccountError> {
+    let kind = match what {
+        EmailCode::SignUp => "signup",
+        EmailCode::Reset => "recovery",
+    };
+    let body = json!({ "type": kind, "email": email, "token": code });
+    tokens(send(post("/auth/v1/verify")?.json(&body)).await?)
+}
+
+pub async fn sign_in_with_password(email: &str, password: &str) -> Result<Tokens, AccountError> {
+    let body = json!({ "email": email, "password": password });
+    tokens(send(post("/auth/v1/token?grant_type=password")?.json(&body)).await?)
+}
+
+/// Changes the signed-in account's password.
+pub async fn set_password(access_token: &str, password: &str) -> Result<(), AccountError> {
+    let request = client()?
+        .put(format!("{SUPABASE}/auth/v1/user"))
+        .header("apikey", PUBLISHABLE_KEY)
+        .bearer_auth(access_token)
+        .json(&json!({ "password": password }));
+    send(request).await.map(|_| ())
+}
+
 /// Ends this session on the server (other computers stay signed in).
 pub async fn sign_out(access_token: &str) -> Result<(), AccountError> {
     send(post("/auth/v1/logout?scope=local")?.bearer_auth(access_token)).await.map(|_| ())

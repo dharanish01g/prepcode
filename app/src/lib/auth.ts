@@ -61,8 +61,10 @@ export function discardWaitingAccount() {
 export type SignInResult =
   /** Signed in (or, from Profile → Gmail, Google connected). */
   | { kind: "signedIn"; session: Session }
-  /** Signed in with Google to an account with no GitHub: connect it next. */
+  /** Signed in (Google or email) to an account with no GitHub: connect it next. */
   | { kind: "needsGitHub"; email: string | null }
+  /** Signed up with email but never entered the code: a new one was sent. */
+  | { kind: "needsEmailCode"; email: string }
   /** The GitHub they picked already has a prepcode account. */
   | { kind: "gitHubTaken"; email: string | null };
 
@@ -101,4 +103,52 @@ export function guestLogin() {
 
 export function logout() {
   return invoke<void>("logout");
+}
+
+/** Passwords need at least this many characters (checked in Rust too). */
+export const MIN_PASSWORD_LENGTH = 8;
+
+/**
+ * Email + password is for college and work email: Gmail signs in with Continue
+ * with Google. Mirrors GOOGLE_EMAIL_DOMAINS in auth.rs (the server refuses
+ * these sign-ups too).
+ */
+export function isGoogleEmail(email: string) {
+  const domain = email.trim().toLowerCase().split("@")[1];
+  return domain === "gmail.com" || domain === "googlemail.com";
+}
+
+/** Digits in the codes sent by email (Supabase's Email OTP Length). */
+export const EMAIL_CODE_LENGTH = 6;
+
+/**
+ * Creates an account with email and password; a code to confirm it is
+ * emailed. Resolves the same if the email already has an account (then no
+ * code comes), so nobody can find out which emails have accounts.
+ */
+export function emailSignUp(email: string, password: string, name: string) {
+  return invoke<void>("email_sign_up", { email, password, name: name || null });
+}
+
+export function emailResendCode(email: string) {
+  return invoke<void>("email_resend_code", { email });
+}
+
+/** Checks the code from the sign-up email, which signs the student in. */
+export function emailVerifyCode(email: string, code: string) {
+  return invoke<SignInResult>("email_verify_code", { email, code });
+}
+
+export function emailSignIn(email: string, password: string) {
+  return invoke<SignInResult>("email_sign_in", { email, password });
+}
+
+/** Emails a code for choosing a new password (whether or not the email has an account). */
+export function emailSendResetCode(email: string) {
+  return invoke<void>("email_send_reset_code", { email });
+}
+
+/** Checks the reset code, sets the new password and signs the student in. */
+export function emailResetPassword(email: string, code: string, password: string) {
+  return invoke<SignInResult>("email_reset_password", { email, code, password });
 }
