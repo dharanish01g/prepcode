@@ -35,6 +35,7 @@ pub fn run() {
         .manage(auth::CurrentUser::default())
         .manage(auth::SignIn::default())
         .manage(auth::AccessToken::default())
+        .manage(auth::WaitingAccount::default())
         .manage(sync::SyncLock::default())
         .manage(sync::RepoTokens::default())
         .manage(runtimes::RuntimeInstalls::default())
@@ -54,8 +55,14 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             auth::restore_session,
             auth::start_github_sign_in,
-            auth::finish_github_sign_in,
-            auth::cancel_github_sign_in,
+            auth::start_google_sign_in,
+            auth::start_google_link,
+            auth::start_github_connect,
+            auth::discard_waiting_account,
+            auth::finish_sign_in,
+            auth::cancel_sign_in,
+            auth::account_details,
+            auth::unlink_google,
             auth::guest_login,
             auth::logout,
             catalog::list_languages,

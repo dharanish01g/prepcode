@@ -40,7 +40,6 @@ fn client() -> Result<&'static reqwest::Client, AccountError> {
 }
 
 /// Why a request to the account system didn't work.
-#[derive(Debug)]
 pub enum AccountError {
     /// No connection, a timeout, or the server is down: try again later.
     Offline,
@@ -58,6 +57,17 @@ impl AccountError {
     }
 }
 
+// By hand, so a token never ends up in a log.
+impl std::fmt::Debug for AccountError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AccountError::Offline => write!(f, "Offline"),
+            AccountError::Rejected(message) => write!(f, "Rejected({message:?})"),
+            AccountError::Other(message) => write!(f, "Other({message:?})"),
+        }
+    }
+}
+
 /// The signed-in student, as saved on this computer.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Account {
@@ -67,10 +77,38 @@ pub struct Account {
     pub github_id: u64,
     pub github_login: String,
     pub avatar_url: Option<String>,
+    /// The Google account connected for signing in (Profile → Gmail), if any.
+    #[serde(default)]
+    pub google: Option<LinkedIdentity>,
 }
 
-/// A signed-in session. GitHub's own tokens, which Supabase also sends back,
-/// are never read: syncing gets short-lived repo tokens another way.
+/// A second way to sign in, linked to the account.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct LinkedIdentity {
+    /// Supabase's id for the link, needed to remove it.
+    pub identity_id: String,
+    pub email: Option<String>,
+}
+
+/// The providers a student can sign in with. Only GitHub creates an account
+/// (a Supabase hook refuses new accounts from the others).
+#[derive(Clone, Copy)]
+pub enum Provider {
+    GitHub,
+    Google,
+}
+
+impl Provider {
+    fn id(self) -> &'static str {
+        match self {
+            Provider::GitHub => "github",
+            Provider::Google => "google",
+        }
+    }
+}
+
+/// A signed-in session. GitHub's and Google's own tokens, which Supabase also
+/// sends back, are never read: syncing gets short-lived repo tokens another way.
 pub struct Tokens {
     /// Valid for an hour; only ever kept in memory.
     pub access_token: String,
@@ -78,7 +116,11 @@ pub struct Tokens {
     pub refresh_token: String,
     /// Unix seconds.
     pub expires_at: u64,
-    pub account: Account,
+    /// The Supabase account id.
+    pub user_id: String,
+    pub email: Option<String>,
+    /// None while the account has no GitHub yet (it started with Google).
+    pub account: Option<Account>,
 }
 
 // --- Signing in -----------------------------------------------------------------------
@@ -98,18 +140,43 @@ pub fn pkce() -> Result<Pkce, String> {
     Ok(Pkce { verifier, challenge })
 }
 
-/// Where the browser goes to sign in with GitHub, coming back to `port`.
-pub fn authorize_url(port: u16, challenge: &str) -> String {
-    let redirect = format!("http://127.0.0.1:{port}{CALLBACK_PATH}");
-    let params = [
-        ("provider", "github"),
-        ("redirect_to", redirect.as_str()),
-        ("code_challenge", challenge),
-        ("code_challenge_method", "s256"),
-    ];
-    Url::parse_with_params(&format!("{SUPABASE}/auth/v1/authorize"), params)
+/// Where the browser goes to sign in with `provider`, coming back to `port`.
+pub fn authorize_url(provider: Provider, port: u16, challenge: &str) -> String {
+    Url::parse_with_params(&format!("{SUPABASE}/auth/v1/authorize"), browser_params(provider, port, challenge))
         .map(String::from)
         .unwrap_or_default()
+}
+
+/// Where the browser goes to connect `provider` to the signed-in account, as
+/// another way to sign in. It comes back to `port` like a sign-in does.
+pub async fn link_url(
+    access_token: &str,
+    provider: Provider,
+    port: u16,
+    challenge: &str,
+) -> Result<String, AccountError> {
+    let mut params = browser_params(provider, port, challenge).to_vec();
+    params.push(("skip_http_redirect", "true".into()));
+    let url = Url::parse_with_params(&format!("{SUPABASE}/auth/v1/user/identities/authorize"), params)
+        .map_err(|e| AccountError::Other(e.to_string()))?;
+    let request = client()?
+        .get(url)
+        .header("apikey", PUBLISHABLE_KEY)
+        .bearer_auth(access_token);
+    let body = send(request).await?;
+    body["url"]
+        .as_str()
+        .map(str::to_owned)
+        .ok_or_else(|| AccountError::Other("Unexpected answer from prepcode's servers: no link".into()))
+}
+
+fn browser_params(provider: Provider, port: u16, challenge: &str) -> [(&'static str, String); 4] {
+    [
+        ("provider", provider.id().into()),
+        ("redirect_to", format!("http://127.0.0.1:{port}{CALLBACK_PATH}")),
+        ("code_challenge", challenge.into()),
+        ("code_challenge_method", "s256".into()),
+    ]
 }
 
 /// Waits for the browser to come back to `listener` after signing in, and
@@ -186,6 +253,36 @@ pub async fn exchange_code(code: &str, verifier: &str) -> Result<Tokens, Account
 pub async fn refresh(refresh_token: &str) -> Result<Tokens, AccountError> {
     let body = json!({ "refresh_token": refresh_token });
     tokens(send(post("/auth/v1/token?grant_type=refresh_token")?.json(&body)).await?)
+}
+
+/// The signed-in account as the server has it now.
+pub async fn user(access_token: &str) -> Result<Account, AccountError> {
+    let request = client()?.get(format!("{SUPABASE}/auth/v1/user")).header("apikey", PUBLISHABLE_KEY);
+    let body = send(request.bearer_auth(access_token)).await?;
+    account_of(&body).ok_or_else(|| AccountError::Other("Unexpected answer from prepcode's servers: no GitHub account".into()))
+}
+
+/// The roles of the signed-in account (staff roles, "faculty", "tpo",
+/// "student"), from the same function prepwisely uses.
+pub async fn role_ids(access_token: &str) -> Result<Vec<String>, AccountError> {
+    let body = send(post("/rest/v1/rpc/my_role_ids")?.bearer_auth(access_token).json(&json!({}))).await?;
+    Ok(body.as_array().into_iter().flatten().filter_map(|role| role.as_str().map(str::to_owned)).collect())
+}
+
+/// Deletes the signed-in account while it's still waiting for GitHub (see
+/// the `discard-pending-account` function), freeing its Google login.
+pub async fn discard_waiting(access_token: &str) -> Result<(), AccountError> {
+    let request = post("/functions/v1/discard-pending-account")?.bearer_auth(access_token).json(&json!({}));
+    send(request).await.map(|_| ())
+}
+
+/// Removes a linked way to sign in (GitHub, which made the account, stays).
+pub async fn unlink(access_token: &str, identity_id: &str) -> Result<(), AccountError> {
+    let request = client()?
+        .delete(format!("{SUPABASE}/auth/v1/user/identities/{identity_id}"))
+        .header("apikey", PUBLISHABLE_KEY)
+        .bearer_auth(access_token);
+    send(request).await.map(|_| ())
 }
 
 /// Ends this session on the server (other computers stay signed in).
@@ -265,7 +362,7 @@ async fn send(request: RequestBuilder) -> Result<Value, AccountError> {
     if status.is_success() {
         return Ok(body);
     }
-    let message = ["msg", "error_description", "message"]
+    let message = ["msg", "error_description", "message", "error"]
         .iter()
         .find_map(|key| body[*key].as_str())
         .unwrap_or("The sign-in didn't work. Please try again.");
@@ -284,13 +381,15 @@ struct TokenResponse {
 fn tokens(body: Value) -> Result<Tokens, AccountError> {
     let unexpected = |what: &str| AccountError::Other(format!("Unexpected answer from prepcode's servers: {what}"));
     let response: TokenResponse = serde_json::from_value(body).map_err(|_| unexpected("no session"))?;
-    let account = account_of(&response.user).ok_or_else(|| unexpected("no GitHub account"))?;
+    let user_id = response.user["id"].as_str().ok_or_else(|| unexpected("no account"))?.to_owned();
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
     Ok(Tokens {
         access_token: response.access_token,
         refresh_token: response.refresh_token,
         expires_at: response.expires_at.unwrap_or(now + response.expires_in),
-        account,
+        user_id,
+        email: response.user["email"].as_str().map(str::to_owned),
+        account: account_of(&response.user),
     })
 }
 
@@ -304,7 +403,13 @@ fn account_of(user: &Value) -> Option<Account> {
         .find_map(|value| value.as_str().and_then(|s| s.parse().ok()).or_else(|| value.as_u64()))?;
     let github_login = data["user_name"].as_str().or_else(|| data["preferred_username"].as_str())?.to_owned();
     let avatar_url = data["avatar_url"].as_str().map(str::to_owned);
-    Some(Account { id, github_id, github_login, avatar_url })
+    let google = user["identities"].as_array()?.iter().find(|i| i["provider"] == "google").and_then(|identity| {
+        Some(LinkedIdentity {
+            identity_id: identity["identity_id"].as_str()?.to_owned(),
+            email: identity["identity_data"]["email"].as_str().or_else(|| identity["email"].as_str()).map(str::to_owned),
+        })
+    });
+    Some(Account { id, github_id, github_login, avatar_url, google })
 }
 
 #[cfg(test)]
@@ -335,7 +440,7 @@ mod tests {
 
     #[test]
     fn authorize_url_returns_to_this_computer() {
-        let url = Url::parse(&authorize_url(51234, "challenge")).unwrap();
+        let url = Url::parse(&authorize_url(Provider::GitHub, 51234, "challenge")).unwrap();
         let param = |name: &str| url.query_pairs().find(|(k, _)| k == name).map(|(_, v)| v.into_owned());
         assert_eq!(url.path(), "/auth/v1/authorize");
         assert_eq!(param("provider").as_deref(), Some("github"));
@@ -367,8 +472,27 @@ mod tests {
                 github_id: 323292969,
                 github_login: "dharanish01g".into(),
                 avatar_url: Some("https://avatars.githubusercontent.com/u/323292969?v=4".into()),
+                google: None,
             })
         );
         assert_eq!(account_of(&json!({ "id": "x", "identities": [{ "provider": "email" }] })), None);
+    }
+
+    #[test]
+    fn reads_a_linked_google_account() {
+        let user = json!({
+            "id": "09e5b38b-348b-4f2a-98da-71eaaba9a3ec",
+            "identities": [
+                { "provider": "github", "identity_data": { "provider_id": "323292969", "user_name": "dharanish01g" } },
+                {
+                    "identity_id": "5f0c2a1e-0000-4000-8000-000000000001",
+                    "provider": "google",
+                    "identity_data": { "email": "student@gmail.com", "sub": "1093" }
+                }
+            ]
+        });
+        let google = account_of(&user).unwrap().google.unwrap();
+        assert_eq!(google.identity_id, "5f0c2a1e-0000-4000-8000-000000000001");
+        assert_eq!(google.email.as_deref(), Some("student@gmail.com"));
     }
 }

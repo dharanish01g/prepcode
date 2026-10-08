@@ -1,4 +1,5 @@
 import * as React from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { getVersion } from "@tauri-apps/api/app";
 import {
   Building2Icon,
@@ -14,7 +15,9 @@ import { toast } from "sonner";
 import logo from "@/assets/logo.png";
 import { COMPANY } from "@/components/auth-footer";
 import { FileIcon } from "@/components/file-icon";
+import { BrowserSignInDialog } from "@/components/browser-sign-in-dialog";
 import { GitHubIcon } from "@/components/github-icon";
+import { GoogleIcon } from "@/components/google-icon";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -67,8 +70,18 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { displayName, type Session } from "@/lib/auth";
+import {
+  accountDetails,
+  cancelSignIn,
+  displayName,
+  finishSignIn,
+  startGoogleLink,
+  unlinkGoogle,
+  type Session,
+  type SignInLink,
+} from "@/lib/auth";
 import { getLanguages, type Language } from "@/lib/languages";
+import { queryKeys } from "@/lib/queries";
 import {
   progressLabel,
   sameRuntime,
@@ -169,12 +182,7 @@ export function ProfileDialog({
               {section === "GitHub" ? (
                 <GitHubSection session={session} />
               ) : section === "Gmail" ? (
-                <NotConnected
-                  icon={<MailIcon />}
-                  title="No Gmail connected"
-                  description="Connect your personal Gmail to sign in with it. It stays yours after you leave college, so you keep your account and job alerts."
-                  action="Connect Gmail"
-                />
+                <GmailSection session={session} />
               ) : section === "Org mail" ? (
                 <NotConnected
                   icon={<Building2Icon />}
@@ -232,6 +240,155 @@ function GitHubSection({ session }: { session: Session }) {
         </p>
       </div>
     </div>
+  );
+}
+
+/**
+ * The student's personal Gmail, connected through Google so they can sign in
+ * with it too (Continue with Google). GitHub, which made the account, stays.
+ */
+function GmailSection({ session }: { session: Session }) {
+  const queryClient = useQueryClient();
+  const key = queryKeys.accountDetails(session.id);
+  const details = useQuery({ queryKey: key, queryFn: accountDetails, enabled: !session.guest });
+  // Set while the student picks their Google account in the browser.
+  const [link, setLink] = React.useState<SignInLink | null>(null);
+  const [busy, setBusy] = React.useState<"connect" | "disconnect" | null>(null);
+  const [confirming, setConfirming] = React.useState(false);
+
+  async function connect() {
+    setBusy("connect");
+    try {
+      setLink(await startGoogleLink());
+      if ((await finishSignIn())?.kind === "signedIn") {
+        await queryClient.invalidateQueries({ queryKey: key });
+        toast.success("Gmail connected", {
+          description: "You can now sign in with Continue with Google too.",
+        });
+      }
+    } catch (err) {
+      toast.error("Couldn't connect Gmail", { description: String(err) });
+    } finally {
+      setLink(null);
+      setBusy(null);
+    }
+  }
+
+  function cancel() {
+    // finishSignIn then resolves to null, which ends connect.
+    cancelSignIn().catch((err) => console.error("Cancel failed:", err));
+    setLink(null);
+  }
+
+  async function disconnect() {
+    setBusy("disconnect");
+    try {
+      queryClient.setQueryData(key, await unlinkGoogle());
+      setConfirming(false);
+      toast.success("Gmail disconnected", { description: "Sign in with GitHub from now on." });
+    } catch (err) {
+      toast.error("Couldn't disconnect Gmail", { description: String(err) });
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  if (session.guest) {
+    return (
+      <Empty>
+        <EmptyHeader>
+          <EmptyMedia variant="icon">
+            <MailIcon />
+          </EmptyMedia>
+          <EmptyTitle>No Gmail connected</EmptyTitle>
+          <EmptyDescription>
+            Guests have no account to connect Gmail to. Sign in with GitHub first, then connect
+            your Gmail here.
+          </EmptyDescription>
+        </EmptyHeader>
+      </Empty>
+    );
+  }
+
+  if (details.isPending) {
+    return <Skeleton className="h-16 w-full" />;
+  }
+
+  if (details.data?.googleConnected) {
+    return (
+      <div className="flex flex-col gap-4">
+        <div className="flex items-center gap-4">
+          <div className="flex size-16 shrink-0 items-center justify-center rounded-full border">
+            <GoogleIcon className="size-7" />
+          </div>
+          <div className="flex min-w-0 flex-col gap-1">
+            <div className="flex items-center gap-2">
+              <span className="truncate text-base font-medium">
+                {details.data.googleEmail ?? "Google account"}
+              </span>
+              <Badge variant="outline">Connected</Badge>
+            </div>
+            <p className="text-sm text-muted-foreground">
+              You can sign in with Continue with Google, as well as with GitHub.
+            </p>
+          </div>
+        </div>
+        <Button variant="outline" className="self-start" onClick={() => setConfirming(true)}>
+          Disconnect Gmail
+        </Button>
+        <AlertDialog open={confirming} onOpenChange={(open) => !busy && setConfirming(open)}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogMedia>
+                <MailIcon />
+              </AlertDialogMedia>
+              <AlertDialogTitle>Disconnect Gmail?</AlertDialogTitle>
+              <AlertDialogDescription>
+                You won't be able to sign in with Google any more. You can still sign in with GitHub,
+                and connect Gmail again later.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={busy !== null}>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                variant="destructive"
+                disabled={busy !== null}
+                onClick={(e) => {
+                  // Stay open until it's done.
+                  e.preventDefault();
+                  disconnect();
+                }}
+              >
+                {busy === "disconnect" && <Spinner />}
+                Disconnect
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      </div>
+    );
+  }
+
+  return (
+    <Empty>
+      <EmptyHeader>
+        <EmptyMedia variant="icon">
+          <MailIcon />
+        </EmptyMedia>
+        <EmptyTitle>No Gmail connected</EmptyTitle>
+        <EmptyDescription>
+          Connect your personal Gmail to sign in with it. It stays yours after you leave college, so
+          you keep your account and job alerts.
+        </EmptyDescription>
+      </EmptyHeader>
+      <EmptyContent>
+        <Button variant="outline" disabled={busy !== null} onClick={connect}>
+          {busy === "connect" && link === null ? <Spinner /> : <GoogleIcon />}
+          Connect Gmail
+        </Button>
+      </EmptyContent>
+      <BrowserSignInDialog provider="Google" link={link} onCancel={cancel} />
+    </Empty>
   );
 }
 
