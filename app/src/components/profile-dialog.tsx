@@ -302,8 +302,8 @@ function GmailSection({ session }: { session: Session }) {
           </EmptyMedia>
           <EmptyTitle>No Gmail connected</EmptyTitle>
           <EmptyDescription>
-            Guests have no account to connect Gmail to. Sign in with GitHub first, then connect
-            your Gmail here.
+            Guests have no account to connect Gmail to. Sign in with GitHub first, then connect your
+            Gmail here.
           </EmptyDescription>
         </EmptyHeader>
       </Empty>
@@ -344,8 +344,8 @@ function GmailSection({ session }: { session: Session }) {
               </AlertDialogMedia>
               <AlertDialogTitle>Disconnect Gmail?</AlertDialogTitle>
               <AlertDialogDescription>
-                You won't be able to sign in with Google any more. You can still sign in with GitHub,
-                and connect Gmail again later.
+                You won't be able to sign in with Google any more. You can still sign in with
+                GitHub, and connect Gmail again later.
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
@@ -467,7 +467,10 @@ function LanguagesSection() {
   }
 
   const isInstalled = (lang: Language) => installed.data.includes(lang.extension);
-  const rows = [...languages.filter(isInstalled), ...languages.filter((lang) => !isInstalled(lang))];
+  const rows = [
+    ...languages.filter(isInstalled),
+    ...languages.filter((lang) => !isInstalled(lang)),
+  ];
 
   return (
     <Table>

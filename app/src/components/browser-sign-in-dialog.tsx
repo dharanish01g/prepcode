@@ -16,7 +16,8 @@ import type { SignInLink } from "@/lib/auth";
 export type BrowserProvider = "GitHub" | "Google";
 
 const what: Record<BrowserProvider, string> = {
-  GitHub: "Approve prepcodes there, and check that GitHub shows your own account, not someone else's.",
+  GitHub:
+    "Approve prepcodes there, and check that GitHub shows your own account, not someone else's.",
   Google: "Choose your own Google account there.",
 };
 

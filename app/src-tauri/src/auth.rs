@@ -381,13 +381,13 @@ where
     // has approved prepcode in the browser.
     keyring_get(KEYRING_REFRESH_TOKEN).await?;
     let pkce = account::pkce()?;
-    let listener = TcpListener::bind(("127.0.0.1", 0))
-        .await
-        .map_err(|e| format!("Could not start signing in: {e}"))?;
+    let listener =
+        TcpListener::bind(("127.0.0.1", 0)).await.map_err(|e| format!("Could not start signing in: {e}"))?;
     let port = listener.local_addr().map_err(|e| format!("Could not start signing in: {e}"))?.port();
     let url = url_for(port, pkce.challenge).await?;
     let attempt = sign_in.attempts.fetch_add(1, Ordering::Relaxed) + 1;
-    *sign_in.lock() = Some(PendingSignIn { attempt, verifier: pkce.verifier, listener: Some(listener), purpose });
+    *sign_in.lock() =
+        Some(PendingSignIn { attempt, verifier: pkce.verifier, listener: Some(listener), purpose });
     // The dialog's Open browser again button tries again if this fails.
     if let Err(e) = app.opener().open_url(&url, None::<&str>) {
         log::warn!("Could not open the browser: {e}");
@@ -541,8 +541,11 @@ pub async fn finish_sign_in(
             return Err("This is a staff account. Use prepwisely to sign in with it.".into());
         }
         let email = tokens.email.clone();
-        *waiting.lock() =
-            Some(Waiting { account_id: tokens.user_id, email: tokens.email, access_token: tokens.access_token });
+        *waiting.lock() = Some(Waiting {
+            account_id: tokens.user_id,
+            email: tokens.email,
+            access_token: tokens.access_token,
+        });
         return Ok(Some(SignInResult::NeedsGitHub { email }));
     }
 
@@ -558,7 +561,9 @@ pub async fn finish_sign_in(
 /// account.
 fn already_linked(message: &str) -> bool {
     let message = message.to_lowercase();
-    message.contains("already linked") || message.contains("already exists") || message.contains("already in use")
+    message.contains("already linked")
+        || message.contains("already exists")
+        || message.contains("already in use")
 }
 
 #[tauri::command]
@@ -578,7 +583,10 @@ pub struct AccountDetails {
 impl AccountDetails {
     fn of(account: Option<&Account>) -> Self {
         let google = account.and_then(|a| a.google.as_ref());
-        AccountDetails { google_email: google.and_then(|g| g.email.clone()), google_connected: google.is_some() }
+        AccountDetails {
+            google_email: google.and_then(|g| g.email.clone()),
+            google_connected: google.is_some(),
+        }
     }
 }
 
@@ -589,7 +597,10 @@ pub fn account_details(db: State<Db>) -> Result<AccountDetails, String> {
 
 /// Disconnects the student's Google account: they sign in with GitHub only.
 #[tauri::command]
-pub async fn unlink_google(db: State<'_, Db>, access: State<'_, AccessToken>) -> Result<AccountDetails, String> {
+pub async fn unlink_google(
+    db: State<'_, Db>,
+    access: State<'_, AccessToken>,
+) -> Result<AccountDetails, String> {
     let saved = saved_account(&db)?.ok_or("Sign in with GitHub first.")?;
     let Some(google) = &saved.google else { return Ok(AccountDetails::of(Some(&saved))) };
     let token = access_token(&db, &access).await?;

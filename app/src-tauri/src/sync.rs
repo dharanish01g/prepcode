@@ -350,7 +350,8 @@ async fn sync(
     // The account system only hands out a token for the GitHub account this
     // prepcode account signed up with, whose id names the workspace.
     let RepoToken { token, github_login: owner, .. } = repo_token(app, db, user).await?;
-    let github_id = user.strip_prefix("gh-").and_then(|id| id.parse().ok()).ok_or("Sign in with GitHub to sync.")?;
+    let github_id =
+        user.strip_prefix("gh-").and_then(|id| id.parse().ok()).ok_or("Sign in with GitHub to sync.")?;
     let author = github::Author::student(github_id, &owner);
 
     let repo = github::get_repo(&token, &owner).await.map_err(msg)?.ok_or_else(|| {
@@ -438,7 +439,8 @@ async fn sync(
 
         let message = commit_message(&changes);
         let new_tree = github::create_tree(&token, &owner, &tree_sha, entries).await.map_err(msg)?;
-        let commit = github::create_commit(&token, &owner, &message, &new_tree, &head, &author).await.map_err(msg)?;
+        let commit =
+            github::create_commit(&token, &owner, &message, &new_tree, &head, &author).await.map_err(msg)?;
         if !github::update_branch(&token, &owner, branch, &commit).await.map_err(msg)? {
             continue;
         }

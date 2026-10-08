@@ -51,7 +51,9 @@ pub enum AccountError {
 impl AccountError {
     pub fn message(&self) -> String {
         match self {
-            AccountError::Offline => "Could not reach prepcode's servers. Check your internet connection.".into(),
+            AccountError::Offline => {
+                "Could not reach prepcode's servers. Check your internet connection.".into()
+            }
             AccountError::Rejected(message) | AccountError::Other(message) => message.clone(),
         }
     }
@@ -142,9 +144,12 @@ pub fn pkce() -> Result<Pkce, String> {
 
 /// Where the browser goes to sign in with `provider`, coming back to `port`.
 pub fn authorize_url(provider: Provider, port: u16, challenge: &str) -> String {
-    Url::parse_with_params(&format!("{SUPABASE}/auth/v1/authorize"), browser_params(provider, port, challenge))
-        .map(String::from)
-        .unwrap_or_default()
+    Url::parse_with_params(
+        &format!("{SUPABASE}/auth/v1/authorize"),
+        browser_params(provider, port, challenge),
+    )
+    .map(String::from)
+    .unwrap_or_default()
 }
 
 /// Where the browser goes to connect `provider` to the signed-in account, as
@@ -159,10 +164,7 @@ pub async fn link_url(
     params.push(("skip_http_redirect", "true".into()));
     let url = Url::parse_with_params(&format!("{SUPABASE}/auth/v1/user/identities/authorize"), params)
         .map_err(|e| AccountError::Other(e.to_string()))?;
-    let request = client()?
-        .get(url)
-        .header("apikey", PUBLISHABLE_KEY)
-        .bearer_auth(access_token);
+    let request = client()?.get(url).header("apikey", PUBLISHABLE_KEY).bearer_auth(access_token);
     let body = send(request).await?;
     body["url"]
         .as_str()
@@ -197,12 +199,17 @@ pub async fn wait_for_code(listener: &TcpListener) -> Result<String, String> {
         let line = String::from_utf8_lossy(&request).lines().next().unwrap_or_default().to_owned();
         let target = line.split(' ').nth(1).unwrap_or_default();
         let Some(result) = callback_result(target) else {
-            let _ = stream.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await;
+            let _ = stream
+                .write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                .await;
             continue;
         };
         let page = match &result {
             Ok(_) => callback_page("You're signed in", "You can close this tab and go back to prepcode."),
-            Err(message) => callback_page("Sign-in didn't finish", &format!("{message} Go back to prepcode to try again.")),
+            Err(message) => callback_page(
+                "Sign-in didn't finish",
+                &format!("{message} Go back to prepcode to try again."),
+            ),
         };
         let response = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{page}",
@@ -221,7 +228,8 @@ fn callback_result(target: &str) -> Option<Result<String, String>> {
     if url.path() != CALLBACK_PATH {
         return None;
     }
-    let param = |name: &str| url.query_pairs().find(|(key, _)| key == name).map(|(_, value)| value.into_owned());
+    let param =
+        |name: &str| url.query_pairs().find(|(key, _)| key == name).map(|(_, value)| value.into_owned());
     Some(match (param("code"), param("error_description").or_else(|| param("error"))) {
         (Some(code), _) if !code.is_empty() => Ok(code),
         (_, Some(error)) => Err(format!("{}.", error.trim_end_matches('.'))),
@@ -259,7 +267,9 @@ pub async fn refresh(refresh_token: &str) -> Result<Tokens, AccountError> {
 pub async fn user(access_token: &str) -> Result<Account, AccountError> {
     let request = client()?.get(format!("{SUPABASE}/auth/v1/user")).header("apikey", PUBLISHABLE_KEY);
     let body = send(request.bearer_auth(access_token)).await?;
-    account_of(&body).ok_or_else(|| AccountError::Other("Unexpected answer from prepcode's servers: no GitHub account".into()))
+    account_of(&body).ok_or_else(|| {
+        AccountError::Other("Unexpected answer from prepcode's servers: no GitHub account".into())
+    })
 }
 
 /// The roles of the signed-in account (staff roles, "faculty", "tpo",
@@ -334,7 +344,8 @@ pub async fn repo_token(access_token: &str) -> Result<RepoToken, AccountError> {
         }
     }
     let field = |key: &str| body[key].as_str().map(str::to_owned);
-    let unexpected = || AccountError::Other("Unexpected answer from prepcode's servers: no GitHub token".into());
+    let unexpected =
+        || AccountError::Other("Unexpected answer from prepcode's servers: no GitHub token".into());
     let expires_at = field("expires_at")
         .as_deref()
         .and_then(crate::github::parse_time)
@@ -379,7 +390,8 @@ struct TokenResponse {
 }
 
 fn tokens(body: Value) -> Result<Tokens, AccountError> {
-    let unexpected = |what: &str| AccountError::Other(format!("Unexpected answer from prepcode's servers: {what}"));
+    let unexpected =
+        |what: &str| AccountError::Other(format!("Unexpected answer from prepcode's servers: {what}"));
     let response: TokenResponse = serde_json::from_value(body).map_err(|_| unexpected("no session"))?;
     let user_id = response.user["id"].as_str().ok_or_else(|| unexpected("no account"))?.to_owned();
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
@@ -403,12 +415,16 @@ fn account_of(user: &Value) -> Option<Account> {
         .find_map(|value| value.as_str().and_then(|s| s.parse().ok()).or_else(|| value.as_u64()))?;
     let github_login = data["user_name"].as_str().or_else(|| data["preferred_username"].as_str())?.to_owned();
     let avatar_url = data["avatar_url"].as_str().map(str::to_owned);
-    let google = user["identities"].as_array()?.iter().find(|i| i["provider"] == "google").and_then(|identity| {
-        Some(LinkedIdentity {
-            identity_id: identity["identity_id"].as_str()?.to_owned(),
-            email: identity["identity_data"]["email"].as_str().or_else(|| identity["email"].as_str()).map(str::to_owned),
-        })
-    });
+    let google =
+        user["identities"].as_array()?.iter().find(|i| i["provider"] == "google").and_then(|identity| {
+            Some(LinkedIdentity {
+                identity_id: identity["identity_id"].as_str()?.to_owned(),
+                email: identity["identity_data"]["email"]
+                    .as_str()
+                    .or_else(|| identity["email"].as_str())
+                    .map(str::to_owned),
+            })
+        });
     Some(Account { id, github_id, github_login, avatar_url, google })
 }
 
@@ -433,7 +449,10 @@ mod tests {
             callback_result("/auth/callback?error=access_denied&error_description=The+user+denied+access"),
             Some(Err("The user denied access.".into()))
         );
-        assert_eq!(callback_result("/auth/callback"), Some(Err("The browser came back without a sign-in.".into())));
+        assert_eq!(
+            callback_result("/auth/callback"),
+            Some(Err("The browser came back without a sign-in.".into()))
+        );
         assert_eq!(callback_result("/favicon.ico"), None);
         assert_eq!(callback_result("/auth/callback/../x?code=1"), None);
     }

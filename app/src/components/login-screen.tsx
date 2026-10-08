@@ -24,9 +24,7 @@ import {
  * Where the student is: choosing how to sign in, or (after Google, for an
  * account with no GitHub yet) connecting GitHub, which may use another email.
  */
-type View =
-  | { name: "sign-in" }
-  | { name: "connect-github"; email: string | null; taken: boolean };
+type View = { name: "sign-in" } | { name: "connect-github"; email: string | null; taken: boolean };
 
 type Busy = BrowserProvider | "guest" | "connect" | "switch" | "cancel";
 
@@ -64,7 +62,10 @@ export function LoginScreen({ onAuthenticated }: { onAuthenticated: (session: Se
 
   function signIn(which: BrowserProvider) {
     return run(which, async () => {
-      const result = await inBrowser(which, which === "GitHub" ? startGitHubSignIn : startGoogleSignIn);
+      const result = await inBrowser(
+        which,
+        which === "GitHub" ? startGitHubSignIn : startGoogleSignIn,
+      );
       if (result?.kind === "signedIn") onAuthenticated(result.session);
       else if (result?.kind === "needsGitHub")
         setView({ name: "connect-github", email: result.email, taken: false });
@@ -76,7 +77,8 @@ export function LoginScreen({ onAuthenticated }: { onAuthenticated: (session: Se
     return run("connect", async () => {
       const result = await inBrowser("GitHub", startGitHubConnect);
       if (result?.kind === "signedIn") onAuthenticated(result.session);
-      else if (result?.kind === "gitHubTaken") setView({ name: "connect-github", email, taken: true });
+      else if (result?.kind === "gitHubTaken")
+        setView({ name: "connect-github", email, taken: true });
     });
   }
 
@@ -93,9 +95,13 @@ export function LoginScreen({ onAuthenticated }: { onAuthenticated: (session: Se
       try {
         const linked = await inBrowser("Google", startGoogleLink);
         if (linked?.kind === "signedIn") {
-          toast.success("Gmail connected", { description: "You can sign in with Google from now on." });
+          toast.success("Gmail connected", {
+            description: "You can sign in with Google from now on.",
+          });
         } else {
-          toast("Gmail not connected", { description: "You can connect it later in Profile → Gmail." });
+          toast("Gmail not connected", {
+            description: "You can connect it later in Profile → Gmail.",
+          });
         }
       } catch (err) {
         toast.error("Couldn't connect Gmail", {
@@ -139,15 +145,22 @@ export function LoginScreen({ onAuthenticated }: { onAuthenticated: (session: Se
     const who = view.email ? <span className="text-foreground">{view.email}</span> : "Google";
     return (
       <div className="flex w-full max-w-sm flex-col items-center gap-8">
-        <AuthHeader subtitle={view.taken ? "This GitHub already has an account." : "One more step."} />
+        <AuthHeader
+          subtitle={view.taken ? "This GitHub already has an account." : "One more step."}
+        />
         <div className="flex w-full flex-col gap-3">
           {view.taken ? (
             <>
               <p className="text-sm text-muted-foreground">
-                The GitHub you chose is already connected to a prepcode account. Sign in with it, and
-                we'll add {who} to that account.
+                The GitHub you chose is already connected to a prepcode account. Sign in with it,
+                and we'll add {who} to that account.
               </p>
-              <Button size="lg" className="w-full" disabled={busy !== null} onClick={useExistingAccount}>
+              <Button
+                size="lg"
+                className="w-full"
+                disabled={busy !== null}
+                onClick={useExistingAccount}
+              >
                 {spinning("switch") ? <Spinner /> : <GitHubIcon />}
                 Sign in with that GitHub
               </Button>
@@ -205,7 +218,12 @@ export function LoginScreen({ onAuthenticated }: { onAuthenticated: (session: Se
       <AuthHeader subtitle="Sign in to save your code to GitHub." />
 
       <div className="flex w-full flex-col gap-3">
-        <Button size="lg" className="w-full" disabled={busy !== null} onClick={() => signIn("GitHub")}>
+        <Button
+          size="lg"
+          className="w-full"
+          disabled={busy !== null}
+          onClick={() => signIn("GitHub")}
+        >
           {spinning("GitHub") ? <Spinner /> : <GitHubIcon />}
           Sign in with GitHub
         </Button>
