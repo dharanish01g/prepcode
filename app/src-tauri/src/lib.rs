@@ -1,3 +1,4 @@
+mod account;
 mod auth;
 mod catalog;
 mod databases;
@@ -33,7 +34,10 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .manage(auth::CurrentUser::default())
         .manage(auth::SignIn::default())
+        .manage(auth::AccessToken::default())
+        .manage(auth::WaitingAccount::default())
         .manage(sync::SyncLock::default())
+        .manage(sync::RepoTokens::default())
         .manage(runtimes::RuntimeInstalls::default())
         .manage(run::Runner::default())
         .manage(sql::Servers::default())
@@ -51,8 +55,14 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             auth::restore_session,
             auth::start_github_sign_in,
-            auth::finish_github_sign_in,
-            auth::cancel_github_sign_in,
+            auth::start_google_sign_in,
+            auth::start_google_link,
+            auth::start_github_connect,
+            auth::discard_waiting_account,
+            auth::finish_sign_in,
+            auth::cancel_sign_in,
+            auth::account_details,
+            auth::unlink_google,
             auth::guest_login,
             auth::logout,
             catalog::list_languages,
@@ -66,6 +76,7 @@ pub fn run() {
             files::export_guest_files,
             runtimes::list_runtimes,
             runtimes::install_runtime,
+            runtimes::remove_runtime,
             run::run_program,
             run::send_input,
             run::stop_program,

@@ -15,14 +15,18 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::path::Path;
+use std::sync::Mutex;
+use std::time::{SystemTime, UNIX_EPOCH};
 
+use futures_util::StreamExt;
 use rusqlite::{params, Connection};
 use serde::Serialize;
 use serde_json::json;
 use sha1::{Digest, Sha1};
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 
-use crate::auth::{self, workspace_dir, CurrentUser, GUEST_PREFIX};
+use crate::account::{self, RepoToken};
+use crate::auth::{self, workspace_dir, AccessToken, CurrentUser, GUEST_PREFIX};
 use crate::catalog;
 use crate::db::Db;
 use crate::files::{self, split_extension, WorkspaceFile, WorkspaceLock};
@@ -243,6 +247,33 @@ pub fn sync_status(app: AppHandle, current: State<CurrentUser>, db: State<Db>) -
 #[derive(Default)]
 pub struct SyncLock(tokio::sync::Mutex<()>);
 
+/// The signed-in student's current one-hour GitHub token (with whose it is),
+/// reused until shortly before it expires. Only ever in memory.
+#[derive(Default)]
+pub struct RepoTokens(Mutex<Option<(String, RepoToken)>>);
+
+impl RepoTokens {
+    pub fn clear(&self) {
+        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    }
+}
+
+/// A token for `user`'s `prepcode-programs` repo: the cached one, or a new one
+/// from the account system.
+async fn repo_token(app: &AppHandle, db: &Db, user: &str) -> Result<RepoToken, String> {
+    let tokens = app.state::<RepoTokens>();
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+    if let Some((owner, token)) = tokens.0.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+        if owner == user && token.expires_at > now + 5 * 60 {
+            return Ok(token.clone());
+        }
+    }
+    let access = auth::access_token(db, &app.state::<AccessToken>()).await?;
+    let token = account::repo_token(&access).await.map_err(|e| e.message())?;
+    *tokens.0.lock().unwrap_or_else(|e| e.into_inner()) = Some((user.to_owned(), token.clone()));
+    Ok(token)
+}
+
 #[derive(Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SyncReport {
@@ -316,17 +347,20 @@ async fn sync(
     push: bool,
 ) -> Result<SyncReport, String> {
     let msg = |e: GitHubError| e.message();
-    let token = auth::saved_token().await?.ok_or("Sign in with GitHub to sync.")?;
-    let account = github::user(&token).await.map_err(msg)?;
-    if format!("gh-{}", account.id) != user {
-        return Err("You're signed in to GitHub as someone else. Log out and sign in again.".into());
-    }
-    let owner = account.login;
+    // The account system only hands out a token for the GitHub account this
+    // prepcode account signed up with, whose id names the workspace.
+    let RepoToken { token, github_login: owner, .. } = repo_token(app, db, user).await?;
+    let github_id =
+        user.strip_prefix("gh-").and_then(|id| id.parse().ok()).ok_or("Sign in with GitHub to sync.")?;
+    let author = github::Author::student(github_id, &owner);
 
-    let (repo, created) = match github::get_repo(&token, &owner).await.map_err(msg)? {
-        Some(repo) => (repo, false),
-        None => (github::create_repo(&token).await.map_err(msg)?, true),
-    };
+    let repo = github::get_repo(&token, &owner).await.map_err(msg)?.ok_or_else(|| {
+        format!(
+            "{} create a public repository called {} and give the prepcodes app access to it.",
+            account::CONNECT_GITHUB,
+            github::REPO
+        )
+    })?;
     let branch = &repo.default_branch;
 
     // A push fails if GitHub moved on meanwhile (another computer synced):
@@ -336,7 +370,7 @@ async fn sync(
             Some(head) => head,
             None => {
                 // An empty repo: give it a first commit to build on.
-                github::create_file(&token, &owner, MARKER, MARKER_CONTENT, "Set up prepcode")
+                github::create_file(&token, &owner, MARKER, MARKER_CONTENT, "Set up prepcode", &author)
                     .await
                     .map_err(msg)?;
                 continue;
@@ -345,12 +379,15 @@ async fn sync(
         let tree_sha = github::commit_tree(&token, &owner, &head).await.map_err(msg)?;
         let tree = github::tree(&token, &owner, &tree_sha).await.map_err(msg)?;
 
+        // Students create the repo themselves, so GitHub's starter files (a
+        // README, LICENSE or .gitignore at the top) are fine. Anything in a
+        // folder, without the marker, is some other project: leave it alone.
         let has_marker = tree.iter().any(|e| e.path == MARKER);
-        let has_others = tree.iter().any(|e| e.kind == "blob" && e.path != "README.md" && e.path != MARKER);
-        if !created && !has_marker && has_others {
+        let has_others = tree.iter().any(|e| e.kind == "blob" && e.path.contains('/'));
+        if !has_marker && has_others {
             return Err(format!(
-                "Your GitHub account already has a repository called \"{}\" that prepcode didn't \
-                 create. Rename or delete it on GitHub, then sync again.",
+                "Your \"{}\" repository on GitHub already holds another project. Rename it on GitHub, \
+                 create an empty one with that name for prepcode, then sync again.",
                 github::REPO
             ));
         }
@@ -402,7 +439,8 @@ async fn sync(
 
         let message = commit_message(&changes);
         let new_tree = github::create_tree(&token, &owner, &tree_sha, entries).await.map_err(msg)?;
-        let commit = github::create_commit(&token, &owner, &message, &new_tree, &head).await.map_err(msg)?;
+        let commit =
+            github::create_commit(&token, &owner, &message, &new_tree, &head, &author).await.map_err(msg)?;
         if !github::update_branch(&token, &owner, branch, &commit).await.map_err(msg)? {
             continue;
         }
@@ -430,6 +468,24 @@ fn is_program_path(path: &str, extensions: &HashSet<String>) -> bool {
         && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
+/// How many files a pull downloads at once.
+const PARALLEL_DOWNLOADS: usize = 6;
+
+/// A file's content from GitHub, and when it last changed there.
+struct Download {
+    bytes: Vec<u8>,
+    changed: Option<SystemTime>,
+}
+
+async fn download(token: &str, owner: &str, path: String, sha: String) -> Result<(String, Download), String> {
+    let bytes = github::blob(token, owner, &sha).await.map_err(|e| e.message())?;
+    // Dated by its last change on GitHub, not by this download, so Programs
+    // lists it under the day it was written. Best effort: without it, the
+    // file just shows as changed now.
+    let changed = github::last_changed(token, owner, &path).await.ok().flatten();
+    Ok((path, Download { bytes, changed }))
+}
+
 /// Applies what changed on GitHub since the last sync to the workspace.
 ///
 /// The student can save while this runs, so each file is checked again,
@@ -450,6 +506,27 @@ async fn pull(
     let mut report = SyncReport::default();
 
     let paths: BTreeSet<String> = remote.keys().chain(synced.keys()).chain(local.keys()).cloned().collect();
+
+    // Download everything new or changed on GitHub first, a few at a time
+    // (each file is two requests: its content and its date). The loop below
+    // then applies them in order, checking each file as it is right then.
+    let wanted: Vec<(String, String)> = paths
+        .iter()
+        .filter_map(|path| {
+            let there = remote.get(path)?;
+            let here = local.get(path).map(|l| &l.sha);
+            let base = synced.get(path).map(|old| &old.sha);
+            (here != Some(there) && base != Some(there)).then(|| (path.clone(), there.clone()))
+        })
+        .collect();
+    let mut downloads: HashMap<String, Download> = futures_util::stream::iter(wanted)
+        .map(|(path, sha)| download(token, owner, path, sha))
+        .buffer_unordered(PARALLEL_DOWNLOADS)
+        .collect::<Vec<_>>()
+        .await
+        .into_iter()
+        .collect::<Result<_, _>>()?;
+
     for path in paths {
         let base = synced.get(&path).map(|old| old.sha.as_str());
         let here = local.get(&path).map(|l| l.sha.clone());
@@ -471,11 +548,7 @@ async fn pull(
         match there {
             // New or changed on GitHub: download it.
             Some(sha) => {
-                let bytes = github::blob(token, owner, sha).await.map_err(|e| e.message())?;
-                // Dated by its last change on GitHub, not by this download, so
-                // Programs lists it under the day it was written. Best effort:
-                // without it, the file just shows as changed now.
-                let changed = github::last_changed(token, owner, &path).await.ok().flatten();
+                let Some(Download { bytes, changed }) = downloads.remove(&path) else { continue };
                 let _guard = workspace_lock.lock();
                 // The files as they are now, not when the pull started.
                 let mut current = files::workspace_files(&workspace, &extensions)?;

@@ -19,6 +19,7 @@ export const queryKeys = {
   fileContent: (userId: string, filename: string) => ["file", userId, filename] as const,
   fileHistory: (userId: string) => ["file-history", userId] as const,
   syncStatus: (userId: string) => ["sync-status", userId] as const,
+  accountDetails: (userId: string) => ["account-details", userId] as const,
   // `runs` counts finished query runs: any run may change the tables.
   databaseTables: (database: string, runs: number) => ["database-tables", database, runs] as const,
   tableRows: (database: string, table: string, runs: number) =>

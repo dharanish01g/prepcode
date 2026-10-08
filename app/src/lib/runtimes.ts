@@ -32,6 +32,15 @@ export function useInstallRuntimeMutation() {
   });
 }
 
+/** Deletes a programming language's download (and any language sharing it). */
+export function useRemoveRuntimeMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (extension: string) => invoke<void>("remove_runtime", { extension }),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: RUNTIMES_KEY }),
+  });
+}
+
 /** Languages currently downloading, from any component. */
 export function useInstallingRuntimes() {
   return useMutationState({
