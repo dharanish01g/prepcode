@@ -13,6 +13,10 @@ import { startLogging } from "@/lib/reporting";
 startLogging();
 initZoom();
 
+// Hide the webview's own right-click menu (Reload, Inspect, ...) everywhere.
+// Our own menus, like the one on files, still open: they handle the click first.
+document.addEventListener("contextmenu", (e) => e.preventDefault());
+
 // Languages are used everywhere (icons, editor, new-file dialog), so load the
 // catalog before the first render. It's a local database read, so it's quick.
 loadLanguages()
