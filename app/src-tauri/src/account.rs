@@ -43,8 +43,14 @@ fn client() -> Result<&'static reqwest::Client, AccountError> {
 pub enum AccountError {
     /// No connection, a timeout, or the server is down: try again later.
     Offline,
-    /// The account system refused, e.g. a signed-out session or a used code.
+    /// The account system refused, e.g. a used code or too many requests.
     Rejected(String),
+    /// The session is over for good (signed out, deleted, or its refresh
+    /// token already used): only this means "sign in again".
+    SignedOut(String),
+    /// The student's GitHub isn't set up for syncing yet: no
+    /// `prepcode-programs` repo, or the prepcodes app has no access to it.
+    NotSetUp(String),
     Other(String),
 }
 
@@ -54,7 +60,10 @@ impl AccountError {
             AccountError::Offline => {
                 "Could not reach prepcode's servers. Check your internet connection.".into()
             }
-            AccountError::Rejected(message) | AccountError::Other(message) => message.clone(),
+            AccountError::Rejected(message)
+            | AccountError::SignedOut(message)
+            | AccountError::NotSetUp(message)
+            | AccountError::Other(message) => message.clone(),
         }
     }
 }
@@ -65,6 +74,8 @@ impl std::fmt::Debug for AccountError {
         match self {
             AccountError::Offline => write!(f, "Offline"),
             AccountError::Rejected(message) => write!(f, "Rejected({message:?})"),
+            AccountError::SignedOut(message) => write!(f, "SignedOut({message:?})"),
+            AccountError::NotSetUp(message) => write!(f, "NotSetUp({message:?})"),
             AccountError::Other(message) => write!(f, "Other({message:?})"),
         }
     }
@@ -109,8 +120,9 @@ impl Provider {
     }
 }
 
-/// A signed-in session. GitHub's and Google's own tokens, which Supabase also
-/// sends back, are never read: syncing gets short-lived repo tokens another way.
+/// A signed-in session. Syncing gets short-lived repo tokens another way, so
+/// GitHub's and Google's own tokens, which Supabase also sends back, are never
+/// saved.
 pub struct Tokens {
     /// Valid for an hour; only ever kept in memory.
     pub access_token: String,
@@ -123,6 +135,10 @@ pub struct Tokens {
     pub email: Option<String>,
     /// None while the account has no GitHub yet (it started with Google).
     pub account: Option<Account>,
+    /// The token of the GitHub or Google login just used in the browser (None
+    /// after a refresh). A GitHub one is used once, right after signing in, to
+    /// find or create the student's repo (see `sync::repo_setup`).
+    pub provider_token: Option<String>,
 }
 
 // --- Signing in -----------------------------------------------------------------------
@@ -256,8 +272,9 @@ pub async fn exchange_code(code: &str, verifier: &str) -> Result<Tokens, Account
     tokens(send(post("/auth/v1/token?grant_type=pkce")?.json(&body)).await?)
 }
 
-/// A new session from a saved refresh token. Rejected means the student must
-/// sign in again (signed out elsewhere, or the token was already used).
+/// A new session from a saved refresh token. Only SignedOut means the student
+/// must sign in again (signed out elsewhere, or the token was already used);
+/// any other error leaves the saved sign-in as it is.
 pub async fn refresh(refresh_token: &str) -> Result<Tokens, AccountError> {
     let body = json!({ "refresh_token": refresh_token });
     tokens(send(post("/auth/v1/token?grant_type=refresh_token")?.json(&body)).await?)
@@ -324,16 +341,12 @@ pub async fn repo_token(access_token: &str) -> Result<RepoToken, AccountError> {
     let rejected = |message: String| Err(AccountError::Rejected(message));
     match (status, body["code"].as_str()) {
         (200, _) => {}
-        (_, Some("not_installed")) => {
-            return rejected(format!(
-                "{CONNECT_GITHUB} install the prepcodes app on GitHub and give it your prepcode-programs repository."
-            ))
-        }
-        (_, Some("repo_not_selected")) => {
-            return rejected(format!(
-                "{CONNECT_GITHUB} give the prepcodes app your prepcode-programs repository on GitHub. Create a \
-                 public repository with that name first if you don't have one."
-            ))
+        // The prepcodes app isn't installed, or doesn't have the repo (which
+        // may not exist yet).
+        (_, Some("not_installed" | "repo_not_selected")) => {
+            return Err(AccountError::NotSetUp(format!(
+                "{CONNECT_GITHUB} give prepcode access to your prepcode-programs repository on GitHub."
+            )))
         }
         (_, Some("no_github")) => return rejected("This account has no GitHub sign-in.".into()),
         (401, _) => return rejected("Your sign-in has expired. Log out and sign in again.".into()),
@@ -366,19 +379,45 @@ fn post(path: &str) -> Result<RequestBuilder, AccountError> {
 async fn send(request: RequestBuilder) -> Result<Value, AccountError> {
     let response = request.send().await.map_err(|_| AccountError::Offline)?;
     let status = response.status();
-    if status.is_server_error() {
-        return Err(AccountError::Offline);
-    }
     let body: Value = response.json().await.unwrap_or(Value::Null);
     if status.is_success() {
         return Ok(body);
     }
+    Err(error_of(status, &body))
+}
+
+/// What a failed answer from the account system means.
+fn error_of(status: reqwest::StatusCode, body: &Value) -> AccountError {
+    if status.is_server_error() || status == reqwest::StatusCode::REQUEST_TIMEOUT {
+        return AccountError::Offline;
+    }
+    // A college lab shares one internet address, so many PCs signing in at
+    // once can hit Supabase's per-address limits.
+    if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+        return AccountError::Rejected(
+            "Too many sign-ins from this network right now. Please try again in a few minutes.".into(),
+        );
+    }
     let message = ["msg", "error_description", "message", "error"]
         .iter()
         .find_map(|key| body[*key].as_str())
-        .unwrap_or("The sign-in didn't work. Please try again.");
-    Err(AccountError::Rejected(message.to_owned()))
+        .unwrap_or("The sign-in didn't work. Please try again.")
+        .to_owned();
+    if body["error_code"].as_str().is_some_and(|code| SIGNED_OUT_CODES.contains(&code)) {
+        return AccountError::SignedOut(message);
+    }
+    AccountError::Rejected(message)
 }
+
+/// Supabase's `error_code`s for a session that can never be used again.
+const SIGNED_OUT_CODES: &[&str] = &[
+    "refresh_token_not_found",
+    "refresh_token_already_used",
+    "session_not_found",
+    "session_expired",
+    "user_not_found",
+    "user_banned",
+];
 
 #[derive(Deserialize)]
 struct TokenResponse {
@@ -387,6 +426,7 @@ struct TokenResponse {
     expires_in: u64,
     expires_at: Option<u64>,
     user: Value,
+    provider_token: Option<String>,
 }
 
 fn tokens(body: Value) -> Result<Tokens, AccountError> {
@@ -402,6 +442,7 @@ fn tokens(body: Value) -> Result<Tokens, AccountError> {
         user_id,
         email: response.user["email"].as_str().map(str::to_owned),
         account: account_of(&response.user),
+        provider_token: response.provider_token.filter(|token| !token.is_empty()),
     })
 }
 
@@ -455,6 +496,22 @@ mod tests {
         );
         assert_eq!(callback_result("/favicon.ico"), None);
         assert_eq!(callback_result("/auth/callback/../x?code=1"), None);
+    }
+
+    #[test]
+    fn only_a_dead_session_signs_out() {
+        use reqwest::StatusCode;
+        // As Supabase answers an unknown refresh token.
+        let gone = json!({
+            "code": 400,
+            "error_code": "refresh_token_not_found",
+            "msg": "Invalid Refresh Token: Refresh Token Not Found"
+        });
+        assert!(matches!(error_of(StatusCode::BAD_REQUEST, &gone), AccountError::SignedOut(_)));
+        let limited = json!({ "code": 429, "error_code": "over_request_rate_limit", "msg": "Rate limit" });
+        assert!(matches!(error_of(StatusCode::TOO_MANY_REQUESTS, &limited), AccountError::Rejected(_)));
+        assert!(matches!(error_of(StatusCode::BAD_GATEWAY, &Value::Null), AccountError::Offline));
+        assert!(matches!(error_of(StatusCode::FORBIDDEN, &Value::Null), AccountError::Rejected(_)));
     }
 
     #[test]

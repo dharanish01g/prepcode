@@ -25,8 +25,8 @@ use serde_json::json;
 use sha1::{Digest, Sha1};
 use tauri::{AppHandle, Manager, State};
 
-use crate::account::{self, RepoToken};
-use crate::auth::{self, workspace_dir, AccessToken, CurrentUser, GUEST_PREFIX};
+use crate::account::{self, AccountError, RepoToken};
+use crate::auth::{self, workspace_dir, AccessToken, CurrentUser, GitHubUserToken, GUEST_PREFIX};
 use crate::catalog;
 use crate::db::Db;
 use crate::files::{self, split_extension, WorkspaceFile, WorkspaceLock};
@@ -261,6 +261,10 @@ impl RepoTokens {
 /// A token for `user`'s `prepcode-programs` repo: the cached one, or a new one
 /// from the account system.
 async fn repo_token(app: &AppHandle, db: &Db, user: &str) -> Result<RepoToken, String> {
+    fetch_repo_token(app, db, user).await.map_err(|e| e.message())
+}
+
+async fn fetch_repo_token(app: &AppHandle, db: &Db, user: &str) -> Result<RepoToken, AccountError> {
     let tokens = app.state::<RepoTokens>();
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
     if let Some((owner, token)) = tokens.0.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
@@ -268,10 +272,88 @@ async fn repo_token(app: &AppHandle, db: &Db, user: &str) -> Result<RepoToken, S
             return Ok(token.clone());
         }
     }
-    let access = auth::access_token(db, &app.state::<AccessToken>()).await?;
-    let token = account::repo_token(&access).await.map_err(|e| e.message())?;
+    let access = auth::access_token(db, &app.state::<AccessToken>()).await.map_err(AccountError::Other)?;
+    let token = account::repo_token(&access).await?;
     *tokens.0.lock().unwrap_or_else(|e| e.into_inner()) = Some((user.to_owned(), token.clone()));
     Ok(token)
+}
+
+// --- Setting up the repo ----------------------------------------------------------------
+
+/// Where GitHub creates a repo, with prepcode's filled in.
+const NEW_REPO_URL: &str =
+    "https://github.com/new?name=prepcode-programs&visibility=public&description=Programs+saved+from+prepcode";
+
+/// Whether the signed-in student's GitHub is ready for syncing, and if not,
+/// what's left. Mirrors RepoSetup in src/lib/sync.ts.
+#[derive(Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum RepoSetup {
+    /// prepcode can sync with their `prepcode-programs` repo.
+    Ready,
+    /// They have no `prepcode-programs` repo, and prepcode couldn't create
+    /// one: they create it on GitHub (`url`, with the name filled in).
+    NeedsRepo { url: String },
+    /// The repo exists; they give the prepcodes app access to it (`url`, with
+    /// their account and only that repo selected).
+    NeedsAccess { url: String },
+    /// Couldn't find out (e.g. offline). The app opens anyway; Sync says what's
+    /// wrong later.
+    Unknown { message: String },
+}
+
+/// The prepcodes install page for `github_id`, with only `repo_id` selected
+/// (without a repo id, GitHub would select all their repos).
+fn install_url(github_id: u64, repo_id: u64) -> String {
+    format!(
+        "https://github.com/apps/prepcodes/installations/new/permissions\
+         ?suggested_target_id={github_id}&repository_ids[]={repo_id}"
+    )
+}
+
+/// Checks the signed-in student's repo access, and gets their repo ready if it
+/// isn't: right after they approved GitHub in the browser, their GitHub token
+/// creates `prepcode-programs` if it doesn't exist yet. The app shows what's
+/// left (see RepoSetup), and calls this again until it's Ready.
+#[tauri::command]
+pub async fn repo_setup(
+    app: AppHandle,
+    current: State<'_, CurrentUser>,
+    db: State<'_, Db>,
+) -> Result<RepoSetup, String> {
+    let user = require_student(&current)?;
+    match fetch_repo_token(&app, &db, &user).await {
+        Ok(_) => {
+            // Ready: the GitHub token isn't needed any more.
+            app.state::<GitHubUserToken>().clear();
+            return Ok(RepoSetup::Ready);
+        }
+        Err(AccountError::NotSetUp(_)) => {}
+        Err(e) => return Ok(RepoSetup::Unknown { message: e.message() }),
+    }
+
+    let account = auth::saved_account(&db)?.ok_or("You're not logged in.")?;
+    let github_token = app.state::<GitHubUserToken>().get(account.github_id);
+    let unknown = |e: github::GitHubError| RepoSetup::Unknown { message: e.message() };
+    let found = match github::find_repo(github_token.as_deref(), &account.github_login).await {
+        Ok(found) => found,
+        Err(e) => return Ok(unknown(e)),
+    };
+    let repo_id = match (found, github_token) {
+        (Some(id), _) => id,
+        (None, Some(token)) => match github::create_repo(&token).await {
+            Ok(id) => {
+                log::info!("Created the student's prepcode-programs repo");
+                id
+            }
+            Err(e) => {
+                log::warn!("Could not create the student's repo, so they create it on GitHub: {e:?}");
+                return Ok(RepoSetup::NeedsRepo { url: NEW_REPO_URL.into() });
+            }
+        },
+        (None, None) => return Ok(RepoSetup::NeedsRepo { url: NEW_REPO_URL.into() }),
+    };
+    Ok(RepoSetup::NeedsAccess { url: install_url(account.github_id, repo_id) })
 }
 
 #[derive(Default, Serialize)]
@@ -356,7 +438,7 @@ async fn sync(
 
     let repo = github::get_repo(&token, &owner).await.map_err(msg)?.ok_or_else(|| {
         format!(
-            "{} create a public repository called {} and give the prepcodes app access to it.",
+            "{} give prepcode access to your {} repository on GitHub.",
             account::CONNECT_GITHUB,
             github::REPO
         )
@@ -692,6 +774,15 @@ pub fn remove_synced_files(app: &AppHandle, db: &Db, user: &str) -> Result<(), S
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn install_url_selects_only_the_repo() {
+        assert_eq!(
+            install_url(323292969, 1401456644),
+            "https://github.com/apps/prepcodes/installations/new/permissions\
+             ?suggested_target_id=323292969&repository_ids[]=1401456644"
+        );
+    }
 
     #[test]
     fn blob_sha_matches_git() {

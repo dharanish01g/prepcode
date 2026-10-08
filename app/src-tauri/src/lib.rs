@@ -38,6 +38,7 @@ pub fn run() {
         .manage(auth::WaitingAccount::default())
         .manage(sync::SyncLock::default())
         .manage(sync::RepoTokens::default())
+        .manage(auth::GitHubUserToken::default())
         .manage(runtimes::RuntimeInstalls::default())
         .manage(run::Runner::default())
         .manage(sql::Servers::default())
@@ -87,6 +88,7 @@ pub fn run() {
             sync::sync_status,
             sync::sync_now,
             sync::pull_from_github,
+            sync::repo_setup,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

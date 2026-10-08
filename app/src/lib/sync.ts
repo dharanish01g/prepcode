@@ -41,3 +41,24 @@ export function unsyncedCount(status: SyncStatus | undefined) {
     ? Object.keys(status.changes).length + status.deleted.length + status.renamed.length
     : 0;
 }
+
+/** How sync errors that are fixed on GitHub start (see account.rs). */
+export const CONNECT_GITHUB = "Connect GitHub:";
+
+/** Whether the student's GitHub is ready for syncing. Mirrors RepoSetup in sync.rs. */
+export type RepoSetup =
+  | { kind: "ready" }
+  /** No prepcode-programs repo, and prepcode couldn't create it: create it at `url`. */
+  | { kind: "needsRepo"; url: string }
+  /** Give the prepcodes app access to the repo at `url` (only that repo selected). */
+  | { kind: "needsAccess"; url: string }
+  /** Couldn't find out, e.g. offline. */
+  | { kind: "unknown"; message: string };
+
+/**
+ * Checks the student's repo access, creating their repo first if it can.
+ * Called again until it's ready.
+ */
+export function repoSetup() {
+  return invoke<RepoSetup>("repo_setup");
+}

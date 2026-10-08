@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { toast } from "sonner";
 import { AppSidebar, type View } from "@/components/app-sidebar";
 import { CodeEditor } from "@/components/code-editor";
 import { FileIcon } from "@/components/file-icon";
@@ -8,6 +9,7 @@ import { ResultsPanel } from "@/components/results-panel";
 import { GuestLogoutDialog } from "@/components/guest-logout-dialog";
 import { JobsScreen } from "@/components/jobs-screen";
 import { PracticeScreen } from "@/components/practice-screen";
+import { RepoSetupSteps } from "@/components/repo-setup";
 import { SaveStatus } from "@/components/save-status";
 import { UnsyncedDialog } from "@/components/unsynced-dialog";
 import { PlayIcon, SquareIcon, TextCursorIcon, WandSparklesIcon } from "lucide-react";
@@ -32,6 +34,13 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Separator } from "@/components/ui/separator";
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { displayName, type Session } from "@/lib/auth";
@@ -72,11 +81,15 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
     databaseFile && files && !files.includes(databaseFile) ? null : databaseFile;
   const selectedFile = view === "Database" ? openDatabaseFile : programFile;
   const setSelectedFile = view === "Database" ? setDatabaseFile : setProgramFile;
+  // Sync found no access to the student's repo (e.g. they removed the
+  // prepcodes app on GitHub): the same steps as at sign-in, in a dialog.
+  const [settingUpGitHub, setSettingUpGitHub] = useState(false);
   const sync = useSync({
     userId: session.id,
     selectedFile,
     onSelectFile: setSelectedFile,
     flushEdits: () => flushEditorRef.current(),
+    onNeedsSetup: () => setSettingUpGitHub(true),
   });
 
   // Bring down the student's files from GitHub (e.g. on a new computer).
@@ -357,6 +370,28 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
           </>
         )}
       </SidebarInset>
+      <Dialog open={settingUpGitHub} onOpenChange={setSettingUpGitHub}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Set up GitHub sync</DialogTitle>
+            <DialogDescription>
+              prepcode doesn't have access to your repository on GitHub any more.
+            </DialogDescription>
+          </DialogHeader>
+          {settingUpGitHub && (
+            <RepoSetupSteps
+              onReady={() => {
+                setSettingUpGitHub(false);
+                toast.success("GitHub is set up", {
+                  description: "Click Sync to save your programs.",
+                });
+              }}
+              onSkip={() => setSettingUpGitHub(false)}
+              skipLabel="Close"
+            />
+          )}
+        </DialogContent>
+      </Dialog>
       <UnsyncedDialog
         action={unsyncedAction}
         count={unsynced}
