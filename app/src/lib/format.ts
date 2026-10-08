@@ -76,7 +76,7 @@ const FORMATTERS = ["prettier", "ruff", "clang-format", "gofmt"];
 /**
  * Formats a student's program with the formatter its language names in the
  * catalog: "prettier" (JavaScript), "ruff" (Python), "gofmt" (Go) or
- * "clang-format" (C, C++, Java; it picks the language from the file
+ * "clang-format" (C, C++, Java, C#; it picks the language from the file
  * extension). Throws if the code can't be parsed (e.g. a Python syntax
  * error), or NoFormatterError if the language has no formatter.
  */

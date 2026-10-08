@@ -5,20 +5,22 @@ import * as monaco from "monaco-editor";
 import EditorWorker from "monaco-editor/editor/editor.worker?worker";
 import TypeScriptWorker from "monaco-editor/languages/features/typescript/ts.worker?worker";
 import { onZoomApplied } from "@/hooks/use-zoom";
+import { registerCSharpCompletions } from "@/lib/csharp-completions";
 
 self.MonacoEnvironment = {
   // Once getWorker is set, Monaco asks it for every worker and never falls
   // back to its own loading, so each one the catalog's languages use must be
   // here. JavaScript's (errors and suggestions) is the only language worker;
-  // the others are highlighting only.
+  // the others use the editor worker.
   getWorker(_workerId, label) {
     if (label === "editorWorkerService") return new EditorWorker();
     if (label === "javascript" || label === "typescript") return new TypeScriptWorker();
-    throw new Error(`No Monaco worker for ${label}: add it to MonacoEnvironment in monaco.ts`);
+    return new EditorWorker();
   },
 };
 
 loader.config({ monaco });
+registerCSharpCompletions(monaco);
 
 /** Code text size in both editors. */
 export const EDITOR_FONT_SIZE = 13;

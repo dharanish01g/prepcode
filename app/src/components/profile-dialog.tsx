@@ -638,7 +638,7 @@ const SHARED_WITH_OTHER_ACCOUNTS = navigator.userAgent.includes("Windows");
 const FEATURES = [
   {
     title: "Programs",
-    text: "Write and run code in Python, JavaScript, C, C++, Java and Go. prepcode downloads each language for you, so there's nothing to set up.",
+    text: "Write and run code in Python, JavaScript, C, C++, Java, Go and C#. prepcode downloads each language for you, so there's nothing to set up.",
   },
   {
     title: "Sync",
