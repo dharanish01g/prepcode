@@ -10,7 +10,6 @@ import {
 } from "@/lib/monaco";
 import { useIsDark } from "@/hooks/use-theme";
 import { monacoLanguageOf } from "@/lib/files";
-import { registerCSharpCompletions } from "@/lib/csharp-completions";
 import { formatCode, NoFormatterError } from "@/lib/format";
 import { useFileContentQuery, useSaveFileMutation } from "@/lib/queries";
 
@@ -172,7 +171,6 @@ function FileEditor({
       onMount={(editor, monaco) => {
         editorRef.current = editor;
         blockClipboard(editor);
-        registerCSharpCompletions(monaco);
         // Shift+Alt+F, the same shortcut as VS Code's Format Document.
         editor.addAction({
           id: "prepcode.format",
