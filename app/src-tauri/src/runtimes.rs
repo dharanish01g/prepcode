@@ -181,7 +181,11 @@ pub fn check_installed(app: &AppHandle, db: &Db) -> Result<(), String> {
     })?;
     let before: BTreeSet<String> = saved.and_then(|raw| serde_json::from_str(&raw).ok()).unwrap_or_default();
     for runtime in runtimes.iter().filter(|r| before.contains(&r.id) && !installed.contains(&r.id)) {
-        log::error!("{} disappeared: {}", runtime.id, what_is_left(&runtime_dir(app, runtime)?, runtime));
+        if removed_marker(app, runtime)?.exists() {
+            log::info!("{} was removed in Profile > Languages", runtime.id);
+        } else {
+            log::error!("{} disappeared: {}", runtime.id, what_is_left(&runtime_dir(app, runtime)?, runtime));
+        }
     }
 
     if installed != before {
@@ -197,6 +201,13 @@ pub fn check_installed(app: &AppHandle, db: &Db) -> Result<(), String> {
         })?;
     }
     Ok(())
+}
+
+/// Left by `remove_runtime` so `check_installed` knows the runtime was removed
+/// on purpose. Next to the runtimes, not in this account's database: on
+/// Windows every account on the PC shares them, and each one checks.
+fn removed_marker(app: &AppHandle, runtime: &Runtime) -> Result<PathBuf, String> {
+    Ok(runtimes_dir(app)?.join(".removed").join(&runtime.id))
 }
 
 /// What's left of a runtime's folder whose program is missing.
@@ -284,6 +295,8 @@ pub async fn install_runtime(
             return Err(e);
         }
         log::info!("Installed {}", runtime.id);
+        // Installed again, so a later disappearance is a real problem.
+        let _ = fs::remove_file(removed_marker(&app, &runtime)?);
     }
     if !language.setup.is_empty() {
         let _ = app.emit(
@@ -301,6 +314,70 @@ pub async fn install_runtime(
         .inspect_err(|e| log::error!("Could not set up {id}: {e}"))?;
     }
     Ok(())
+}
+
+/// Deletes a programming language's runtime from this computer, to free up
+/// space. Languages that share it (C and C++ both use Zig) go with it. Your
+/// files stay; downloading the language again brings it back.
+///
+/// Databases aren't removed here: their runtime holds each account's data.
+/// On Windows runtimes are shared by every account on the PC (see
+/// `shared_data_dir`), so it's removed for all of them.
+#[tauri::command]
+pub async fn remove_runtime(
+    app: AppHandle,
+    db: State<'_, Db>,
+    installs: State<'_, RuntimeInstalls>,
+    extension: String,
+) -> Result<(), String> {
+    let (language, runtime) = db.with(|conn| {
+        let language = catalog::language(conn, &extension)?
+            .ok_or_else(|| format!("Unsupported language: .{extension}"))?;
+        let runtime = catalog::runtime(conn, &language.runtime)?;
+        Ok((language, runtime))
+    })?;
+    if language.kind != catalog::Kind::Program {
+        return Err("Databases can't be removed here.".into());
+    }
+
+    // Held like an install, so a download of it can't start halfway through.
+    if !installs.0.lock().unwrap_or_else(|e| e.into_inner()).insert(runtime.id.clone()) {
+        return Err(format!("{} is downloading. Try again when it's done.", language.name));
+    }
+    let _guard = InstallGuard { installs: &installs, id: runtime.id.clone() };
+
+    let target = runtime_dir(&app, &runtime)?;
+    if !target.exists() {
+        return Ok(());
+    }
+    // Written first: once the folder has moved, the language is gone, and
+    // check_installed must already know that's on purpose.
+    let marker = removed_marker(&app, &runtime)?;
+    if let Some(dir) = marker.parent() {
+        let _ = fs::create_dir_all(dir);
+    }
+    if let Err(e) = fs::write(&marker, "") {
+        log::warn!("Could not mark {} as removed: {e}", runtime.id);
+    }
+    // Move it out of the way first: one step, so the language is either
+    // installed or gone, never half deleted. On Windows the move fails while a
+    // program run with it is still open, which leaves it untouched.
+    let work = runtimes_dir(&app)?.join(".downloads");
+    let trash = work.join(format!("{}.{}.remove", runtime.id, std::process::id()));
+    fs::create_dir_all(&work).map_err(|e| format!("Could not remove {}: {e}", language.name))?;
+    let _ = fs::remove_dir_all(&trash);
+    if let Err(e) = fs::rename(&target, &trash) {
+        let _ = fs::remove_file(&marker);
+        log::warn!("Could not remove {}: {e}", runtime.id);
+        return Err(format!(
+            "Could not remove {}. Stop any program that's running and try again. ({e})",
+            language.name
+        ));
+    }
+    log::info!("Removed {}", runtime.id);
+    // Best effort: whatever can't be deleted now goes with remove_stale_work.
+    let _ = tauri::async_runtime::spawn_blocking(move || fs::remove_dir_all(&trash)).await;
+    check_installed(&app, &db)
 }
 
 /// Downloads, verifies and unpacks the runtime into its folder.

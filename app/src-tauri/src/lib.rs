@@ -69,6 +69,7 @@ pub fn run() {
             files::export_guest_files,
             runtimes::list_runtimes,
             runtimes::install_runtime,
+            runtimes::remove_runtime,
             run::run_program,
             run::send_input,
             run::stop_program,
