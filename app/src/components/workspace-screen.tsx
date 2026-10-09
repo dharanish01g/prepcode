@@ -338,6 +338,8 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
                     <ResizableHandle withHandle />
                     <ResizablePanel id="console" defaultSize="30%" minSize="10%">
                       <ConsolePanel
+                        filename={selectedFile}
+                        summary={fileConsole.summary}
                         entries={fileConsole.entries}
                         loading={fileConsole.loading}
                         running={fileConsole.running}
