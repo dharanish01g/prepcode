@@ -848,6 +848,12 @@ const SNIPPETS = [
     documentation: "Standard entry point for a C# program.",
   },
   {
+    label: "svm",
+    insertText: "static void Main(string[] args)\n{\n    $0\n}",
+    detail: "static void Main method",
+    documentation: "Standard entry point for a C# program.",
+  },
+  {
     label: "prop",
     insertText: "public ${1:int} ${2:MyProperty} { get; set; }$0",
     detail: "auto-implemented property",
@@ -1019,15 +1025,31 @@ export function registerCSharpCompletions(mInstance?: Monaco) {
         range,
       }));
 
-      const snippetItems: monacoDefault.languages.CompletionItem[] = SNIPPETS.map((s) => ({
-        label: s.label,
-        kind: m.languages.CompletionItemKind.Snippet,
-        insertText: s.insertText,
-        insertTextRules: m.languages.CompletionItemInsertTextRule.InsertAsSnippet,
-        detail: s.detail,
-        documentation: s.documentation,
-        range,
-      }));
+      const snippetItems: monacoDefault.languages.CompletionItem[] = SNIPPETS.map((s) => {
+        let insertText = s.insertText;
+
+        // Context-aware adjustment for "main" / "svm" snippet:
+        // If user already typed "static void", "static", or "void", avoid duplicating keywords.
+        if (s.label === "main" || s.label === "svm") {
+          if (/(?:^|\s)static\s+void$/.test(textBeforeWord)) {
+            insertText = "Main(string[] args)\n{\n    $0\n}";
+          } else if (/(?:^|\s)static$/.test(textBeforeWord)) {
+            insertText = "void Main(string[] args)\n{\n    $0\n}";
+          } else if (/(?:^|\s)void$/.test(textBeforeWord)) {
+            insertText = "Main(string[] args)\n{\n    $0\n}";
+          }
+        }
+
+        return {
+          label: s.label,
+          kind: m.languages.CompletionItemKind.Snippet,
+          insertText,
+          insertTextRules: m.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+          detail: s.detail,
+          documentation: s.documentation,
+          range,
+        };
+      });
 
       return {
         suggestions: [...snippetItems, ...typeItems, ...keywordItems],
