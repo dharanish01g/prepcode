@@ -21,7 +21,8 @@ function App() {
   // would race with the previous student's saved sign-in being removed.
   const [loggingOut, setLoggingOut] = useState(false);
   // A student's GitHub must be ready for syncing (their repo, and prepcode's
-  // access to it) before the workspace opens. Checked at every sign-in.
+  // access to it) before the workspace opens. Signing in checks it
+  // (session.syncReady); if it isn't, the setup screen shows until it is.
   const [setUp, setSetUp] = useState(false);
 
   useEffect(() => {
@@ -48,7 +49,7 @@ function App() {
     disposeEditorModels();
   }
 
-  if (session && (session.guest || setUp)) {
+  if (session && (session.guest || session.syncReady || setUp)) {
     return <WorkspaceScreen session={session} onLogout={handleLogout} />;
   }
 

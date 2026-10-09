@@ -83,15 +83,19 @@ pub struct Session {
     avatar_url: Option<String>,
     /// A guest's files are deleted when they log out or close the app.
     guest: bool,
+    /// The student's GitHub is ready for syncing (checked as they sign in, see
+    /// `sync::check_github`), so the workspace opens without the setup screen.
+    sync_ready: bool,
 }
 
 impl Session {
-    fn student(account: &Account) -> Self {
+    fn student(account: &Account, sync_ready: bool) -> Self {
         Session {
             id: student_id(account),
             login: account.github_login.clone(),
             avatar_url: account.avatar_url.clone(),
             guest: false,
+            sync_ready,
         }
     }
 }
@@ -269,6 +273,8 @@ pub async fn restore_session(
         keyring_delete(KEYRING_REFRESH_TOKEN).await?;
         return Ok(None);
     };
+    // Offline, the GitHub check below would only wait for the network again.
+    let mut online = true;
     match account::refresh(&refresh_token).await {
         // The username or picture may have changed; the GitHub id never does.
         Ok(tokens) if same_github(&tokens, &account) => {
@@ -279,10 +285,15 @@ pub async fn restore_session(
             forget_sign_in(&db, &access).await?;
             return Ok(None);
         }
-        Err(e) => log::warn!("Could not refresh the saved sign-in, so it's trusted: {e:?}"),
+        Err(e) => {
+            log::warn!("Could not refresh the saved sign-in, so it's trusted: {e:?}");
+            online = false;
+        }
     }
-    open_workspace(&app, &db, &current, &student_id(&account))?;
-    Ok(Some(Session::student(&account)))
+    let id = student_id(&account);
+    open_workspace(&app, &db, &current, &id)?;
+    let sync_ready = !online || sync::check_github(&app, &db, &id).await;
+    Ok(Some(Session::student(&account, sync_ready)))
 }
 
 // --- Signing in (and connecting GitHub or Google) in the browser ----------------------
@@ -551,7 +562,8 @@ pub async fn finish_sign_in(
             forget_sign_in(&db, &access).await?;
             return Ok(None);
         }
-        return Ok(Some(SignInResult::SignedIn { session: Session::student(&account) }));
+        // The workspace is open already; this session is only for Profile.
+        return Ok(Some(SignInResult::SignedIn { session: Session::student(&account, true) }));
     }
 
     complete_sign_in(&app, tokens).await.map(Some)
@@ -575,8 +587,10 @@ async fn complete_sign_in(app: &AppHandle, tokens: Tokens) -> Result<SignInResul
     *waiting.lock() = None;
     let db = app.state::<Db>();
     let account = save_session(&db, &app.state::<AccessToken>(), tokens).await?;
-    open_workspace(app, &db, &app.state::<CurrentUser>(), &student_id(&account))?;
-    Ok(SignInResult::SignedIn { session: Session::student(&account) })
+    let id = student_id(&account);
+    open_workspace(app, &db, &app.state::<CurrentUser>(), &id)?;
+    let sync_ready = sync::check_github(app, &db, &id).await;
+    Ok(SignInResult::SignedIn { session: Session::student(&account, sync_ready) })
 }
 
 /// Staff, faculty and TPO logins (reached by their email, or through Google,
@@ -758,7 +772,7 @@ pub fn guest_login(app: AppHandle, current: State<CurrentUser>) -> Result<Sessio
         .map_err(|e| format!("Could not create a guest workspace: {e}"))?;
 
     current.set(Some(id.clone()));
-    Ok(Session { id, login: "Guest".into(), avatar_url: None, guest: true })
+    Ok(Session { id, login: "Guest".into(), avatar_url: None, guest: true, sync_ready: false })
 }
 
 /// Signs out. A student's synced files are deleted from this computer (they're

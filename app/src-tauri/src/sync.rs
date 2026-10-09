@@ -280,6 +280,24 @@ async fn fetch_repo_token(app: &AppHandle, db: &Db, user: &str) -> Result<RepoTo
 
 // --- Setting up the repo ----------------------------------------------------------------
 
+/// Whether the student's GitHub is ready for syncing, asked as they sign in by
+/// getting their repo token (kept for the first pull, so it costs no extra
+/// call). Only "not set up" means no: offline or any other error, the
+/// workspace opens anyway and Sync says what's wrong later.
+pub async fn check_github(app: &AppHandle, db: &Db, user: &str) -> bool {
+    match fetch_repo_token(app, db, user).await {
+        Ok(_) => true,
+        Err(AccountError::NotSetUp(needed)) => {
+            log::info!("GitHub isn't set up for syncing yet: {needed:?}");
+            false
+        }
+        Err(e) => {
+            log::warn!("Could not check GitHub at sign-in, so the workspace opens: {e:?}");
+            true
+        }
+    }
+}
+
 /// Whether the signed-in student's GitHub is ready for syncing, and if not,
 /// the GitHub page that finishes it. Mirrors RepoSetup in src/lib/sync.ts.
 #[derive(Serialize)]

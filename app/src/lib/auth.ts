@@ -8,6 +8,11 @@ export type Session = {
   avatarUrl: string | null;
   /** A guest's files are deleted when they log out or close prepcode. */
   guest: boolean;
+  /**
+   * The student's GitHub is ready for syncing (checked as they sign in), so
+   * the workspace opens without the setup screen.
+   */
+  syncReady: boolean;
 };
 
 /** The sign-in page in the browser, to open again if the browser didn't. */
