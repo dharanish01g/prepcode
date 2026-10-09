@@ -59,6 +59,12 @@ pub fn run() {
             auth::start_google_link,
             auth::start_github_connect,
             auth::discard_waiting_account,
+            auth::email_sign_up,
+            auth::email_resend_code,
+            auth::email_verify_code,
+            auth::email_sign_in,
+            auth::email_send_reset_code,
+            auth::email_reset_password,
             auth::finish_sign_in,
             auth::cancel_sign_in,
             auth::account_details,
@@ -87,6 +93,7 @@ pub fn run() {
             sync::sync_status,
             sync::sync_now,
             sync::pull_from_github,
+            sync::repo_setup,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

@@ -43,8 +43,13 @@ fn client() -> Result<&'static reqwest::Client, AccountError> {
 pub enum AccountError {
     /// No connection, a timeout, or the server is down: try again later.
     Offline,
-    /// The account system refused, e.g. a signed-out session or a used code.
+    /// The account system refused, e.g. a used code or too many requests.
     Rejected(String),
+    /// The session is over for good (signed out, deleted, or its refresh
+    /// token already used): only this means "sign in again".
+    SignedOut(String),
+    /// The student's GitHub isn't set up for syncing yet: what's left to do.
+    NotSetUp(SetupNeeded),
     Other(String),
 }
 
@@ -54,7 +59,10 @@ impl AccountError {
             AccountError::Offline => {
                 "Could not reach prepcode's servers. Check your internet connection.".into()
             }
-            AccountError::Rejected(message) | AccountError::Other(message) => message.clone(),
+            AccountError::NotSetUp(needed) => needed.message(),
+            AccountError::Rejected(message)
+            | AccountError::SignedOut(message)
+            | AccountError::Other(message) => message.clone(),
         }
     }
 }
@@ -65,6 +73,8 @@ impl std::fmt::Debug for AccountError {
         match self {
             AccountError::Offline => write!(f, "Offline"),
             AccountError::Rejected(message) => write!(f, "Rejected({message:?})"),
+            AccountError::SignedOut(message) => write!(f, "SignedOut({message:?})"),
+            AccountError::NotSetUp(needed) => write!(f, "NotSetUp({needed:?})"),
             AccountError::Other(message) => write!(f, "Other({message:?})"),
         }
     }
@@ -109,8 +119,9 @@ impl Provider {
     }
 }
 
-/// A signed-in session. GitHub's and Google's own tokens, which Supabase also
-/// sends back, are never read: syncing gets short-lived repo tokens another way.
+/// A signed-in session. Syncing gets short-lived repo tokens another way, so
+/// GitHub's and Google's own tokens, which Supabase also sends back, are never
+/// saved.
 pub struct Tokens {
     /// Valid for an hour; only ever kept in memory.
     pub access_token: String,
@@ -256,8 +267,9 @@ pub async fn exchange_code(code: &str, verifier: &str) -> Result<Tokens, Account
     tokens(send(post("/auth/v1/token?grant_type=pkce")?.json(&body)).await?)
 }
 
-/// A new session from a saved refresh token. Rejected means the student must
-/// sign in again (signed out elsewhere, or the token was already used).
+/// A new session from a saved refresh token. Only SignedOut means the student
+/// must sign in again (signed out elsewhere, or the token was already used);
+/// any other error leaves the saved sign-in as it is.
 pub async fn refresh(refresh_token: &str) -> Result<Tokens, AccountError> {
     let body = json!({ "refresh_token": refresh_token });
     tokens(send(post("/auth/v1/token?grant_type=refresh_token")?.json(&body)).await?)
@@ -295,6 +307,63 @@ pub async fn unlink(access_token: &str, identity_id: &str) -> Result<(), Account
     send(request).await.map(|_| ())
 }
 
+// --- Email and password ----------------------------------------------------------------
+
+/// What a code sent by email is for.
+#[derive(Clone, Copy)]
+pub enum EmailCode {
+    /// Confirming the email of a new account.
+    SignUp,
+    /// Resetting a forgotten password.
+    Reset,
+}
+
+/// Creates an account with email and password. Supabase then emails a code
+/// to confirm it (`verify_email_code`). For an email that already has an
+/// account Supabase answers the same but sends nothing, so nobody can find
+/// out which emails have accounts.
+pub async fn sign_up(email: &str, password: &str, name: Option<&str>) -> Result<(), AccountError> {
+    let data = name.map(|name| json!({ "full_name": name })).unwrap_or_else(|| json!({}));
+    let body = json!({ "email": email, "password": password, "data": data });
+    send(post("/auth/v1/signup")?.json(&body)).await.map(|_| ())
+}
+
+/// Sends the sign-up code again.
+pub async fn resend_sign_up_code(email: &str) -> Result<(), AccountError> {
+    send(post("/auth/v1/resend")?.json(&json!({ "type": "signup", "email": email }))).await.map(|_| ())
+}
+
+/// Emails a code for resetting the password. Answers the same whether or not
+/// the email has an account.
+pub async fn send_reset_code(email: &str) -> Result<(), AccountError> {
+    send(post("/auth/v1/recover")?.json(&json!({ "email": email }))).await.map(|_| ())
+}
+
+/// Checks a code from an email, which signs the student in.
+pub async fn verify_email_code(email: &str, code: &str, what: EmailCode) -> Result<Tokens, AccountError> {
+    let kind = match what {
+        EmailCode::SignUp => "signup",
+        EmailCode::Reset => "recovery",
+    };
+    let body = json!({ "type": kind, "email": email, "token": code });
+    tokens(send(post("/auth/v1/verify")?.json(&body)).await?)
+}
+
+pub async fn sign_in_with_password(email: &str, password: &str) -> Result<Tokens, AccountError> {
+    let body = json!({ "email": email, "password": password });
+    tokens(send(post("/auth/v1/token?grant_type=password")?.json(&body)).await?)
+}
+
+/// Changes the signed-in account's password.
+pub async fn set_password(access_token: &str, password: &str) -> Result<(), AccountError> {
+    let request = client()?
+        .put(format!("{SUPABASE}/auth/v1/user"))
+        .header("apikey", PUBLISHABLE_KEY)
+        .bearer_auth(access_token)
+        .json(&json!({ "password": password }));
+    send(request).await.map(|_| ())
+}
+
 /// Ends this session on the server (other computers stay signed in).
 pub async fn sign_out(access_token: &str) -> Result<(), AccountError> {
     send(post("/auth/v1/logout?scope=local")?.bearer_auth(access_token)).await.map(|_| ())
@@ -305,6 +374,34 @@ pub async fn sign_out(access_token: &str) -> Result<(), AccountError> {
 /// Sync errors that the student fixes on GitHub start with this, so the app
 /// can offer a button to the prepcodes install page.
 pub const CONNECT_GITHUB: &str = "Connect GitHub:";
+
+/// What the student still has to do on GitHub before prepcode can sync. The
+/// `github-token` function creates their `prepcode-programs` repo itself once
+/// the prepcodes app is installed, so it's only ever about the app's access.
+#[derive(Clone, Debug, PartialEq)]
+pub enum SetupNeeded {
+    /// Install the prepcodes app on their GitHub account.
+    Install,
+    /// Give the installed app their existing repo (GitHub's id for it, if the
+    /// function knows it).
+    AddRepo { repo_id: Option<u64> },
+    /// The installed app couldn't create their repo: accept its newer
+    /// permissions on the installation's settings page.
+    AcceptPermissions { installation_id: Option<u64> },
+}
+
+impl SetupNeeded {
+    fn message(&self) -> String {
+        let what = match self {
+            SetupNeeded::Install => "install the prepcodes app on GitHub.",
+            SetupNeeded::AddRepo { .. } => {
+                "give prepcode access to your prepcode-programs repository on GitHub."
+            }
+            SetupNeeded::AcceptPermissions { .. } => "accept prepcode's new permissions on GitHub.",
+        };
+        format!("{CONNECT_GITHUB} {what}")
+    }
+}
 
 /// A GitHub token for the student's `prepcode-programs` repo, and nothing
 /// else, from the `github-token` function. It works for an hour.
@@ -322,18 +419,17 @@ pub async fn repo_token(access_token: &str) -> Result<RepoToken, AccountError> {
     let status = response.status().as_u16();
     let body: Value = response.json().await.unwrap_or(Value::Null);
     let rejected = |message: String| Err(AccountError::Rejected(message));
+    let id = |key: &str| body[key].as_u64();
     match (status, body["code"].as_str()) {
         (200, _) => {}
-        (_, Some("not_installed")) => {
-            return rejected(format!(
-                "{CONNECT_GITHUB} install the prepcodes app on GitHub and give it your prepcode-programs repository."
-            ))
-        }
+        (_, Some("not_installed")) => return Err(AccountError::NotSetUp(SetupNeeded::Install)),
         (_, Some("repo_not_selected")) => {
-            return rejected(format!(
-                "{CONNECT_GITHUB} give the prepcodes app your prepcode-programs repository on GitHub. Create a \
-                 public repository with that name first if you don't have one."
-            ))
+            return Err(AccountError::NotSetUp(SetupNeeded::AddRepo { repo_id: id("repo_id") }))
+        }
+        (_, Some("cannot_create_repo")) => {
+            return Err(AccountError::NotSetUp(SetupNeeded::AcceptPermissions {
+                installation_id: id("installation_id"),
+            }))
         }
         (_, Some("no_github")) => return rejected("This account has no GitHub sign-in.".into()),
         (401, _) => return rejected("Your sign-in has expired. Log out and sign in again.".into()),
@@ -366,19 +462,45 @@ fn post(path: &str) -> Result<RequestBuilder, AccountError> {
 async fn send(request: RequestBuilder) -> Result<Value, AccountError> {
     let response = request.send().await.map_err(|_| AccountError::Offline)?;
     let status = response.status();
-    if status.is_server_error() {
-        return Err(AccountError::Offline);
-    }
     let body: Value = response.json().await.unwrap_or(Value::Null);
     if status.is_success() {
         return Ok(body);
     }
+    Err(error_of(status, &body))
+}
+
+/// What a failed answer from the account system means.
+fn error_of(status: reqwest::StatusCode, body: &Value) -> AccountError {
+    if status.is_server_error() || status == reqwest::StatusCode::REQUEST_TIMEOUT {
+        return AccountError::Offline;
+    }
+    // A college lab shares one internet address, so many PCs signing in at
+    // once can hit Supabase's per-address limits.
+    if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+        return AccountError::Rejected(
+            "Too many sign-ins from this network right now. Please try again in a few minutes.".into(),
+        );
+    }
     let message = ["msg", "error_description", "message", "error"]
         .iter()
         .find_map(|key| body[*key].as_str())
-        .unwrap_or("The sign-in didn't work. Please try again.");
-    Err(AccountError::Rejected(message.to_owned()))
+        .unwrap_or("The sign-in didn't work. Please try again.")
+        .to_owned();
+    if body["error_code"].as_str().is_some_and(|code| SIGNED_OUT_CODES.contains(&code)) {
+        return AccountError::SignedOut(message);
+    }
+    AccountError::Rejected(message)
 }
+
+/// Supabase's `error_code`s for a session that can never be used again.
+const SIGNED_OUT_CODES: &[&str] = &[
+    "refresh_token_not_found",
+    "refresh_token_already_used",
+    "session_not_found",
+    "session_expired",
+    "user_not_found",
+    "user_banned",
+];
 
 #[derive(Deserialize)]
 struct TokenResponse {
@@ -455,6 +577,22 @@ mod tests {
         );
         assert_eq!(callback_result("/favicon.ico"), None);
         assert_eq!(callback_result("/auth/callback/../x?code=1"), None);
+    }
+
+    #[test]
+    fn only_a_dead_session_signs_out() {
+        use reqwest::StatusCode;
+        // As Supabase answers an unknown refresh token.
+        let gone = json!({
+            "code": 400,
+            "error_code": "refresh_token_not_found",
+            "msg": "Invalid Refresh Token: Refresh Token Not Found"
+        });
+        assert!(matches!(error_of(StatusCode::BAD_REQUEST, &gone), AccountError::SignedOut(_)));
+        let limited = json!({ "code": 429, "error_code": "over_request_rate_limit", "msg": "Rate limit" });
+        assert!(matches!(error_of(StatusCode::TOO_MANY_REQUESTS, &limited), AccountError::Rejected(_)));
+        assert!(matches!(error_of(StatusCode::BAD_GATEWAY, &Value::Null), AccountError::Offline));
+        assert!(matches!(error_of(StatusCode::FORBIDDEN, &Value::Null), AccountError::Rejected(_)));
     }
 
     #[test]

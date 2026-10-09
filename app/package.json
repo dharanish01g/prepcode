@@ -1,7 +1,7 @@
 {
   "name": "app",
   "private": true,
-  "version": "0.0.17",
+  "version": "0.0.18",
   "license": "GPL-3.0-only",
   "type": "module",
   "scripts": {
@@ -31,6 +31,7 @@
     "class-variance-authority": "^0.7.1",
     "cn": "^0.4.0",
     "date-fns": "^4.4.0",
+    "input-otp": "^1.5.0",
     "lucide-react": "^1.48.0",
     "monaco-editor": "^0.57.0",
     "prettier": "^3.9.9",

@@ -138,6 +138,22 @@ pub async fn get_repo(token: &str, owner: &str) -> Result<Option<Repo>, GitHubEr
     }
 }
 
+/// The id of `owner`'s `prepcode-programs` repo, if it exists. Asked without
+/// signing in: it's a public repo. A renamed repo doesn't count, though GitHub
+/// redirects its old name to it: prepcode syncs with this name only.
+pub async fn find_repo(owner: &str) -> Result<Option<u64>, GitHubError> {
+    let request =
+        client()?.get(format!("{API}/repos/{owner}/{REPO}")).header("X-GitHub-Api-Version", "2022-11-28");
+    match send(request).await {
+        Ok(response) => {
+            let repo: Value = json(response).await?;
+            Ok(repo["id"].as_u64().filter(|_| repo["name"] == REPO))
+        }
+        Err(GitHubError::NotFound) => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
 /// The commit the branch points at, or None if the repo has no commits yet.
 pub async fn branch_head(token: &str, owner: &str, branch: &str) -> Result<Option<String>, GitHubError> {
     let path = format!("/repos/{owner}/{REPO}/git/ref/heads/{branch}");

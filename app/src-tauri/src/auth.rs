@@ -22,7 +22,7 @@ use tauri::{AppHandle, Manager, State};
 use tauri_plugin_opener::OpenerExt;
 use tokio::net::TcpListener;
 
-use crate::account::{self, Account, AccountError, Provider, Tokens};
+use crate::account::{self, Account, AccountError, EmailCode, Provider, Tokens};
 use crate::catalog;
 use crate::databases;
 use crate::db::Db;
@@ -83,15 +83,19 @@ pub struct Session {
     avatar_url: Option<String>,
     /// A guest's files are deleted when they log out or close the app.
     guest: bool,
+    /// The student's GitHub is ready for syncing (checked as they sign in, see
+    /// `sync::check_github`), so the workspace opens without the setup screen.
+    sync_ready: bool,
 }
 
 impl Session {
-    fn student(account: &Account) -> Self {
+    fn student(account: &Account, sync_ready: bool) -> Self {
         Session {
             id: student_id(account),
             login: account.github_login.clone(),
             avatar_url: account.avatar_url.clone(),
             guest: false,
+            sync_ready,
         }
     }
 }
@@ -177,7 +181,7 @@ fn delete_meta(db: &Db, key: &str) -> Result<(), String> {
     })
 }
 
-fn saved_account(db: &Db) -> Result<Option<Account>, String> {
+pub(crate) fn saved_account(db: &Db) -> Result<Option<Account>, String> {
     Ok(read_meta(db, ACCOUNT_KEY)?.and_then(|raw| serde_json::from_str(&raw).ok()))
 }
 
@@ -238,14 +242,14 @@ pub async fn access_token(db: &Db, access: &AccessToken) -> Result<String, Strin
             save_session(db, access, tokens).await?;
             Ok(token)
         }
-        Ok(_) | Err(AccountError::Rejected(_)) => Err(expired()),
+        Ok(_) | Err(AccountError::SignedOut(_)) => Err(expired()),
         Err(e) => Err(e.message()),
     }
 }
 
 /// On launch: reopens the signed-in student's workspace, if there is one.
-/// Offline, the saved sign-in is trusted; online, one that was signed out
-/// elsewhere is dropped.
+/// Only a sign-in the server says is over (signed out elsewhere) is dropped;
+/// offline, rate-limited or any other error, the saved sign-in is trusted.
 #[tauri::command]
 pub async fn restore_session(
     app: AppHandle,
@@ -269,20 +273,27 @@ pub async fn restore_session(
         keyring_delete(KEYRING_REFRESH_TOKEN).await?;
         return Ok(None);
     };
+    // Offline, the GitHub check below would only wait for the network again.
+    let mut online = true;
     match account::refresh(&refresh_token).await {
         // The username or picture may have changed; the GitHub id never does.
         Ok(tokens) if same_github(&tokens, &account) => {
             account = save_session(&db, &access, tokens).await?;
         }
-        Ok(_) | Err(AccountError::Rejected(_)) => {
+        Ok(_) | Err(AccountError::SignedOut(_)) => {
             log::info!("The saved sign-in no longer works; signed out");
             forget_sign_in(&db, &access).await?;
             return Ok(None);
         }
-        Err(e) => log::warn!("Could not refresh the saved sign-in, so it's trusted: {e:?}"),
+        Err(e) => {
+            log::warn!("Could not refresh the saved sign-in, so it's trusted: {e:?}");
+            online = false;
+        }
     }
-    open_workspace(&app, &db, &current, &student_id(&account))?;
-    Ok(Some(Session::student(&account)))
+    let id = student_id(&account);
+    open_workspace(&app, &db, &current, &id)?;
+    let sync_ready = !online || sync::check_github(&app, &db, &id).await;
+    Ok(Some(Session::student(&account, sync_ready)))
 }
 
 // --- Signing in (and connecting GitHub or Google) in the browser ----------------------
@@ -359,6 +370,8 @@ pub enum SignInResult {
     SignedIn { session: Session },
     /// Signed in with Google to an account with no GitHub: connect it next.
     NeedsGitHub { email: Option<String> },
+    /// Signed up with email but never entered the code: a new one was sent.
+    NeedsEmailCode { email: String },
     /// The GitHub they picked already has a prepcode account.
     #[serde(rename_all = "camelCase")]
     GitHubTaken { email: Option<String> },
@@ -399,7 +412,8 @@ where
 /// A new GitHub account creates a prepcode account.
 #[tauri::command]
 pub async fn start_github_sign_in(app: AppHandle, sign_in: State<'_, SignIn>) -> Result<SignInLink, String> {
-    start_in_browser(&app, &sign_in, Purpose::SignIn, |port, challenge| async move {
+    let purpose = Purpose::SignIn;
+    start_in_browser(&app, &sign_in, purpose, |port, challenge| async move {
         Ok(account::authorize_url(Provider::GitHub, port, &challenge))
     })
     .await
@@ -409,7 +423,8 @@ pub async fn start_github_sign_in(app: AppHandle, sign_in: State<'_, SignIn>) ->
 /// that waits for GitHub (see `start_github_connect`).
 #[tauri::command]
 pub async fn start_google_sign_in(app: AppHandle, sign_in: State<'_, SignIn>) -> Result<SignInLink, String> {
-    start_in_browser(&app, &sign_in, Purpose::SignIn, |port, challenge| async move {
+    let purpose = Purpose::SignIn;
+    start_in_browser(&app, &sign_in, purpose, |port, challenge| async move {
         Ok(account::authorize_url(Provider::Google, port, &challenge))
     })
     .await
@@ -469,7 +484,6 @@ pub async fn finish_sign_in(
     db: State<'_, Db>,
     current: State<'_, CurrentUser>,
     access: State<'_, AccessToken>,
-    waiting: State<'_, WaitingAccount>,
     sign_in: State<'_, SignIn>,
 ) -> Result<Option<SignInResult>, String> {
     let Some((attempt, verifier, purpose, listener)) = sign_in
@@ -526,35 +540,170 @@ pub async fn finish_sign_in(
         let _ = window.set_focus();
     }
 
-    if tokens.account.is_none() {
-        // Signed in with Google to an account with no GitHub yet.
-        if !matches!(purpose, Purpose::SignIn) {
-            return Err("Unexpected answer from prepcode's servers: no GitHub account".into());
-        }
-        let roles = account::role_ids(&tokens.access_token).await.map_err(|e| e.message())?;
-        if roles.iter().any(|role| role != "student") {
-            // A staff, faculty or TPO login (Supabase linked Google to it by
-            // its email). Those don't get GitHub, and don't use prepcode.
+    if tokens.account.is_none() && !matches!(purpose, Purpose::SignIn) {
+        return Err("Unexpected answer from prepcode's servers: no GitHub account".into());
+    }
+
+    if let Purpose::LinkGoogle { .. } = purpose {
+        // Connecting Gmail saves a new session for the signed-in student. If
+        // they logged out while the browser was open, saving it would sign
+        // them back in on this computer.
+        let workspace = tokens.account.as_ref().map(student_id);
+        let still_signed_in = || current.get().ok() == workspace;
+        if !still_signed_in() {
             if let Err(e) = account::sign_out(&tokens.access_token).await {
-                log::warn!("Could not end a staff session: {e:?}");
+                log::warn!("Could not end an unused session: {e:?}");
             }
-            return Err("This is a staff account. Use prepwisely to sign in with it.".into());
+            return Ok(None);
         }
+        let account = save_session(&db, &access, tokens).await?;
+        if !still_signed_in() {
+            // Logged out while it was being saved.
+            forget_sign_in(&db, &access).await?;
+            return Ok(None);
+        }
+        // The workspace is open already; this session is only for Profile.
+        return Ok(Some(SignInResult::SignedIn { session: Session::student(&account, true) }));
+    }
+
+    complete_sign_in(&app, tokens).await.map(Some)
+}
+
+/// Finishes signing in, however it started (GitHub, Google, or email): an
+/// account with no GitHub yet waits for the student to connect it, staff are
+/// refused, and otherwise the session is saved and the workspace opened.
+async fn complete_sign_in(app: &AppHandle, tokens: Tokens) -> Result<SignInResult, String> {
+    let waiting = app.state::<WaitingAccount>();
+    if tokens.account.is_none() {
+        refuse_staff(&tokens).await?;
         let email = tokens.email.clone();
         *waiting.lock() = Some(Waiting {
             account_id: tokens.user_id,
             email: tokens.email,
             access_token: tokens.access_token,
         });
-        return Ok(Some(SignInResult::NeedsGitHub { email }));
+        return Ok(SignInResult::NeedsGitHub { email });
     }
-
     *waiting.lock() = None;
-    let account = save_session(&db, &access, tokens).await?;
-    if !matches!(purpose, Purpose::LinkGoogle { .. }) {
-        open_workspace(&app, &db, &current, &student_id(&account))?;
+    let db = app.state::<Db>();
+    let account = save_session(&db, &app.state::<AccessToken>(), tokens).await?;
+    let id = student_id(&account);
+    open_workspace(app, &db, &app.state::<CurrentUser>(), &id)?;
+    let sync_ready = sync::check_github(app, &db, &id).await;
+    Ok(SignInResult::SignedIn { session: Session::student(&account, sync_ready) })
+}
+
+/// Staff, faculty and TPO logins (reached by their email, or through Google,
+/// which Supabase links to them by email) don't get GitHub and don't use
+/// prepcode: end that session and say so.
+async fn refuse_staff(tokens: &Tokens) -> Result<(), String> {
+    let roles = account::role_ids(&tokens.access_token).await.map_err(|e| e.message())?;
+    if roles.iter().all(|role| role == "student") {
+        return Ok(());
     }
-    Ok(Some(SignInResult::SignedIn { session: Session::student(&account) }))
+    if let Err(e) = account::sign_out(&tokens.access_token).await {
+        log::warn!("Could not end a staff session: {e:?}");
+    }
+    Err("This is a staff account. Use prepwisely to sign in with it.".into())
+}
+
+// --- Email and password ------------------------------------------------------------------
+
+/// Passwords need at least this many characters (Supabase checks too).
+const MIN_PASSWORD_LENGTH: usize = 8;
+
+fn check_new_password(password: &str) -> Result<(), String> {
+    if password.chars().count() < MIN_PASSWORD_LENGTH {
+        return Err(format!("Use at least {MIN_PASSWORD_LENGTH} characters for your password."));
+    }
+    Ok(())
+}
+
+/// Email + password is for college and work email. Gmail signs in with
+/// Continue with Google instead, so nobody has two logins for one address.
+/// The server refuses these sign-ups too (`blocked_signup_email_domains`, where
+/// more providers can be added without a release); this covers signing in and
+/// resetting a password as well, and answers before anything is sent.
+const GOOGLE_EMAIL_DOMAINS: [&str; 2] = ["gmail.com", "googlemail.com"];
+
+const USE_GOOGLE: &str =
+    "Gmail addresses sign in with Continue with Google. Use your college or work email for email and password.";
+
+fn clean_email(email: &str) -> Result<String, String> {
+    let email = email.trim().to_lowercase();
+    match email.split_once('@') {
+        Some((_, domain)) if GOOGLE_EMAIL_DOMAINS.contains(&domain) => Err(USE_GOOGLE.into()),
+        Some((name, domain)) if !name.is_empty() && domain.contains('.') => Ok(email),
+        _ => Err("Enter a valid email address.".into()),
+    }
+}
+
+/// Creates an account with email and password; Supabase emails a code to
+/// confirm it. Answers the same if the email already has an account (and
+/// then sends nothing), so nobody can find out which emails have accounts.
+#[tauri::command]
+pub async fn email_sign_up(email: String, password: String, name: Option<String>) -> Result<(), String> {
+    let email = clean_email(&email)?;
+    check_new_password(&password)?;
+    let name = name.as_deref().map(str::trim).filter(|name| !name.is_empty());
+    account::sign_up(&email, &password, name).await.map_err(|e| e.message())
+}
+
+#[tauri::command]
+pub async fn email_resend_code(email: String) -> Result<(), String> {
+    account::resend_sign_up_code(&clean_email(&email)?).await.map_err(|e| e.message())
+}
+
+/// Checks the code from the sign-up email, which signs the student in. Next
+/// they connect GitHub, as after Google.
+#[tauri::command]
+pub async fn email_verify_code(app: AppHandle, email: String, code: String) -> Result<SignInResult, String> {
+    let email = clean_email(&email)?;
+    let tokens =
+        account::verify_email_code(&email, code.trim(), EmailCode::SignUp).await.map_err(|e| e.message())?;
+    complete_sign_in(&app, tokens).await
+}
+
+#[tauri::command]
+pub async fn email_sign_in(app: AppHandle, email: String, password: String) -> Result<SignInResult, String> {
+    let email = clean_email(&email)?;
+    match account::sign_in_with_password(&email, &password).await {
+        Ok(tokens) => complete_sign_in(&app, tokens).await,
+        // Signed up but never entered the code: send a new one.
+        Err(AccountError::Rejected(message)) if message.to_lowercase().contains("not confirmed") => {
+            account::resend_sign_up_code(&email).await.map_err(|e| e.message())?;
+            Ok(SignInResult::NeedsEmailCode { email })
+        }
+        Err(AccountError::Rejected(message)) if message.to_lowercase().contains("invalid login") => {
+            Err("Wrong email or password.".into())
+        }
+        Err(e) => Err(e.message()),
+    }
+}
+
+/// Emails a code for choosing a new password. Answers the same whether or not
+/// the email has an account.
+#[tauri::command]
+pub async fn email_send_reset_code(email: String) -> Result<(), String> {
+    account::send_reset_code(&clean_email(&email)?).await.map_err(|e| e.message())
+}
+
+/// Checks the reset code, sets the new password and signs the student in.
+#[tauri::command]
+pub async fn email_reset_password(
+    app: AppHandle,
+    email: String,
+    code: String,
+    password: String,
+) -> Result<SignInResult, String> {
+    let email = clean_email(&email)?;
+    check_new_password(&password)?;
+    let tokens =
+        account::verify_email_code(&email, code.trim(), EmailCode::Reset).await.map_err(|e| e.message())?;
+    // Staff change their password in prepwisely, not here.
+    refuse_staff(&tokens).await?;
+    account::set_password(&tokens.access_token, &password).await.map_err(|e| e.message())?;
+    complete_sign_in(&app, tokens).await
 }
 
 /// Supabase's answer when a login being connected already belongs to another
@@ -623,12 +772,16 @@ pub fn guest_login(app: AppHandle, current: State<CurrentUser>) -> Result<Sessio
         .map_err(|e| format!("Could not create a guest workspace: {e}"))?;
 
     current.set(Some(id.clone()));
-    Ok(Session { id, login: "Guest".into(), avatar_url: None, guest: true })
+    Ok(Session { id, login: "Guest".into(), avatar_url: None, guest: true, sync_ready: false })
 }
 
 /// Signs out. A student's synced files are deleted from this computer (they're
-/// on GitHub; unsynced ones stay for their next sign-in here), their session
-/// is ended and their saved sign-in removed. A guest's files are deleted.
+/// on GitHub; unsynced ones stay for their next sign-in here), their saved
+/// sign-in removed and their session ended. A guest's files are deleted.
+///
+/// Everything on this computer is done before this returns, and nothing
+/// after, so the next student can sign in as soon as it does without this
+/// touching their sign-in.
 #[tauri::command]
 pub async fn logout(
     app: AppHandle,
@@ -638,6 +791,10 @@ pub async fn logout(
     repo_tokens: State<'_, sync::RepoTokens>,
     servers: State<'_, sql::Servers>,
 ) -> Result<(), String> {
+    // A trip to the browser still open (e.g. Profile → Gmail) ends here, so
+    // it can't save this student's sign-in again when it comes back.
+    *app.state::<SignIn>().lock() = None;
+    *app.state::<WaitingAccount>().lock() = None;
     let Ok(id) = current.get() else { return Ok(()) };
     current.set(None);
     repo_tokens.clear();
@@ -649,13 +806,19 @@ pub async fn logout(
     if let Err(e) = sync::remove_synced_files(&app, &db, &id) {
         log::error!("Could not remove synced files: {e}");
     }
-    // Best effort: offline, the session just expires on the server instead.
-    if let Some((token, _)) = access.take() {
-        if let Err(e) = account::sign_out(&token).await {
-            log::warn!("Could not end the session on the server: {e:?}");
-        }
+    let token = access.take();
+    let forgotten = forget_sign_in(&db, &access).await;
+    // Ending the session on the server can take a while on a slow network, so
+    // it carries on in the background with this student's own token. Best
+    // effort: if it fails, the session just stays unused on the server.
+    if let Some((token, _)) = token {
+        tauri::async_runtime::spawn(async move {
+            if let Err(e) = account::sign_out(&token).await {
+                log::warn!("Could not end the session on the server: {e:?}");
+            }
+        });
     }
-    forget_sign_in(&db, &access).await
+    forgotten
 }
 
 /// Deletes every guest workspace, the programs compiled for it, and the
@@ -676,5 +839,20 @@ pub fn delete_guest_files(app: &AppHandle) {
                 let _ = fs::remove_dir_all(entry.path());
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn email_and_password_is_for_college_and_work_email() {
+        assert_eq!(clean_email("  21CSE001@College.edu.in "), Ok("21cse001@college.edu.in".into()));
+        assert_eq!(clean_email("student@gmail.com"), Err(USE_GOOGLE.into()));
+        assert_eq!(clean_email("Student@GoogleMail.com"), Err(USE_GOOGLE.into()));
+        assert_eq!(clean_email("student@gmail.com.example.org"), Ok("student@gmail.com.example.org".into()));
+        assert!(clean_email("not-an-email").is_err());
+        assert!(clean_email("@college.edu").is_err());
     }
 }

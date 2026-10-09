@@ -7,12 +7,7 @@ import { Button } from "@/components/ui/button";
 import { readFile, whenSavesSettled } from "@/lib/files";
 import { disposeEditorModel, editorModelPath, setEditorModelText } from "@/lib/monaco";
 import { queryKeys } from "@/lib/queries";
-import { pullFromGitHub, syncNow, type SyncReport } from "@/lib/sync";
-
-/** How sync errors that are fixed on GitHub start (see account.rs). */
-const CONNECT_GITHUB = "Connect GitHub:";
-/** Where a student gives the prepcodes GitHub App their repo. */
-const INSTALL_URL = "https://github.com/apps/prepcodes/installations/new";
+import { CONNECT_GITHUB, pullFromGitHub, syncNow, type SyncReport } from "@/lib/sync";
 
 /** Syncing the signed-in student's files with their GitHub repo. */
 export function useSync({
@@ -20,12 +15,15 @@ export function useSync({
   selectedFile,
   onSelectFile,
   flushEdits,
+  onNeedsSetup,
 }: {
   userId: string;
   selectedFile: string | null;
   onSelectFile: (filename: string | null) => void;
   /** Saves the editor's pending edits now, so they're included. */
   flushEdits: () => void;
+  /** prepcode has no access to the student's repo (any more): set it up. */
+  onNeedsSetup: () => void;
 }) {
   const queryClient = useQueryClient();
   // True during the sign-in pull too: the editor is read-only meanwhile, so
@@ -38,10 +36,12 @@ export function useSync({
   // pull runs once, not on every view switch.
   const selectedFileRef = useRef(selectedFile);
   const onSelectFileRef = useRef(onSelectFile);
+  const onNeedsSetupRef = useRef(onNeedsSetup);
   useLayoutEffect(() => {
     selectedFileRef.current = selectedFile;
     onSelectFileRef.current = onSelectFile;
-  }, [selectedFile, onSelectFile]);
+    onNeedsSetupRef.current = onNeedsSetup;
+  }, [selectedFile, onSelectFile, onNeedsSetup]);
 
   // Shows what came from GitHub: new text in open files, deleted files closed.
   const applyReport = useCallback(
@@ -109,22 +109,9 @@ export function useSync({
       return true;
     } catch (err) {
       const message = String(err);
-      // Fixed on GitHub: give the prepcodes app the student's repo.
-      const connect = message.startsWith(CONNECT_GITHUB);
-      const id = toast.error("Couldn't sync", {
-        description: connect ? message.slice(CONNECT_GITHUB.length).trim() : message,
-        duration: connect ? Infinity : undefined,
-        action: connect ? (
-          <Button
-            onClick={() => {
-              toast.dismiss(id);
-              openUrl(INSTALL_URL);
-            }}
-          >
-            Connect GitHub
-          </Button>
-        ) : undefined,
-      });
+      // Fixed on GitHub: the repo, or prepcode's access to it.
+      if (message.startsWith(CONNECT_GITHUB)) onNeedsSetupRef.current();
+      else toast.error("Couldn't sync", { description: message });
       return false;
     } finally {
       setSyncing(false);
@@ -140,6 +127,7 @@ export function useSync({
     } catch (err) {
       // Offline is fine: they'll sync later.
       console.error("Could not pull from GitHub:", err);
+      if (String(err).startsWith(CONNECT_GITHUB)) onNeedsSetupRef.current();
     } finally {
       setSyncing(false);
     }

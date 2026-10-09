@@ -25,7 +25,7 @@ use serde_json::json;
 use sha1::{Digest, Sha1};
 use tauri::{AppHandle, Manager, State};
 
-use crate::account::{self, RepoToken};
+use crate::account::{self, AccountError, RepoToken, SetupNeeded};
 use crate::auth::{self, workspace_dir, AccessToken, CurrentUser, GUEST_PREFIX};
 use crate::catalog;
 use crate::db::Db;
@@ -261,6 +261,10 @@ impl RepoTokens {
 /// A token for `user`'s `prepcode-programs` repo: the cached one, or a new one
 /// from the account system.
 async fn repo_token(app: &AppHandle, db: &Db, user: &str) -> Result<RepoToken, String> {
+    fetch_repo_token(app, db, user).await.map_err(|e| e.message())
+}
+
+async fn fetch_repo_token(app: &AppHandle, db: &Db, user: &str) -> Result<RepoToken, AccountError> {
     let tokens = app.state::<RepoTokens>();
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
     if let Some((owner, token)) = tokens.0.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
@@ -268,10 +272,108 @@ async fn repo_token(app: &AppHandle, db: &Db, user: &str) -> Result<RepoToken, S
             return Ok(token.clone());
         }
     }
-    let access = auth::access_token(db, &app.state::<AccessToken>()).await?;
-    let token = account::repo_token(&access).await.map_err(|e| e.message())?;
+    let access = auth::access_token(db, &app.state::<AccessToken>()).await.map_err(AccountError::Other)?;
+    let token = account::repo_token(&access).await?;
     *tokens.0.lock().unwrap_or_else(|e| e.into_inner()) = Some((user.to_owned(), token.clone()));
     Ok(token)
+}
+
+// --- Setting up the repo ----------------------------------------------------------------
+
+/// Whether the student's GitHub is ready for syncing, asked as they sign in by
+/// getting their repo token (kept for the first pull, so it costs no extra
+/// call). Only "not set up" means no: offline or any other error, the
+/// workspace opens anyway and Sync says what's wrong later.
+pub async fn check_github(app: &AppHandle, db: &Db, user: &str) -> bool {
+    match fetch_repo_token(app, db, user).await {
+        Ok(_) => true,
+        Err(AccountError::NotSetUp(needed)) => {
+            log::info!("GitHub isn't set up for syncing yet: {needed:?}");
+            false
+        }
+        Err(e) => {
+            log::warn!("Could not check GitHub at sign-in, so the workspace opens: {e:?}");
+            true
+        }
+    }
+}
+
+/// Whether the signed-in student's GitHub is ready for syncing, and if not,
+/// the GitHub page that finishes it. Mirrors RepoSetup in src/lib/sync.ts.
+#[derive(Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum RepoSetup {
+    /// prepcode can sync with their `prepcode-programs` repo.
+    Ready,
+    /// They install the prepcodes app (`url`). If they have no repo yet,
+    /// prepcode creates it as soon as the app is installed.
+    NeedsInstall { url: String },
+    /// The app is installed; they give it their existing repo (`url`, with
+    /// only that repo selected).
+    NeedsAccess { url: String },
+    /// The app couldn't create their repo: they accept its newer permissions
+    /// (`url`, the installation's settings).
+    NeedsApproval { url: String },
+    /// Couldn't find out (e.g. offline). The app opens anyway; Sync says what's
+    /// wrong later.
+    Unknown { message: String },
+}
+
+/// The prepcodes install page for `github_id`. With `repo_id`, only that repo
+/// is selected (without one, GitHub offers all their repos, which for a
+/// student with no repo yet is none: prepcode then creates it).
+fn install_url(github_id: u64, repo_id: Option<u64>) -> String {
+    let url = format!(
+        "https://github.com/apps/prepcodes/installations/new/permissions?suggested_target_id={github_id}"
+    );
+    match repo_id {
+        Some(repo_id) => format!("{url}&repository_ids[]={repo_id}"),
+        None => url,
+    }
+}
+
+/// Checks the signed-in student's repo access. Getting a repo token creates
+/// their `prepcode-programs` repo if the prepcodes app is installed and it
+/// doesn't exist yet, so all that can be left is a page on GitHub (see
+/// RepoSetup). The app opens it, and calls this again until it's Ready.
+#[tauri::command]
+pub async fn repo_setup(
+    app: AppHandle,
+    current: State<'_, CurrentUser>,
+    db: State<'_, Db>,
+) -> Result<RepoSetup, String> {
+    let user = require_student(&current)?;
+    let needed = match fetch_repo_token(&app, &db, &user).await {
+        Ok(_) => return Ok(RepoSetup::Ready),
+        Err(AccountError::NotSetUp(needed)) => needed,
+        Err(e) => return Ok(RepoSetup::Unknown { message: e.message() }),
+    };
+    let account = auth::saved_account(&db)?.ok_or("You're not logged in.")?;
+    // The repo to pre-select, if the student already has one.
+    let existing_repo = || async {
+        github::find_repo(&account.github_login).await.unwrap_or_else(|e| {
+            log::warn!("Could not look up the student's repo: {e:?}");
+            None
+        })
+    };
+    Ok(match needed {
+        SetupNeeded::Install => {
+            RepoSetup::NeedsInstall { url: install_url(account.github_id, existing_repo().await) }
+        }
+        SetupNeeded::AddRepo { repo_id } => {
+            let repo_id = match repo_id {
+                Some(id) => Some(id),
+                None => existing_repo().await,
+            };
+            RepoSetup::NeedsAccess { url: install_url(account.github_id, repo_id) }
+        }
+        SetupNeeded::AcceptPermissions { installation_id } => RepoSetup::NeedsApproval {
+            url: match installation_id {
+                Some(id) => format!("https://github.com/settings/installations/{id}"),
+                None => "https://github.com/settings/installations".into(),
+            },
+        },
+    })
 }
 
 #[derive(Default, Serialize)]
@@ -356,7 +458,7 @@ async fn sync(
 
     let repo = github::get_repo(&token, &owner).await.map_err(msg)?.ok_or_else(|| {
         format!(
-            "{} create a public repository called {} and give the prepcodes app access to it.",
+            "{} give prepcode access to your {} repository on GitHub.",
             account::CONNECT_GITHUB,
             github::REPO
         )
@@ -692,6 +794,20 @@ pub fn remove_synced_files(app: &AppHandle, db: &Db, user: &str) -> Result<(), S
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn install_url_selects_only_the_repo() {
+        assert_eq!(
+            install_url(323292969, Some(1401456644)),
+            "https://github.com/apps/prepcodes/installations/new/permissions\
+             ?suggested_target_id=323292969&repository_ids[]=1401456644"
+        );
+        // No repo yet: prepcode creates it once the app is installed.
+        assert_eq!(
+            install_url(323292969, None),
+            "https://github.com/apps/prepcodes/installations/new/permissions?suggested_target_id=323292969"
+        );
+    }
 
     #[test]
     fn blob_sha_matches_git() {
