@@ -3,3 +3,6 @@
 
 # Downloaded installers
 *.exe
+
+# Personal notes, not part of the app
+user_doc/
