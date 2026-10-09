@@ -69,28 +69,6 @@ impl AccessToken {
     }
 }
 
-/// The GitHub login's own token from the student's last trip to GitHub in the
-/// browser, with whose GitHub it is. Only kept in memory, and only until
-/// `sync::repo_setup` has used it to find or create their repo.
-#[derive(Default)]
-pub struct GitHubUserToken(Mutex<Option<(u64, String)>>);
-
-impl GitHubUserToken {
-    fn set(&self, token: Option<(u64, String)>) {
-        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = token;
-    }
-
-    /// The token, if it's `github_id`'s.
-    pub fn get(&self, github_id: u64) -> Option<String> {
-        let token = self.0.lock().unwrap_or_else(|e| e.into_inner());
-        token.as_ref().filter(|(owner, _)| *owner == github_id).map(|(_, token)| token.clone())
-    }
-
-    pub fn clear(&self) {
-        self.set(None);
-    }
-}
-
 fn now() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()
 }
@@ -316,7 +294,7 @@ const SIGN_IN_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 #[derive(Clone)]
 enum Purpose {
     /// Signing in with GitHub or Google.
-    SignIn { provider: Provider },
+    SignIn,
     /// Connecting Google to the signed-in student's account (Profile → Gmail).
     LinkGoogle { account_id: String },
     /// Connecting GitHub to an account that started with Google.
@@ -423,7 +401,7 @@ where
 /// A new GitHub account creates a prepcode account.
 #[tauri::command]
 pub async fn start_github_sign_in(app: AppHandle, sign_in: State<'_, SignIn>) -> Result<SignInLink, String> {
-    let purpose = Purpose::SignIn { provider: Provider::GitHub };
+    let purpose = Purpose::SignIn;
     start_in_browser(&app, &sign_in, purpose, |port, challenge| async move {
         Ok(account::authorize_url(Provider::GitHub, port, &challenge))
     })
@@ -434,7 +412,7 @@ pub async fn start_github_sign_in(app: AppHandle, sign_in: State<'_, SignIn>) ->
 /// that waits for GitHub (see `start_github_connect`).
 #[tauri::command]
 pub async fn start_google_sign_in(app: AppHandle, sign_in: State<'_, SignIn>) -> Result<SignInLink, String> {
-    let purpose = Purpose::SignIn { provider: Provider::Google };
+    let purpose = Purpose::SignIn;
     start_in_browser(&app, &sign_in, purpose, |port, challenge| async move {
         Ok(account::authorize_url(Provider::Google, port, &challenge))
     })
@@ -538,7 +516,7 @@ pub async fn finish_sign_in(
 
     let tokens = account::exchange_code(&code, &verifier).await.map_err(|e| e.message())?;
     let expected = match &purpose {
-        Purpose::SignIn { .. } => None,
+        Purpose::SignIn => None,
         Purpose::LinkGoogle { account_id } | Purpose::ConnectGitHub { account_id, .. } => Some(account_id),
     };
     if expected.is_some_and(|id| *id != tokens.user_id) {
@@ -551,7 +529,7 @@ pub async fn finish_sign_in(
         let _ = window.set_focus();
     }
 
-    if tokens.account.is_none() && !matches!(purpose, Purpose::SignIn { .. }) {
+    if tokens.account.is_none() && !matches!(purpose, Purpose::SignIn) {
         return Err("Unexpected answer from prepcode's servers: no GitHub account".into());
     }
 
@@ -576,21 +554,13 @@ pub async fn finish_sign_in(
         return Ok(Some(SignInResult::SignedIn { session: Session::student(&account) }));
     }
 
-    let github_trip =
-        matches!(purpose, Purpose::SignIn { provider: Provider::GitHub } | Purpose::ConnectGitHub { .. });
-    complete_sign_in(&app, tokens, github_trip).await.map(Some)
+    complete_sign_in(&app, tokens).await.map(Some)
 }
 
 /// Finishes signing in, however it started (GitHub, Google, or email): an
 /// account with no GitHub yet waits for the student to connect it, staff are
 /// refused, and otherwise the session is saved and the workspace opened.
-/// `github_trip`: the session came straight from GitHub, so its GitHub token
-/// can set up the student's repo.
-async fn complete_sign_in(
-    app: &AppHandle,
-    tokens: Tokens,
-    github_trip: bool,
-) -> Result<SignInResult, String> {
+async fn complete_sign_in(app: &AppHandle, tokens: Tokens) -> Result<SignInResult, String> {
     let waiting = app.state::<WaitingAccount>();
     if tokens.account.is_none() {
         refuse_staff(&tokens).await?;
@@ -604,9 +574,7 @@ async fn complete_sign_in(
     }
     *waiting.lock() = None;
     let db = app.state::<Db>();
-    let github_token = tokens.provider_token.clone().filter(|_| github_trip);
     let account = save_session(&db, &app.state::<AccessToken>(), tokens).await?;
-    app.state::<GitHubUserToken>().set(github_token.map(|token| (account.github_id, token)));
     open_workspace(app, &db, &app.state::<CurrentUser>(), &student_id(&account))?;
     Ok(SignInResult::SignedIn { session: Session::student(&account) })
 }
@@ -679,14 +647,14 @@ pub async fn email_verify_code(app: AppHandle, email: String, code: String) -> R
     let email = clean_email(&email)?;
     let tokens =
         account::verify_email_code(&email, code.trim(), EmailCode::SignUp).await.map_err(|e| e.message())?;
-    complete_sign_in(&app, tokens, false).await
+    complete_sign_in(&app, tokens).await
 }
 
 #[tauri::command]
 pub async fn email_sign_in(app: AppHandle, email: String, password: String) -> Result<SignInResult, String> {
     let email = clean_email(&email)?;
     match account::sign_in_with_password(&email, &password).await {
-        Ok(tokens) => complete_sign_in(&app, tokens, false).await,
+        Ok(tokens) => complete_sign_in(&app, tokens).await,
         // Signed up but never entered the code: send a new one.
         Err(AccountError::Rejected(message)) if message.to_lowercase().contains("not confirmed") => {
             account::resend_sign_up_code(&email).await.map_err(|e| e.message())?;
@@ -721,7 +689,7 @@ pub async fn email_reset_password(
     // Staff change their password in prepwisely, not here.
     refuse_staff(&tokens).await?;
     account::set_password(&tokens.access_token, &password).await.map_err(|e| e.message())?;
-    complete_sign_in(&app, tokens, false).await
+    complete_sign_in(&app, tokens).await
 }
 
 /// Supabase's answer when a login being connected already belongs to another
@@ -813,7 +781,6 @@ pub async fn logout(
     // it can't save this student's sign-in again when it comes back.
     *app.state::<SignIn>().lock() = None;
     *app.state::<WaitingAccount>().lock() = None;
-    app.state::<GitHubUserToken>().clear();
     let Ok(id) = current.get() else { return Ok(()) };
     current.set(None);
     repo_tokens.clear();

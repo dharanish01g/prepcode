@@ -126,7 +126,6 @@ pub const REPO: &str = "prepcode-programs";
 
 #[derive(Deserialize)]
 pub struct Repo {
-    pub id: u64,
     pub default_branch: String,
     pub html_url: String,
 }
@@ -139,35 +138,20 @@ pub async fn get_repo(token: &str, owner: &str) -> Result<Option<Repo>, GitHubEr
     }
 }
 
-/// The id of `owner`'s `prepcode-programs` repo, if it exists: with the
-/// student's own GitHub token if there is one, else without signing in (it's a
-/// public repo).
-pub async fn find_repo(token: Option<&str>, owner: &str) -> Result<Option<u64>, GitHubError> {
+/// The id of `owner`'s `prepcode-programs` repo, if it exists. Asked without
+/// signing in: it's a public repo. A renamed repo doesn't count, though GitHub
+/// redirects its old name to it: prepcode syncs with this name only.
+pub async fn find_repo(owner: &str) -> Result<Option<u64>, GitHubError> {
     let request =
         client()?.get(format!("{API}/repos/{owner}/{REPO}")).header("X-GitHub-Api-Version", "2022-11-28");
-    let request = match token {
-        Some(token) => request.bearer_auth(token),
-        None => request,
-    };
     match send(request).await {
-        Ok(response) => json::<Repo>(response).await.map(|repo| Some(repo.id)),
+        Ok(response) => {
+            let repo: Value = json(response).await?;
+            Ok(repo["id"].as_u64().filter(|_| repo["name"] == REPO))
+        }
         Err(GitHubError::NotFound) => Ok(None),
         Err(e) => Err(e),
     }
-}
-
-/// Creates the student's public `prepcode-programs` repo with their own GitHub
-/// token (needs the prepcodes app's "Repository creation" permission), and
-/// returns its id. It starts with a README, so it's never empty.
-pub async fn create_repo(token: &str) -> Result<u64, GitHubError> {
-    let body = json!({
-        "name": REPO,
-        "description": "Programs saved from prepcode",
-        "private": false,
-        "auto_init": true,
-    });
-    let repo: Repo = json(send(post("/user/repos", token, body)?).await?).await?;
-    Ok(repo.id)
 }
 
 /// The commit the branch points at, or None if the repo has no commits yet.

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { CircleCheckIcon, ExternalLinkIcon } from "lucide-react";
+import { ExternalLinkIcon } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { toast } from "sonner";
@@ -8,14 +8,24 @@ import { Spinner } from "@/components/ui/spinner";
 import { repoSetup, type RepoSetup } from "@/lib/sync";
 
 /** How often to check again while the student is on GitHub, and for how long. */
-const POLL_MS = 10_000;
-const POLL_FOR_MS = 3 * 60_000;
+const POLL_MS = 5_000;
+const POLL_FOR_MS = 10 * 60_000;
+
+/** What the student does on the GitHub page prepcode opened. */
+const ON_GITHUB: Record<"needsInstall" | "needsAccess" | "needsApproval", string> = {
+  needsInstall:
+    "Click Install there. prepcode then creates your prepcode-programs repository by itself.",
+  needsAccess: "Only your prepcode-programs repository is selected. Click Install or Save there.",
+  needsApproval:
+    "Accept prepcode's new permissions there, so it can create your prepcode-programs repository.",
+};
 
 /**
- * The steps that get a student's GitHub ready for syncing: their
- * prepcode-programs repo (prepcode creates it when it can), then giving the
- * prepcodes app access to it. Checks again by itself when the student comes
- * back from GitHub, and calls `onReady` once it's done.
+ * Gets a student's GitHub ready for syncing by itself: checks their
+ * prepcode-programs repo and prepcode's access, and opens the one GitHub page
+ * that's left (installing the prepcodes app; prepcode creates the repo).
+ * Checks again when the student comes back from GitHub, and calls `onReady`
+ * once it's done.
  */
 export function RepoSetupSteps({
   onReady,
@@ -30,13 +40,23 @@ export function RepoSetupSteps({
   // Null until the first check has answered.
   const [setup, setSetup] = useState<RepoSetup | null>(null);
   const [checking, setChecking] = useState(false);
-  // Until when to keep checking after the student opened GitHub.
+  // Until when to keep checking after GitHub was opened.
   const [pollUntil, setPollUntil] = useState(0);
   const onReadyRef = useRef(onReady);
   useEffect(() => {
     onReadyRef.current = onReady;
   }, [onReady]);
   const inFlight = useRef(false);
+  // Each GitHub page is opened by itself only once; after that it's the button.
+  const opened = useRef(new Set<string>());
+
+  const openGitHub = useCallback((url: string) => {
+    opened.current.add(url);
+    setPollUntil(Date.now() + POLL_FOR_MS);
+    openUrl(url).catch((err) =>
+      toast.error("Couldn't open your browser", { description: String(err) }),
+    );
+  }, []);
 
   const check = useCallback(async () => {
     if (inFlight.current) return;
@@ -46,13 +66,14 @@ export function RepoSetupSteps({
       const next = await repoSetup();
       setSetup(next);
       if (next.kind === "ready") onReadyRef.current();
+      else if ("url" in next && !opened.current.has(next.url)) openGitHub(next.url);
     } catch (err) {
       setSetup({ kind: "unknown", message: String(err) });
     } finally {
       inFlight.current = false;
       setChecking(false);
     }
-  }, []);
+  }, [openGitHub]);
 
   useEffect(() => {
     check();
@@ -68,7 +89,7 @@ export function RepoSetupSteps({
     };
   }, [check]);
 
-  const waiting = setup?.kind === "needsRepo" || setup?.kind === "needsAccess";
+  const waiting = setup !== null && "url" in setup;
   useEffect(() => {
     if (!waiting || pollUntil <= Date.now()) return;
     const timer = setInterval(() => {
@@ -78,18 +99,11 @@ export function RepoSetupSteps({
     return () => clearInterval(timer);
   }, [waiting, pollUntil, check]);
 
-  function openGitHub(url: string) {
-    setPollUntil(Date.now() + POLL_FOR_MS);
-    openUrl(url).catch((err) =>
-      toast.error("Couldn't open your browser", { description: String(err) }),
-    );
-  }
-
   if (setup === null || setup.kind === "ready") {
     return (
       <p className="flex items-center justify-center gap-2 py-2 text-sm text-muted-foreground">
         <Spinner />
-        Checking your GitHub…
+        Setting up your GitHub…
       </p>
     );
   }
@@ -109,76 +123,21 @@ export function RepoSetupSteps({
     );
   }
 
-  const hasRepo = setup.kind === "needsAccess";
   return (
     <div className="flex w-full flex-col gap-4">
       <p className="text-sm text-muted-foreground">
         prepcode saves your programs to a public repository called{" "}
         <span className="font-medium text-foreground">prepcode-programs</span> on your GitHub.
+        GitHub is open in your browser. {ON_GITHUB[setup.kind]}
       </p>
-
-      <Step number={1} done={hasRepo} title="Create your repository">
-        {hasRepo ? (
-          <p className="text-xs text-muted-foreground">
-            Your prepcode-programs repository is ready.
-          </p>
-        ) : (
-          <>
-            <p className="text-xs text-muted-foreground">
-              GitHub opens with the name filled in. Click Create repository there.
-            </p>
-            <Button className="w-full" onClick={() => openGitHub(setup.url)}>
-              <ExternalLinkIcon />
-              Create repository
-            </Button>
-          </>
-        )}
-      </Step>
-
-      <Step number={2} done={false} title="Give prepcode access">
-        <p className="text-xs text-muted-foreground">
-          Only your prepcode-programs repository is selected. Click Install there.
-        </p>
-        <Button className="w-full" disabled={!hasRepo} onClick={() => openGitHub(setup.url)}>
-          <ExternalLinkIcon />
-          Give access on GitHub
-        </Button>
-      </Step>
-
-      <Button variant="outline" disabled={checking} onClick={check}>
-        {checking && <Spinner />}
-        {checking ? "Checking…" : "I've done it"}
+      <p className="flex items-center gap-2 text-sm text-muted-foreground">
+        <Spinner />
+        Waiting for GitHub…
+      </p>
+      <Button variant="outline" className="w-full" onClick={() => openGitHub(setup.url)}>
+        <ExternalLinkIcon />
+        Open GitHub again
       </Button>
-    </div>
-  );
-}
-
-function Step({
-  number,
-  done,
-  title,
-  children,
-}: {
-  number: number;
-  done: boolean;
-  title: string;
-  children: React.ReactNode;
-}) {
-  // The number sits beside the title, so the text and button below use the
-  // full width, like the buttons outside the steps.
-  return (
-    <div className="flex flex-col gap-2">
-      <div className="flex items-center gap-2">
-        {done ? (
-          <CircleCheckIcon className="size-5 shrink-0 text-primary" aria-label="Done" />
-        ) : (
-          <span className="flex size-5 shrink-0 items-center justify-center rounded-full border text-xs text-muted-foreground">
-            {number}
-          </span>
-        )}
-        <p className="text-sm font-medium">{title}</p>
-      </div>
-      {children}
     </div>
   );
 }

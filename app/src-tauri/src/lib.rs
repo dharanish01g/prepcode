@@ -38,7 +38,6 @@ pub fn run() {
         .manage(auth::WaitingAccount::default())
         .manage(sync::SyncLock::default())
         .manage(sync::RepoTokens::default())
-        .manage(auth::GitHubUserToken::default())
         .manage(runtimes::RuntimeInstalls::default())
         .manage(run::Runner::default())
         .manage(sql::Servers::default())

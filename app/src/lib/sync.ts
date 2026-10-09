@@ -48,16 +48,18 @@ export const CONNECT_GITHUB = "Connect GitHub:";
 /** Whether the student's GitHub is ready for syncing. Mirrors RepoSetup in sync.rs. */
 export type RepoSetup =
   | { kind: "ready" }
-  /** No prepcode-programs repo, and prepcode couldn't create it: create it at `url`. */
-  | { kind: "needsRepo"; url: string }
-  /** Give the prepcodes app access to the repo at `url` (only that repo selected). */
+  /** Install the prepcodes app at `url`; prepcode then creates the repo if there isn't one. */
+  | { kind: "needsInstall"; url: string }
+  /** Give the installed app the existing repo at `url` (only that repo selected). */
   | { kind: "needsAccess"; url: string }
+  /** Accept the app's newer permissions at `url`, so it can create the repo. */
+  | { kind: "needsApproval"; url: string }
   /** Couldn't find out, e.g. offline. */
   | { kind: "unknown"; message: string };
 
 /**
- * Checks the student's repo access, creating their repo first if it can.
- * Called again until it's ready.
+ * Checks the student's repo access. Once the prepcodes app is installed, this
+ * also creates their repo if they don't have one. Called again until it's ready.
  */
 export function repoSetup() {
   return invoke<RepoSetup>("repo_setup");

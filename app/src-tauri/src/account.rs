@@ -48,9 +48,8 @@ pub enum AccountError {
     /// The session is over for good (signed out, deleted, or its refresh
     /// token already used): only this means "sign in again".
     SignedOut(String),
-    /// The student's GitHub isn't set up for syncing yet: no
-    /// `prepcode-programs` repo, or the prepcodes app has no access to it.
-    NotSetUp(String),
+    /// The student's GitHub isn't set up for syncing yet: what's left to do.
+    NotSetUp(SetupNeeded),
     Other(String),
 }
 
@@ -60,9 +59,9 @@ impl AccountError {
             AccountError::Offline => {
                 "Could not reach prepcode's servers. Check your internet connection.".into()
             }
+            AccountError::NotSetUp(needed) => needed.message(),
             AccountError::Rejected(message)
             | AccountError::SignedOut(message)
-            | AccountError::NotSetUp(message)
             | AccountError::Other(message) => message.clone(),
         }
     }
@@ -75,7 +74,7 @@ impl std::fmt::Debug for AccountError {
             AccountError::Offline => write!(f, "Offline"),
             AccountError::Rejected(message) => write!(f, "Rejected({message:?})"),
             AccountError::SignedOut(message) => write!(f, "SignedOut({message:?})"),
-            AccountError::NotSetUp(message) => write!(f, "NotSetUp({message:?})"),
+            AccountError::NotSetUp(needed) => write!(f, "NotSetUp({needed:?})"),
             AccountError::Other(message) => write!(f, "Other({message:?})"),
         }
     }
@@ -135,10 +134,6 @@ pub struct Tokens {
     pub email: Option<String>,
     /// None while the account has no GitHub yet (it started with Google).
     pub account: Option<Account>,
-    /// The token of the GitHub or Google login just used in the browser (None
-    /// after a refresh). A GitHub one is used once, right after signing in, to
-    /// find or create the student's repo (see `sync::repo_setup`).
-    pub provider_token: Option<String>,
 }
 
 // --- Signing in -----------------------------------------------------------------------
@@ -380,6 +375,34 @@ pub async fn sign_out(access_token: &str) -> Result<(), AccountError> {
 /// can offer a button to the prepcodes install page.
 pub const CONNECT_GITHUB: &str = "Connect GitHub:";
 
+/// What the student still has to do on GitHub before prepcode can sync. The
+/// `github-token` function creates their `prepcode-programs` repo itself once
+/// the prepcodes app is installed, so it's only ever about the app's access.
+#[derive(Clone, Debug, PartialEq)]
+pub enum SetupNeeded {
+    /// Install the prepcodes app on their GitHub account.
+    Install,
+    /// Give the installed app their existing repo (GitHub's id for it, if the
+    /// function knows it).
+    AddRepo { repo_id: Option<u64> },
+    /// The installed app couldn't create their repo: accept its newer
+    /// permissions on the installation's settings page.
+    AcceptPermissions { installation_id: Option<u64> },
+}
+
+impl SetupNeeded {
+    fn message(&self) -> String {
+        let what = match self {
+            SetupNeeded::Install => "install the prepcodes app on GitHub.",
+            SetupNeeded::AddRepo { .. } => {
+                "give prepcode access to your prepcode-programs repository on GitHub."
+            }
+            SetupNeeded::AcceptPermissions { .. } => "accept prepcode's new permissions on GitHub.",
+        };
+        format!("{CONNECT_GITHUB} {what}")
+    }
+}
+
 /// A GitHub token for the student's `prepcode-programs` repo, and nothing
 /// else, from the `github-token` function. It works for an hour.
 #[derive(Clone)]
@@ -396,14 +419,17 @@ pub async fn repo_token(access_token: &str) -> Result<RepoToken, AccountError> {
     let status = response.status().as_u16();
     let body: Value = response.json().await.unwrap_or(Value::Null);
     let rejected = |message: String| Err(AccountError::Rejected(message));
+    let id = |key: &str| body[key].as_u64();
     match (status, body["code"].as_str()) {
         (200, _) => {}
-        // The prepcodes app isn't installed, or doesn't have the repo (which
-        // may not exist yet).
-        (_, Some("not_installed" | "repo_not_selected")) => {
-            return Err(AccountError::NotSetUp(format!(
-                "{CONNECT_GITHUB} give prepcode access to your prepcode-programs repository on GitHub."
-            )))
+        (_, Some("not_installed")) => return Err(AccountError::NotSetUp(SetupNeeded::Install)),
+        (_, Some("repo_not_selected")) => {
+            return Err(AccountError::NotSetUp(SetupNeeded::AddRepo { repo_id: id("repo_id") }))
+        }
+        (_, Some("cannot_create_repo")) => {
+            return Err(AccountError::NotSetUp(SetupNeeded::AcceptPermissions {
+                installation_id: id("installation_id"),
+            }))
         }
         (_, Some("no_github")) => return rejected("This account has no GitHub sign-in.".into()),
         (401, _) => return rejected("Your sign-in has expired. Log out and sign in again.".into()),
@@ -483,7 +509,6 @@ struct TokenResponse {
     expires_in: u64,
     expires_at: Option<u64>,
     user: Value,
-    provider_token: Option<String>,
 }
 
 fn tokens(body: Value) -> Result<Tokens, AccountError> {
@@ -499,7 +524,6 @@ fn tokens(body: Value) -> Result<Tokens, AccountError> {
         user_id,
         email: response.user["email"].as_str().map(str::to_owned),
         account: account_of(&response.user),
-        provider_token: response.provider_token.filter(|token| !token.is_empty()),
     })
 }
 
