@@ -42,7 +42,7 @@ export function QuestionView({
           <TabsContent value="question" className="min-h-0">
             <ScrollArea className="h-full">
               <div className="p-4">
-                <h1 className="mb-4 text-base font-medium">{question.title}</h1>
+                <h1 className="mb-3 text-base font-semibold">{question.title}</h1>
                 <Markdown>{question.description}</Markdown>
               </div>
             </ScrollArea>

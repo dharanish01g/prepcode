@@ -1,4 +1,3 @@
-import { FlameIcon } from "lucide-react";
 import {
   SidebarGroup,
   SidebarGroupContent,
@@ -6,20 +5,15 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@/components/ui/sidebar";
-import { QUESTIONS, type Question } from "@/lib/questions";
+import { QUESTIONS } from "@/lib/questions";
 
 const DIFFICULTY_COLORS = {
-  Easy: "fill-green-500 text-green-500",
-  Medium: "fill-yellow-500 text-yellow-500",
-  Hard: "fill-red-500 text-red-500",
+  Easy: "text-green-600 dark:text-green-500",
+  Medium: "text-yellow-600 dark:text-yellow-500",
+  Hard: "text-red-600 dark:text-red-500",
 } as const;
 
-/** A flame colored by difficulty: green is easy, yellow medium, red hard. */
-function DifficultyFlame({ difficulty }: { difficulty: Question["difficulty"] }) {
-  return <FlameIcon aria-label={difficulty} className={DIFFICULTY_COLORS[difficulty]} />;
-}
-
-/** The questions in the sidebar, with a flame for their difficulty on the right. Click one to open it. */
+/** The questions in the sidebar, with their difficulty on the right. Click one to open it. */
 export function QuestionList({
   search,
   selectedQuestion,
@@ -56,8 +50,10 @@ export function QuestionList({
                   {QUESTIONS.indexOf(question) + 1}.
                 </span>
                 <span className="truncate">{question.title}</span>
-                <span className="ml-auto shrink-0">
-                  <DifficultyFlame difficulty={question.difficulty} />
+                <span
+                  className={`ml-auto shrink-0 text-xs ${DIFFICULTY_COLORS[question.difficulty]}`}
+                >
+                  {question.difficulty}
                 </span>
               </SidebarMenuButton>
             </SidebarMenuItem>

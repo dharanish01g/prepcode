@@ -39,6 +39,13 @@ func main() {
 
 }
 `,
+  cs: `class Program {
+    static void Main() {
+        // Write your code here
+
+    }
+}
+`,
 };
 
 /** The starter code for a language, or just the comment for one without its own. */
