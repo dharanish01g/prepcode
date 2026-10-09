@@ -1029,9 +1029,21 @@ const SNIPPETS = [
   },
   {
     label: "mapinp",
+    insertText: "map(int, input().split())",
+    detail: "map(int, input().split())",
+    documentation: "Map space-separated input strings to integers.",
+  },
+  {
+    label: "listinp",
     insertText: "list(map(int, input().split()))",
-    detail: "read integer list from input",
-    documentation: "Standard competitive programming idiom to read space-separated integers.",
+    detail: "list(map(int, input().split()))",
+    documentation: "Read space-separated integers as a list.",
+  },
+  {
+    label: "fastio",
+    insertText: "import sys\ninput = sys.stdin.readline\n$0",
+    detail: "fast I/O setup",
+    documentation: "Speed up input reading for competitive programming with sys.stdin.readline.",
   },
   {
     label: "intinp",
@@ -1093,29 +1105,27 @@ export function registerPythonCompletions(mInstance?: Monaco) {
       // Check if user is typing immediately after a dot (e.g. "math." or "math.sq")
       if (textBeforeWord.endsWith(".")) {
         // If preceded by a number literal (e.g. "5." or "3.14."), do not suggest member completions
-        if (/\d\.$/.test(textBeforeWord)) {
+        if (/\b\d+\.$/.test(textBeforeWord)) {
           return { suggestions: [] };
         }
 
-        const match = textBeforeWord.match(/([a-zA-Z0-9_]+)\.$/);
-        const target = match ? match[1].toLowerCase() : "";
-
-        if (target === "math") {
-          return { suggestions: toCompletionItems(MATH_MEMBERS, range) };
-        }
-        if (target === "random") {
-          return { suggestions: toCompletionItems(RANDOM_MEMBERS, range) };
-        }
-        if (target === "sys") {
-          return { suggestions: toCompletionItems(SYS_MEMBERS, range) };
-        }
-        if (target === "os") {
-          return { suggestions: toCompletionItems(OS_MEMBERS, range) };
-        }
-        if (target === "path") {
+        // Check explicit module qualifier before the dot with word boundary
+        if (/(?:^|[^\w.])os\.path\.$/.test(textBeforeWord)) {
           return { suggestions: toCompletionItems(OS_PATH_MEMBERS, range) };
         }
-        if (target === "json") {
+        if (/(?:^|[^\w.])os\.$/.test(textBeforeWord)) {
+          return { suggestions: toCompletionItems(OS_MEMBERS, range) };
+        }
+        if (/(?:^|[^\w.])math\.$/.test(textBeforeWord)) {
+          return { suggestions: toCompletionItems(MATH_MEMBERS, range) };
+        }
+        if (/(?:^|[^\w.])random\.$/.test(textBeforeWord)) {
+          return { suggestions: toCompletionItems(RANDOM_MEMBERS, range) };
+        }
+        if (/(?:^|[^\w.])sys\.$/.test(textBeforeWord)) {
+          return { suggestions: toCompletionItems(SYS_MEMBERS, range) };
+        }
+        if (/(?:^|[^\w.])json\.$/.test(textBeforeWord)) {
           return { suggestions: toCompletionItems(JSON_MEMBERS, range) };
         }
 
@@ -1123,27 +1133,56 @@ export function registerPythonCompletions(mInstance?: Monaco) {
         return { suggestions: toCompletionItems(COMMON_INSTANCE_MEMBERS, range) };
       }
 
-      // Check if user is typing an import statement
-      if (textBeforeWord.startsWith("import")) {
+      // Check if user is typing an import statement (handling indented lines as well)
+      const trimmedLineBefore = lineContent.slice(0, position.column - 1).trimStart();
+
+      // Check for "from <module> import [member]"
+      const fromImportMatch = trimmedLineBefore.match(
+        /^from\s+([a-zA-Z_]\w*)\s+import\s*([a-zA-Z_]\w*)?$/,
+      );
+      if (fromImportMatch) {
+        const modName = fromImportMatch[1].toLowerCase();
+        let memberList: CompletionItemDef[] = [];
+        if (modName === "math") memberList = MATH_MEMBERS;
+        else if (modName === "random") memberList = RANDOM_MEMBERS;
+        else if (modName === "sys") memberList = SYS_MEMBERS;
+        else if (modName === "os") memberList = OS_MEMBERS;
+        else if (modName === "json") memberList = JSON_MEMBERS;
+
         return {
-          suggestions: PYTHON_MODULES.map((mod) => ({
-            label: mod.name,
-            kind: m.languages.CompletionItemKind.Module,
-            insertText: mod.name,
-            detail: `module ${mod.name}`,
-            documentation: mod.doc,
+          suggestions: memberList.map((mItem) => ({
+            label: mItem.label,
+            kind: mItem.kind ?? m.languages.CompletionItemKind.Function,
+            insertText: mItem.label,
+            detail: mItem.detail,
+            documentation: mItem.documentation,
             range,
           })),
         };
       }
 
-      if (textBeforeWord.startsWith("from")) {
+      // Check for "from <module>" (before typing import)
+      if (/^from\s+[a-zA-Z_]\w*$/.test(trimmedLineBefore)) {
         return {
           suggestions: PYTHON_MODULES.map((mod) => ({
             label: mod.name,
             kind: m.languages.CompletionItemKind.Module,
             insertText: `${mod.name} import `,
             detail: `from ${mod.name} import ...`,
+            documentation: mod.doc,
+            range,
+          })),
+        };
+      }
+
+      // Check for "import <module>"
+      if (/^import\s+[a-zA-Z_]\w*$/.test(trimmedLineBefore)) {
+        return {
+          suggestions: PYTHON_MODULES.map((mod) => ({
+            label: mod.name,
+            kind: m.languages.CompletionItemKind.Module,
+            insertText: mod.name,
+            detail: `module ${mod.name}`,
             documentation: mod.doc,
             range,
           })),
@@ -1199,8 +1238,8 @@ export function registerPythonCompletions(mInstance?: Monaco) {
       const lineContent = model.getLineContent(position.lineNumber);
       const textBefore = lineContent.slice(0, word.startColumn - 1).trimEnd();
 
-      // Only show math member docs when preceded by "math."
-      if (textBefore.endsWith("math.")) {
+      // Only show math member docs when preceded by "math." with a word boundary
+      if (/(?:^|[^\w.])math\.$/.test(textBefore)) {
         const mathMatch = MATH_MEMBERS.find((item) => item.label === name);
         if (mathMatch) {
           return {
@@ -1218,8 +1257,8 @@ export function registerPythonCompletions(mInstance?: Monaco) {
         }
       }
 
-      // Only show random member docs when preceded by "random."
-      if (textBefore.endsWith("random.")) {
+      // Only show random member docs when preceded by "random." with a word boundary
+      if (/(?:^|[^\w.])random\.$/.test(textBefore)) {
         const randMatch = RANDOM_MEMBERS.find((item) => item.label === name);
         if (randMatch) {
           return {
@@ -1237,8 +1276,8 @@ export function registerPythonCompletions(mInstance?: Monaco) {
         }
       }
 
-      // Only show sys member docs when preceded by "sys."
-      if (textBefore.endsWith("sys.")) {
+      // Only show sys member docs when preceded by "sys." with a word boundary
+      if (/(?:^|[^\w.])sys\.$/.test(textBefore)) {
         const sysMatch = SYS_MEMBERS.find((item) => item.label === name);
         if (sysMatch) {
           return {
@@ -1256,8 +1295,8 @@ export function registerPythonCompletions(mInstance?: Monaco) {
         }
       }
 
-      // Only show os.path member docs when preceded by "os.path." or "path."
-      if (textBefore.endsWith("os.path.") || textBefore.endsWith("path.")) {
+      // Only show os.path member docs when preceded by "os.path." with a word boundary
+      if (/(?:^|[^\w.])os\.path\.$/.test(textBefore)) {
         const pathMatch = OS_PATH_MEMBERS.find((item) => item.label === name);
         if (pathMatch) {
           return {
@@ -1275,8 +1314,8 @@ export function registerPythonCompletions(mInstance?: Monaco) {
         }
       }
 
-      // Only show os member docs when preceded by "os."
-      if (textBefore.endsWith("os.")) {
+      // Only show os member docs when preceded by "os." with a word boundary (and not os.path.)
+      if (/(?:^|[^\w.])os\.$/.test(textBefore)) {
         const osMatch = OS_MEMBERS.find((item) => item.label === name);
         if (osMatch) {
           return {
@@ -1294,8 +1333,8 @@ export function registerPythonCompletions(mInstance?: Monaco) {
         }
       }
 
-      // Only show json member docs when preceded by "json."
-      if (textBefore.endsWith("json.")) {
+      // Only show json member docs when preceded by "json." with a word boundary
+      if (/(?:^|[^\w.])json\.$/.test(textBefore)) {
         const jsonMatch = JSON_MEMBERS.find((item) => item.label === name);
         if (jsonMatch) {
           return {
@@ -1352,203 +1391,333 @@ export function registerPythonCompletions(mInstance?: Monaco) {
     },
   });
 
-  // 3. Signature Help Provider: shows parameter hints for known calls and handles nested parens
+  interface SigDef {
+    label: string;
+    doc: string;
+    params: { label: string; doc: string }[];
+    varargPositionalIdx?: number;
+  }
+
+  // 3. Signature Help Provider: shows parameter hints for known calls, tracking strings & nested parens
   m.languages.registerSignatureHelpProvider("python", {
     signatureHelpTriggerCharacters: ["(", ","],
     provideSignatureHelp(model, position) {
       const lineContent = model.getLineContent(position.lineNumber);
       const textBefore = lineContent.slice(0, position.column - 1);
 
-      // Parse backwards to track nested parenthesis depth and comma count
-      let parenDepth = 0;
-      let activeParameter = 0;
-      let callEnd = -1;
+      // Parse from left to right tracking quotes ("...", '...') and nested parenthesis depth
+      const parenStack: { openIdx: number; argCount: number; lastCommaIdx: number }[] = [];
+      let inQuote: string | null = null;
+      let isEscaped = false;
 
-      for (let i = textBefore.length - 1; i >= 0; i--) {
+      for (let i = 0; i < textBefore.length; i++) {
         const ch = textBefore[i];
-        if (ch === ")") {
-          parenDepth++;
-        } else if (ch === "(") {
-          if (parenDepth > 0) {
-            parenDepth--;
-          } else {
-            callEnd = i;
-            break;
+        if (isEscaped) {
+          isEscaped = false;
+          continue;
+        }
+        if (ch === "\\") {
+          isEscaped = true;
+          continue;
+        }
+        if (inQuote !== null) {
+          if (ch === inQuote) {
+            inQuote = null;
           }
-        } else if (ch === "," && parenDepth === 0) {
-          activeParameter++;
+          continue;
+        }
+        if (ch === '"' || ch === "'") {
+          inQuote = ch;
+          continue;
+        }
+
+        if (ch === "(") {
+          parenStack.push({ openIdx: i, argCount: 0, lastCommaIdx: i });
+        } else if (ch === ")") {
+          parenStack.pop();
+        } else if (ch === ",") {
+          if (parenStack.length > 0) {
+            parenStack[parenStack.length - 1].argCount++;
+            parenStack[parenStack.length - 1].lastCommaIdx = i;
+          }
         }
       }
 
-      if (callEnd === -1) return null;
+      if (parenStack.length === 0) return null;
+
+      const activeCall = parenStack[parenStack.length - 1];
+      const callEnd = activeCall.openIdx;
+      let activeParameter = activeCall.argCount;
 
       const textBeforeCall = textBefore.slice(0, callEnd).trimEnd();
-      const match = textBeforeCall.match(/([A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)?)$/);
+      // Match full qualified target chain (e.g. "os.path.join" or "math.sqrt" or "print")
+      const match = textBeforeCall.match(/(?:^|[^\w.])([a-zA-Z_]\w*(?:\.[a-zA-Z_]\w*)*)$/);
       if (!match) return null;
 
       const callTarget = match[1];
 
-      const signaturesMap: Record<string, { label: string; doc: string; params: string[] }> = {
+      const signaturesMap: Record<string, SigDef> = {
         print: {
           label: "print(*values, sep=' ', end='\\n', file=sys.stdout, flush=False)",
           doc: "Prints the values to a stream, or to sys.stdout by default.",
           params: [
-            "*values: objects to print",
-            "sep=' ': string inserted between values",
-            "end='\\n': string appended after the last value",
-            "file=sys.stdout",
-            "flush=False",
+            { label: "*values", doc: "Objects to print; any number of positional arguments." },
+            { label: "sep=' '", doc: "String inserted between values, default a space." },
+            { label: "end='\\n'", doc: "String appended after the last value, default a newline." },
+            {
+              label: "file=sys.stdout",
+              doc: "A file-like stream; defaults to current sys.stdout.",
+            },
+            { label: "flush=False", doc: "Whether to forcibly flush the stream." },
           ],
+          varargPositionalIdx: 0,
         },
         range: {
-          label: "range(stop) | range(start, stop[, step])",
+          label: "range(start, stop, step=1)",
           doc: "Returns a sequence of numbers from start to stop by step.",
-          params: ["start: start number", "stop: stop number", "step=1: step difference"],
+          params: [
+            {
+              label: "start",
+              doc: "Integer starting number (defaults to 0 if only stop is given).",
+            },
+            { label: "stop", doc: "Integer stopping number (exclusive limit)." },
+            { label: "step=1", doc: "Integer step difference (defaults to 1)." },
+          ],
         },
         input: {
-          label: "input(prompt='', /) -> str",
-          doc: "Read a string from standard input.",
-          params: ["prompt='': prompt message to display"],
+          label: "input(prompt='') -> str",
+          doc: "Read a string from standard input. The trailing newline is stripped.",
+          params: [
+            {
+              label: "prompt=''",
+              doc: "Optional prompt message displayed on stdout without newline.",
+            },
+          ],
         },
         round: {
           label: "round(number, ndigits=None) -> number",
           doc: "Round a number to a given precision in decimal digits.",
-          params: ["number: number to round", "ndigits=None: precision digits"],
+          params: [
+            { label: "number", doc: "Number to round." },
+            { label: "ndigits=None", doc: "Number of decimal digits to round to." },
+          ],
         },
         int: {
-          label: "int(x=0) -> int | int(x, base=10)",
+          label: "int(x=0, base=10) -> int",
           doc: "Convert a number or string to an integer.",
-          params: ["x: value to convert", "base=10: numeric base"],
+          params: [
+            { label: "x=0", doc: "Number or string to convert." },
+            { label: "base=10", doc: "Numeric base (between 2 and 36) when converting a string." },
+          ],
         },
         float: {
           label: "float(x=0.0) -> float",
           doc: "Convert a string or number to a floating point number.",
-          params: ["x: value to convert"],
+          params: [{ label: "x=0.0", doc: "Number or string to convert." }],
         },
         str: {
           label: "str(object='') -> str",
           doc: "Create a new string object from the given object.",
-          params: ["object: value to convert"],
+          params: [{ label: "object=''", doc: "Object to convert to string." }],
         },
         len: {
-          label: "len(obj, /) -> int",
+          label: "len(obj) -> int",
           doc: "Return the number of items in a container.",
-          params: ["obj: container object"],
+          params: [{ label: "obj", doc: "A sequence or collection container." }],
         },
         open: {
           label: "open(file, mode='r', encoding=None)",
           doc: "Open file and return a stream.",
-          params: ["file: path to file", "mode='r': opening mode", "encoding=None"],
+          params: [
+            { label: "file", doc: "Path to file to open." },
+            { label: "mode='r'", doc: "Opening mode ('r', 'w', 'a', 'rb', 'wb')." },
+            {
+              label: "encoding=None",
+              doc: "Encoding used to decode or encode the file (e.g. 'utf-8').",
+            },
+          ],
         },
         isinstance: {
-          label: "isinstance(obj, class_or_tuple, /) -> bool",
-          doc: "Return whether an object is an instance of a class.",
-          params: ["obj: object to check", "class_or_tuple: type or tuple of types"],
+          label: "isinstance(obj, class_or_tuple) -> bool",
+          doc: "Return whether an object is an instance of a class or a subclass thereof.",
+          params: [
+            { label: "obj", doc: "Object to test." },
+            {
+              label: "class_or_tuple",
+              doc: "Class, type, or tuple of classes/types to check against.",
+            },
+          ],
         },
         enumerate: {
           label: "enumerate(iterable, start=0)",
           doc: "Return an enumerate object yielding (index, value) pairs.",
-          params: ["iterable: an iterable object", "start=0: starting index"],
+          params: [
+            { label: "iterable", doc: "An iterable sequence." },
+            { label: "start=0", doc: "Starting index value." },
+          ],
         },
         zip: {
           label: "zip(*iterables, strict=False)",
           doc: "Iterate over several iterables in parallel.",
-          params: ["*iterables: iterable sequences", "strict=False: verify equal length"],
+          params: [
+            { label: "*iterables", doc: "Two or more iterables to aggregate in parallel." },
+            {
+              label: "strict=False",
+              doc: "If True, raises ValueError if an iterable exhausts before others.",
+            },
+          ],
+          varargPositionalIdx: 0,
         },
         min: {
-          label: "min(iterable, *[, key, default]) | min(arg1, arg2, *args, [key])",
-          doc: "With a single iterable argument, return its smallest item.",
-          params: ["iterable: container", "*args: multiple arguments"],
+          label: "min(arg1, arg2, *args, key=None)",
+          doc: "Return the smallest item among two or more arguments.",
+          params: [
+            { label: "arg1", doc: "First item to compare or single iterable." },
+            { label: "arg2", doc: "Second item to compare." },
+            { label: "*args", doc: "Additional items to compare." },
+            { label: "key=None", doc: "One-argument ordering function." },
+          ],
         },
         max: {
-          label: "max(iterable, *[, key, default]) | max(arg1, arg2, *args, [key])",
-          doc: "With a single iterable argument, return its largest item.",
-          params: ["iterable: container", "*args: multiple arguments"],
+          label: "max(arg1, arg2, *args, key=None)",
+          doc: "Return the largest item among two or more arguments.",
+          params: [
+            { label: "arg1", doc: "First item to compare or single iterable." },
+            { label: "arg2", doc: "Second item to compare." },
+            { label: "*args", doc: "Additional items to compare." },
+            { label: "key=None", doc: "One-argument ordering function." },
+          ],
         },
         abs: {
-          label: "abs(x, /) -> number",
+          label: "abs(x) -> number",
           doc: "Return the absolute value of the argument.",
-          params: ["x: numeric value"],
+          params: [{ label: "x", doc: "A number whose magnitude is returned." }],
         },
         sum: {
-          label: "sum(iterable, /, start=0) -> number",
+          label: "sum(iterable, start=0) -> number",
           doc: "Return the sum of a 'start' value plus an iterable of numbers.",
-          params: ["iterable: numbers to add", "start=0: starting value"],
+          params: [
+            { label: "iterable", doc: "Iterable of numbers to sum." },
+            { label: "start=0", doc: "Starting value added to the sum of elements." },
+          ],
         },
         sorted: {
-          label: "sorted(iterable, /, *, key=None, reverse=False) -> list",
+          label: "sorted(iterable, *, key=None, reverse=False) -> list",
           doc: "Return a new list containing all items from the iterable in ascending order.",
-          params: ["iterable: sequence to sort", "key=None: sort key function", "reverse=False"],
+          params: [
+            { label: "iterable", doc: "Sequence or collection to sort." },
+            { label: "key=None", doc: "Function of one argument to extract a comparison key." },
+            { label: "reverse=False", doc: "If True, sort elements in descending order." },
+          ],
         },
         "math.sqrt": {
-          label: "math.sqrt(x, /) -> float",
+          label: "math.sqrt(x) -> float",
           doc: "Return the square root of x.",
-          params: ["x: float value"],
+          params: [{ label: "x", doc: "Non-negative float value." }],
         },
         "math.pow": {
-          label: "math.pow(x, y, /) -> float",
+          label: "math.pow(x, y) -> float",
           doc: "Return x**y (x to the power of y).",
-          params: ["x: base", "y: exponent"],
+          params: [
+            { label: "x", doc: "Base value." },
+            { label: "y", doc: "Exponent value." },
+          ],
         },
         "math.floor": {
-          label: "math.floor(x, /) -> int",
+          label: "math.floor(x) -> int",
           doc: "Return the floor of x as an Integral.",
-          params: ["x: float value"],
+          params: [{ label: "x", doc: "Float value to round down." }],
         },
         "math.ceil": {
-          label: "math.ceil(x, /) -> int",
+          label: "math.ceil(x) -> int",
           doc: "Return the ceiling of x as an Integral.",
-          params: ["x: float value"],
+          params: [{ label: "x", doc: "Float value to round up." }],
         },
         "math.gcd": {
           label: "math.gcd(*integers) -> int",
           doc: "Greatest Common Divisor.",
-          params: ["*integers: integer values"],
+          params: [{ label: "*integers", doc: "Two or more integer values." }],
+          varargPositionalIdx: 0,
         },
         "math.log": {
-          label: "math.log(x, [base=math.e]) -> float",
+          label: "math.log(x, base=math.e) -> float",
           doc: "Return the logarithm of x to the given base.",
-          params: ["x: float value", "base=math.e: logarithmic base"],
+          params: [
+            { label: "x", doc: "Positive float value." },
+            { label: "base=math.e", doc: "Logarithmic base (default e)." },
+          ],
         },
         "random.randint": {
           label: "random.randint(a, b) -> int",
           doc: "Return random integer in range [a, b], including both end points.",
-          params: ["a: lower bound (inclusive)", "b: upper bound (inclusive)"],
+          params: [
+            { label: "a", doc: "Lower inclusive bound." },
+            { label: "b", doc: "Upper inclusive bound." },
+          ],
         },
         "random.choice": {
-          label: "random.choice(seq) -> element",
+          label: "random.choice(seq) -> Any",
           doc: "Choose a random element from a non-empty sequence.",
-          params: ["seq: non-empty sequence"],
+          params: [{ label: "seq", doc: "A non-empty sequence." }],
         },
         "random.sample": {
-          label: "random.sample(population, k, *, counts=None) -> list",
+          label: "random.sample(population, k) -> list",
           doc: "Chooses k unique random elements from a population sequence or set.",
-          params: ["population: sequence or set", "k: sample count"],
+          params: [
+            { label: "population", doc: "A sequence or set of items." },
+            { label: "k", doc: "Number of unique samples to choose." },
+          ],
         },
         "json.dumps": {
-          label: "json.dumps(obj, *, indent=None) -> str",
+          label: "json.dumps(obj, indent=None) -> str",
           doc: "Serialize obj to a JSON formatted str.",
-          params: ["obj: python object to serialize", "indent=None: formatting indentation"],
+          params: [
+            { label: "obj", doc: "Python object to serialize to a JSON string." },
+            { label: "indent=None", doc: "Indentation level for formatting." },
+          ],
         },
         "json.loads": {
           label: "json.loads(s) -> Any",
           doc: "Deserialize s (a str, bytes or bytearray instance containing a JSON document) to a Python object.",
-          params: ["s: json string to parse"],
+          params: [{ label: "s", doc: "JSON string to deserialize." }],
         },
         "os.path.join": {
           label: "os.path.join(path, *paths) -> str",
           doc: "Join two or more pathname components inserting '/' as needed.",
-          params: ["path: initial path segment", "*paths: path segments to append"],
+          params: [
+            { label: "path", doc: "Initial path segment." },
+            { label: "*paths", doc: "Additional path segments to append." },
+          ],
+          varargPositionalIdx: 1,
         },
         "sys.exit": {
-          label: "sys.exit([status])",
+          label: "sys.exit(status=0)",
           doc: "Exit the interpreter by raising SystemExit(status).",
-          params: ["status: exit code or error message"],
+          params: [{ label: "status=0", doc: "Exit code or error message." }],
         },
       };
 
-      const sigInfo = signaturesMap[callTarget];
+      // Also support "path.join" as alias for "os.path.join"
+      signaturesMap["path.join"] = signaturesMap["os.path.join"];
+
+      const sigInfo =
+        signaturesMap[callTarget] || signaturesMap[callTarget.split(".").slice(-2).join(".")];
       if (!sigInfo) return null;
+
+      // Handle varargs highlighting (e.g. print(a, b, c) keeps *values active for all positional args)
+      const currentArgText = textBefore.slice(activeCall.lastCommaIdx + 1).trim();
+      if (sigInfo.varargPositionalIdx !== undefined) {
+        const isKeywordArg = currentArgText.includes("=");
+        if (!isKeywordArg && activeParameter >= sigInfo.varargPositionalIdx) {
+          activeParameter = sigInfo.varargPositionalIdx;
+        } else if (isKeywordArg) {
+          const kwName = currentArgText.split("=")[0].trim();
+          const kwIndex = sigInfo.params.findIndex((p) => p.label.startsWith(kwName));
+          if (kwIndex !== -1) {
+            activeParameter = kwIndex;
+          }
+        }
+      }
 
       return {
         value: {
@@ -1557,8 +1726,8 @@ export function registerPythonCompletions(mInstance?: Monaco) {
               label: sigInfo.label,
               documentation: sigInfo.doc,
               parameters: sigInfo.params.map((p) => ({
-                label: p,
-                documentation: p,
+                label: p.label,
+                documentation: p.doc,
               })),
             },
           ],
