@@ -20,6 +20,35 @@ export function runProgram(filename: string, onEvent: (event: RunEvent) => void)
   return invoke<void>("run_program", { filename, onEvent: channel });
 }
 
+/** Mirrors CaseRun in src-tauri/src/run.rs: one example's run. */
+export type CaseRun = {
+  stdout: string;
+  stderr: string;
+  code: number | null;
+  /** macOS/Linux only: the signal that ended the program, if it has no exit code. */
+  signal: number | null;
+  timedOut: boolean;
+};
+
+/** Mirrors CheckResult in src-tauri/src/run.rs. */
+export type CheckResult =
+  | { type: "compileFailed"; output: string }
+  | { type: "stopped" }
+  | { type: "ran"; cases: CaseRun[] };
+
+/**
+ * Runs a practice question's program (see drivers.ts) once per input and
+ * returns what each run printed.
+ */
+export function checkPractice(
+  question: string,
+  extension: string,
+  program: string,
+  inputs: string[],
+) {
+  return invoke<CheckResult>("check_practice", { question, extension, program, inputs });
+}
+
 export function sendInput(text: string) {
   return invoke<void>("send_input", { text });
 }

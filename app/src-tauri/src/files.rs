@@ -204,6 +204,72 @@ pub fn write_file(
     fs::rename(&tmp, &path).map_err(|e| format!("Could not save {filename}: {e}"))
 }
 
+/// Where a student's code for a practice question is saved: the workspace's
+/// `practice` folder, as `<question>.<ext>`. It's outside the date folders,
+/// so Programs doesn't list it.
+const PRACTICE_FOLDER: &str = "practice";
+
+/// Path and filename of the current student's code for `question` in `extension`.
+pub(crate) fn practice_file(
+    app: &AppHandle,
+    current: &CurrentUser,
+    db: &Db,
+    question: &str,
+    extension: &str,
+) -> Result<(PathBuf, String), String> {
+    let filename = practice_filename(db, question, extension)?;
+    let path = workspace_dir(app, &current.get()?)?.join(PRACTICE_FOLDER).join(&filename);
+    Ok((path, filename))
+}
+
+/// `<question>.<ext>`, once both are checked: a valid name (so no path
+/// separators) and a supported language.
+pub(crate) fn practice_filename(db: &Db, question: &str, extension: &str) -> Result<String, String> {
+    validate_name(question)?;
+    if !db.with(|conn| catalog::is_supported(conn, extension))? {
+        return Err(format!("Unsupported file type: .{extension}"));
+    }
+    Ok(format!("{question}.{extension}"))
+}
+
+/// The student's saved code for a question, or None if they haven't started it.
+#[tauri::command]
+pub fn read_practice(
+    app: AppHandle,
+    current: State<CurrentUser>,
+    db: State<Db>,
+    question: String,
+    extension: String,
+) -> Result<Option<String>, String> {
+    let (path, filename) = practice_file(&app, &current, &db, &question, &extension)?;
+    match fs::read_to_string(&path) {
+        Ok(content) => Ok(Some(content)),
+        Err(e) if e.kind() == ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(format!("Could not open {filename}: {e}")),
+    }
+}
+
+/// Saves the student's code for a question, creating its file the first time.
+#[tauri::command]
+pub fn write_practice(
+    app: AppHandle,
+    current: State<CurrentUser>,
+    db: State<Db>,
+    lock: State<WorkspaceLock>,
+    question: String,
+    extension: String,
+    content: String,
+) -> Result<(), String> {
+    let _guard = lock.lock();
+    let (path, filename) = practice_file(&app, &current, &db, &question, &extension)?;
+    let folder = path.parent().ok_or("Invalid file location.")?;
+    fs::create_dir_all(folder).map_err(|e| format!("Could not save {filename}: {e}"))?;
+    // Temp file then rename, as in write_file.
+    let tmp = folder.join(format!(".{filename}.tmp"));
+    fs::write(&tmp, content).map_err(|e| format!("Could not save {filename}: {e}"))?;
+    fs::rename(&tmp, &path).map_err(|e| format!("Could not save {filename}: {e}"))
+}
+
 /// Filenames in the student's workspace with a supported extension, sorted.
 #[tauri::command]
 pub fn list_files(app: AppHandle, current: State<CurrentUser>, db: State<Db>) -> Result<Vec<String>, String> {

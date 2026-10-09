@@ -2,30 +2,35 @@
 title: Even or Odd
 difficulty: Easy
 topic: Basics
+method: evenOrOdd
+params: n int
+returns: string
 ---
 
-Read an integer `n` and print `Even` if it's even, otherwise `Odd`.
+Given an integer `n`, return `"Even"` if it's even, otherwise `"Odd"`.
 
 **Example 1**
 
 ```text
-Input:  4
-Output: Even
+Input:  n = 4
+Output: "Even"
 ```
 
 **Example 2**
 
 ```text
-Input:  7
-Output: Odd
+Input:  n = 7
+Output: "Odd"
 ```
 
 **Example 3**
 
 ```text
-Input:  -3
-Output: Odd
+Input:  n = -3
+Output: "Odd"
 ```
+
+Negative numbers follow the same rule.
 
 **Constraints:** `-10⁹ ≤ n ≤ 10⁹`
 

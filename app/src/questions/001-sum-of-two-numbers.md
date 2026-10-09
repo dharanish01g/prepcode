@@ -2,28 +2,31 @@
 title: Sum of Two Numbers
 difficulty: Easy
 topic: Basics
+method: sum
+params: a int, b int
+returns: int
 ---
 
-Read two integers `a` and `b`, separated by a space, and print their sum.
+Given two integers `a` and `b`, return their sum.
 
 **Example 1**
 
 ```text
-Input:  3 5
+Input:  a = 3, b = 5
 Output: 8
 ```
 
 **Example 2**
 
 ```text
-Input:  -4 10
+Input:  a = -4, b = 10
 Output: 6
 ```
 
 **Example 3**
 
 ```text
-Input:  0 0
+Input:  a = 0, b = 0
 Output: 0
 ```
 
@@ -31,6 +34,6 @@ Output: 0
 
 ## Explanation
 
-Split the line into two parts, convert each to an integer, and print the sum.
+Add the two numbers and return the result.
 
-Converting matters: without it, `"3" + "5"` joins the text into `"35"` in many languages.
+With these limits the sum always fits in an `int`. For very large numbers you'd need a 64-bit type, like `long`, so the sum doesn't overflow.

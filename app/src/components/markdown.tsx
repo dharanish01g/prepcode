@@ -2,7 +2,8 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 // shadcn's typography styles, sized down to the app's text-sm so a question
-// reads like the rest of the app. Spacing comes from the wrapper's gap.
+// reads like the rest of the app, with the theme's sharp corners and greys.
+// Spacing comes from the wrapper's gap.
 const COMPONENTS: Components = {
   h1: ({ node: _, ...props }) => <h1 className="text-base font-semibold" {...props} />,
   h2: ({ node: _, ...props }) => <h2 className="mt-2 text-sm font-semibold" {...props} />,
@@ -20,14 +21,11 @@ const COMPONENTS: Components = {
   hr: ({ node: _, ...props }) => <hr className="border-border" {...props} />,
   // Inline code, at the editor's 13px. Inside a code block, the block's styles override it.
   code: ({ node: _, ...props }) => (
-    <code
-      className="rounded bg-muted px-[0.3rem] py-[0.2rem] font-mono text-[0.8125rem]"
-      {...props}
-    />
+    <code className="bg-muted px-[0.3rem] py-[0.2rem] font-mono text-[0.8125rem]" {...props} />
   ),
   pre: ({ node: _, ...props }) => (
     <pre
-      className="overflow-x-auto rounded-md bg-muted px-3 py-2 font-mono text-[0.8125rem] leading-relaxed [&>code]:bg-transparent [&>code]:p-0"
+      className="overflow-x-auto border bg-muted px-3 py-2 font-mono text-[0.8125rem] leading-relaxed [&>code]:bg-transparent [&>code]:p-0"
       {...props}
     />
   ),

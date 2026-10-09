@@ -216,7 +216,12 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
         {view === "Practice" ? (
           <PracticeScreen />
         ) : view === "Questions" ? (
-          <QuestionsScreen selectedQuestion={question} />
+          <QuestionsScreen
+            userId={session.id}
+            selectedQuestion={question}
+            onSelectQuestion={setQuestion}
+            flushRef={flushEditorRef}
+          />
         ) : view === "Jobs" ? (
           // A guest logs in by logging out of the guest session.
           <JobsScreen guest={session.guest} onLogin={() => setGuestAction("log out")} />
