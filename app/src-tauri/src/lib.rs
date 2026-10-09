@@ -79,6 +79,8 @@ pub fn run() {
             files::write_file,
             files::read_practice,
             files::write_practice,
+            files::mark_practice_solved,
+            files::list_practice_solved,
             files::rename_file,
             files::delete_file,
             files::export_guest_files,
@@ -95,6 +97,7 @@ pub fn run() {
             sql::table_rows,
             sync::sync_status,
             sync::sync_now,
+            sync::sync_practice,
             sync::pull_from_github,
             sync::repo_setup,
         ])

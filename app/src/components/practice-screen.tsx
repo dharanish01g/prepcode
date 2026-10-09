@@ -15,11 +15,19 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty";
-import { useSectionsQuery } from "@/lib/practice";
+import { useSectionsQuery, type Category } from "@/lib/practice";
+import { useSolvedQuery } from "@/lib/queries";
 
 /** Practice: the categories under their sections. */
-export function PracticeScreen() {
+export function PracticeScreen({
+  userId,
+  onOpenCategory,
+}: {
+  userId: string;
+  onOpenCategory: (category: Category) => void;
+}) {
   const sections = useSectionsQuery();
+  const solved = useSolvedQuery(userId);
 
   return (
     <>
@@ -51,7 +59,11 @@ export function PracticeScreen() {
           </EmptyContent>
         </Empty>
       ) : (
-        <PracticeCategories sections={sections.data} />
+        <PracticeCategories
+          sections={sections.data}
+          solved={solved.data ?? new Set()}
+          onOpen={onOpenCategory}
+        />
       )}
     </>
   );

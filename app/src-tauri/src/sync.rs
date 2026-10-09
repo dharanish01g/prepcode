@@ -1,8 +1,9 @@
 //! Syncing a student's workspace with their public `prepcode-programs` GitHub repo.
 //!
-//! Nothing syncs on its own: the student clicks Sync, which pulls what changed
-//! on GitHub (e.g. from another computer) and then pushes everything changed
-//! here as one commit. Signing in pulls too, so a new computer gets the
+//! A sync pulls what changed on GitHub (e.g. from another computer) and then
+//! pushes everything changed here as one commit. It runs when the student
+//! clicks Sync, and on its own (see the frontend's useSync): on Submit, every
+//! 15 minutes, and on close. Signing in pulls too, so a new computer gets the
 //! student's files.
 //!
 //! For each file, `synced_files` records the git blob sha of the content it
@@ -11,6 +12,20 @@
 //! student edits. When a file changed both here and on GitHub, both are kept:
 //! GitHub's version takes the name, and the local one becomes
 //! `<name>_conflict.<ext>`.
+//!
+//! Practice answers (`practice/<question>.<ext>`) sync too, as their own kind
+//! of file: they're named with their folder, so one never clashes with a
+//! program of the same name.
+//!
+//! Later (an idea, not built): replace this web-API sync with real git inside
+//! the app (libgit2, via the `git2` crate; gitoxide can't push yet). Every Run
+//! would be a free local commit on an `attempts` branch, a Submit a clean
+//! commit on `main`, and one push sends them all, so even 100 commits cost one
+//! upload instead of 2 API writes each (GitHub allows 80 writes a minute, 500
+//! an hour). Supabase would keep a small row per Run (commit sha, results,
+//! timing) to study how students reach an answer. The app would ask the
+//! account system for a remote URL and token, so moving from GitHub to our own
+//! server (e.g. Forgejo) changes only that answer.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
@@ -92,7 +107,7 @@ struct Local {
 fn local_files(app: &AppHandle, db: &Db, user: &str) -> Result<HashMap<String, Local>, String> {
     let extensions = db.with(|conn| catalog::extensions(conn))?;
     let mut local = HashMap::new();
-    for file in files::workspace_files(&workspace_dir(app, user)?, &extensions)? {
+    for file in files::synced_workspace_files(&workspace_dir(app, user)?, &extensions)? {
         let bytes = fs::read(&file.path).map_err(|e| format!("Could not read {}: {e}", file.filename))?;
         local.insert(file.relative.clone(), Local { sha: blob_sha(&bytes), bytes, file });
     }
@@ -109,8 +124,17 @@ fn require_student(current: &CurrentUser) -> Result<String, String> {
 
 // --- What's unsynced ----------------------------------------------------------------
 
+/// How the app names the file at a repo path: `code2.py` for a program, or
+/// `practice/fizzbuzz.py` for a practice answer.
 fn filename_of(path: &str) -> &str {
+    if is_practice_path(path) {
+        return path;
+    }
     path.rsplit('/').next().unwrap_or(path)
+}
+
+fn is_practice_path(path: &str) -> bool {
+    path.strip_prefix(files::PRACTICE_FOLDER).is_some_and(|rest| rest.starts_with('/'))
 }
 
 /// How much of `old` is in `new`, from 0 to 1, the way git scores renames:
@@ -169,7 +193,8 @@ fn pending(local: &HashMap<String, Local>, synced: &HashMap<String, Synced>) -> 
     for old_path in &changes.deleted {
         let old = &synced[old_path];
         for new_path in &changes.added {
-            if ext(old_path) != ext(new_path) {
+            // A program never becomes a practice answer, or the other way.
+            if ext(old_path) != ext(new_path) || is_practice_path(old_path) != is_practice_path(new_path) {
                 continue;
             }
             let new = &local[new_path];
@@ -403,8 +428,35 @@ pub async fn sync_now(
     let Ok(_guard) = lock.0.try_lock() else {
         return Err("Already syncing.".into());
     };
-    let result = sync(&app, &db, &workspace_lock, &user, true).await;
+    let result = sync(&app, &db, &workspace_lock, &user, true, None).await;
     log_sync("Sync", &result);
+    result
+}
+
+/// Syncs one practice answer alone, on Submit: only `practice/<question>.<ext>`
+/// is pulled and pushed, in a commit with `message` (e.g. "Submit Leap Year
+/// (Python)"). The student's other changes wait for the next full sync.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn sync_practice(
+    app: AppHandle,
+    current: State<'_, CurrentUser>,
+    db: State<'_, Db>,
+    lock: State<'_, SyncLock>,
+    workspace_lock: State<'_, WorkspaceLock>,
+    question: String,
+    extension: String,
+    message: String,
+) -> Result<SyncReport, String> {
+    let user = require_student(&current)?;
+    let path =
+        format!("{}/{}", files::PRACTICE_FOLDER, files::practice_filename(&db, &question, &extension)?);
+    let Ok(_guard) = lock.0.try_lock() else {
+        return Err("Already syncing.".into());
+    };
+    let only: HashSet<String> = [path].into();
+    let result = sync(&app, &db, &workspace_lock, &user, true, Some((&only, message.trim()))).await;
+    log_sync("Sync answer", &result);
     result
 }
 
@@ -419,7 +471,7 @@ pub async fn pull_from_github(
 ) -> Result<SyncReport, String> {
     let user = require_student(&current)?;
     let _guard = lock.0.lock().await;
-    let result = sync(&app, &db, &workspace_lock, &user, false).await;
+    let result = sync(&app, &db, &workspace_lock, &user, false, None).await;
     log_sync("Pull from GitHub", &result);
     result
 }
@@ -441,13 +493,19 @@ fn log_sync(what: &str, result: &Result<SyncReport, String>) {
     }
 }
 
+/// Pulls, then (if `push`) pushes everything changed as one commit. With
+/// `only`, both are limited to those repo paths and the commit uses `message`:
+/// a Submit sends just its answer, and the student's other changes wait for
+/// the next full sync.
 async fn sync(
     app: &AppHandle,
     db: &Db,
     workspace_lock: &WorkspaceLock,
     user: &str,
     push: bool,
+    only: Option<(&HashSet<String>, &str)>,
 ) -> Result<SyncReport, String> {
+    let in_scope = |path: &String| only.is_none_or(|(paths, _)| paths.contains(path));
     let msg = |e: GitHubError| e.message();
     // The account system only hands out a token for the GitHub account this
     // prepcode account signed up with, whose id names the workspace.
@@ -498,19 +556,21 @@ async fn sync(
         let extensions = db.with(|conn| catalog::extensions(conn))?;
         let remote: HashMap<String, String> = tree
             .into_iter()
-            .filter(|e| e.kind == "blob" && is_program_path(&e.path, &extensions))
+            .filter(|e| e.kind == "blob" && is_program_path(&e.path, &extensions) && in_scope(&e.path))
             .map(|e| (e.path, e.sha))
             .collect();
 
-        let mut report = pull(app, db, workspace_lock, user, &token, &owner, &remote).await?;
+        let mut report = pull(app, db, workspace_lock, user, &token, &owner, &remote, &in_scope).await?;
         report.repo_url = repo.html_url.clone();
         if !push {
             return Ok(report);
         }
 
         // Everything that differs from the last sync, after pulling.
-        let local = local_files(app, db, user)?;
-        let synced = db.with(|conn| synced(conn, user))?;
+        let mut local = local_files(app, db, user)?;
+        let mut synced = db.with(|conn| synced(conn, user))?;
+        local.retain(|path, _| in_scope(path));
+        synced.retain(|path, _| in_scope(path));
         let changes = pending(&local, &synced);
         let mut entries = Vec::new();
         // What each pushed path's synced state becomes.
@@ -539,7 +599,10 @@ async fn sync(
             return Ok(report);
         }
 
-        let message = commit_message(&changes);
+        let message = match only {
+            Some((_, message)) => message.to_owned(),
+            None => commit_message(&changes),
+        };
         let new_tree = github::create_tree(&token, &owner, &tree_sha, entries).await.map_err(msg)?;
         let commit =
             github::create_commit(&token, &owner, &message, &new_tree, &head, &author).await.map_err(msg)?;
@@ -562,7 +625,7 @@ async fn sync(
 fn is_program_path(path: &str, extensions: &HashSet<String>) -> bool {
     let Some((folder, filename)) = path.split_once('/') else { return false };
     let Some((name, ext)) = split_extension(filename) else { return false };
-    files::is_date_folder(folder)
+    (files::is_date_folder(folder) || folder == files::PRACTICE_FOLDER)
         && extensions.contains(ext)
         && !name.is_empty()
         && name.len() <= 64
@@ -592,6 +655,7 @@ async fn download(token: &str, owner: &str, path: String, sha: String) -> Result
 ///
 /// The student can save while this runs, so each file is checked again,
 /// under `workspace_lock`, right before it's overwritten or deleted.
+#[allow(clippy::too_many_arguments)]
 async fn pull(
     app: &AppHandle,
     db: &Db,
@@ -600,6 +664,7 @@ async fn pull(
     token: &str,
     owner: &str,
     remote: &HashMap<String, String>,
+    in_scope: &(dyn Fn(&String) -> bool + Sync),
 ) -> Result<SyncReport, String> {
     let workspace = workspace_dir(app, user)?;
     let extensions = db.with(|conn| catalog::extensions(conn))?;
@@ -607,7 +672,8 @@ async fn pull(
     let synced = db.with(|conn| synced(conn, user))?;
     let mut report = SyncReport::default();
 
-    let paths: BTreeSet<String> = remote.keys().chain(synced.keys()).chain(local.keys()).cloned().collect();
+    let paths: BTreeSet<String> =
+        remote.keys().chain(synced.keys()).chain(local.keys()).filter(|p| in_scope(p)).cloned().collect();
 
     // Download everything new or changed on GitHub first, a few at a time
     // (each file is two requests: its content and its date). The loop below
@@ -634,7 +700,10 @@ async fn pull(
         let here = local.get(&path).map(|l| l.sha.clone());
         let here = here.as_deref();
         let there = remote.get(&path).map(String::as_str);
-        let filename = path.rsplit('/').next().unwrap_or(&path).to_owned();
+        // As the app names it, and the bare name to compare with others.
+        let filename = filename_of(&path).to_owned();
+        let bare = path.rsplit('/').next().unwrap_or(&path).to_owned();
+        let practice = is_practice_path(&path);
 
         // The same on both sides.
         if here == there {
@@ -653,7 +722,11 @@ async fn pull(
                 let Some(Download { bytes, changed }) = downloads.remove(&path) else { continue };
                 let _guard = workspace_lock.lock();
                 // The files as they are now, not when the pull started.
-                let mut current = files::workspace_files(&workspace, &extensions)?;
+                // Only files of the same kind can clash or share a name.
+                let mut current: Vec<WorkspaceFile> = files::synced_workspace_files(&workspace, &extensions)?
+                    .into_iter()
+                    .filter(|f| f.practice == practice)
+                    .collect();
                 let mut taken: HashSet<String> = current.iter().map(|f| f.filename.clone()).collect();
 
                 // Changed here too (in a different way): keep both.
@@ -668,9 +741,8 @@ async fn pull(
                 }
                 // A different local file with the same name (made separately
                 // on two computers) steps aside too.
-                if let Some(i) = current
-                    .iter()
-                    .position(|f| f.relative != path && f.filename.eq_ignore_ascii_case(&filename))
+                if let Some(i) =
+                    current.iter().position(|f| f.relative != path && f.filename.eq_ignore_ascii_case(&bare))
                 {
                     let copy = current.remove(i);
                     report.conflicts.push(keep_copy(&copy, &mut taken)?);
@@ -716,7 +788,8 @@ fn keep_copy(file: &WorkspaceFile, taken: &mut HashSet<String>) -> Result<String
     fs::rename(&file.path, file.path.with_file_name(&new_name))
         .map_err(|e| format!("Could not keep your copy of {}: {e}", file.filename))?;
     taken.insert(new_name.clone());
-    Ok(new_name)
+    // Named as the app names it.
+    Ok(if file.practice { format!("{}/{new_name}", files::PRACTICE_FOLDER) } else { new_name })
 }
 
 /// `code2.py` -> `code2_conflict.py` (or `_conflict2`, …), not in `taken`.
@@ -854,9 +927,10 @@ mod tests {
 
     fn local(path: &str, content: &str) -> (String, Local) {
         let file = WorkspaceFile {
-            filename: filename_of(path).to_owned(),
+            filename: path.rsplit('/').next().unwrap_or(path).to_owned(),
             relative: path.to_owned(),
             path: path.into(),
+            practice: is_practice_path(path),
         };
         let bytes = content.as_bytes().to_vec();
         (path.to_owned(), Local { sha: blob_sha(&bytes), bytes, file })
@@ -913,5 +987,53 @@ mod tests {
         assert!(!is_program_path("02oct2026/notes.txt", &ext));
         assert!(!is_program_path("02oct2026/my file.py", &ext));
         assert!(!is_program_path("02oct2026/sub/code.py", &ext));
+        // Practice answers sync too, but nothing nested in their folder.
+        assert!(is_program_path("practice/fizzbuzz.py", &ext));
+        assert!(!is_program_path("practice/basics/fizzbuzz.py", &ext));
+        assert!(!is_program_path("practices/fizzbuzz.py", &ext));
+    }
+
+    #[test]
+    fn practice_answers_keep_their_folder_in_their_name() {
+        assert_eq!(filename_of("02oct2026/factorial.py"), "factorial.py");
+        assert_eq!(filename_of("practice/factorial.py"), "practice/factorial.py");
+        assert!(!is_practice_path("practiced/factorial.py"));
+    }
+
+    #[test]
+    fn a_program_never_becomes_a_practice_answer() {
+        let program = "a = 1\nb = 2\nc = 3\nprint(a + b + c)\n";
+        let changes = pending(
+            &[local("practice/factorial.py", program)].into(),
+            &[synced_file("02oct2026/factorial.py", program)].into(),
+        );
+        assert!(changes.renamed.is_empty());
+        assert_eq!(changes.added, ["practice/factorial.py"]);
+        assert_eq!(changes.deleted, ["02oct2026/factorial.py"]);
+    }
+
+    #[test]
+    fn sync_includes_practice_answers() {
+        let dir = std::env::temp_dir().join(format!("prepcode-sync-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("09oct2026")).unwrap();
+        fs::create_dir_all(dir.join("practice")).unwrap();
+        fs::write(dir.join("09oct2026/factorial.py"), "program").unwrap();
+        fs::write(dir.join("practice/factorial.py"), "answer").unwrap();
+        // A save in progress, and a file of no language: neither syncs.
+        fs::write(dir.join("practice/.factorial.py.tmp"), "half").unwrap();
+        fs::write(dir.join("practice/notes.txt"), "notes").unwrap();
+
+        let ext: HashSet<String> = ["py".into()].into();
+        let mut found: Vec<(String, bool)> = files::synced_workspace_files(&dir, &ext)
+            .unwrap()
+            .into_iter()
+            .map(|f| (f.relative, f.practice))
+            .collect();
+        found.sort();
+        assert_eq!(found, [("09oct2026/factorial.py".into(), false), ("practice/factorial.py".into(), true)]);
+        // Programs alone, for the Programs list.
+        assert_eq!(files::workspace_files(&dir, &ext).unwrap().len(), 1);
+        let _ = fs::remove_dir_all(&dir);
     }
 }

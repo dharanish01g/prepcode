@@ -83,6 +83,10 @@ fn date_folder_for(time: SystemTime) -> String {
 pub(crate) struct WorkspaceFile {
     /// e.g. `code2.py`
     pub filename: String,
+    /// A practice question's answer in `practice/`, not a program. Practice
+    /// answers have their own names: `practice/factorial.py` and a program
+    /// `factorial.py` are different files.
+    pub practice: bool,
     /// e.g. `02oct2026/code2.py`, also its path in the GitHub repo.
     pub relative: String,
     pub path: PathBuf,
@@ -113,8 +117,38 @@ pub(crate) fn workspace_files(
                     relative: format!("{folder_name}/{filename}"),
                     path: entry.path(),
                     filename,
+                    practice: false,
                 });
             }
+        }
+    }
+    Ok(files)
+}
+
+/// What Sync keeps in step with GitHub: the programs in the date folders,
+/// and the answers to practice questions in `practice/`.
+pub(crate) fn synced_workspace_files(
+    dir: &Path,
+    extensions: &HashSet<String>,
+) -> Result<Vec<WorkspaceFile>, String> {
+    let mut files = workspace_files(dir, extensions)?;
+    let entries = match fs::read_dir(dir.join(PRACTICE_FOLDER)) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == ErrorKind::NotFound => return Ok(files),
+        Err(e) => return Err(format!("Could not read your practice answers: {e}")),
+    };
+    for entry in entries.flatten() {
+        let Ok(filename) = entry.file_name().into_string() else { continue };
+        // Not the hidden temp files of a save in progress.
+        let supported = split_extension(&filename)
+            .is_some_and(|(name, ext)| validate_name(name).is_ok() && extensions.contains(ext));
+        if supported && entry.path().is_file() {
+            files.push(WorkspaceFile {
+                relative: format!("{PRACTICE_FOLDER}/{filename}"),
+                path: entry.path(),
+                filename,
+                practice: true,
+            });
         }
     }
     Ok(files)
@@ -207,7 +241,7 @@ pub fn write_file(
 /// Where a student's code for a practice question is saved: the workspace's
 /// `practice` folder, as `<question>.<ext>`. It's outside the date folders,
 /// so Programs doesn't list it.
-const PRACTICE_FOLDER: &str = "practice";
+pub(crate) const PRACTICE_FOLDER: &str = "practice";
 
 /// Path and filename of the current student's code for `question` in `extension`.
 pub(crate) fn practice_file(
@@ -268,6 +302,43 @@ pub fn write_practice(
     let tmp = folder.join(format!(".{filename}.tmp"));
     fs::write(&tmp, content).map_err(|e| format!("Could not save {filename}: {e}"))?;
     fs::rename(&tmp, &path).map_err(|e| format!("Could not save {filename}: {e}"))
+}
+
+/// Records that the student solved a practice question (a Submit that passed
+/// every example) in a language. Solving it again keeps the first time.
+#[tauri::command]
+pub fn mark_practice_solved(
+    current: State<CurrentUser>,
+    db: State<Db>,
+    question: String,
+    extension: String,
+) -> Result<(), String> {
+    practice_filename(&db, &question, &extension)?;
+    let user = current.get()?;
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as i64;
+    db.with(|conn| {
+        conn.execute(
+            "INSERT OR IGNORE INTO practice_solved (user_id, question, extension, solved_at)
+             VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![user, question, extension, now],
+        )
+        .map(|_| ())
+        .map_err(|e| format!("Could not record the solved question: {e}"))
+    })
+}
+
+/// The practice questions the student has solved, in any language, by slug.
+#[tauri::command]
+pub fn list_practice_solved(current: State<CurrentUser>, db: State<Db>) -> Result<Vec<String>, String> {
+    let user = current.get()?;
+    let err = |e: rusqlite::Error| format!("Could not read your solved questions: {e}");
+    db.with(|conn| {
+        let mut stmt = conn
+            .prepare("SELECT DISTINCT question FROM practice_solved WHERE user_id = ?1 ORDER BY question")
+            .map_err(err)?;
+        let rows = stmt.query_map([&user], |row| row.get(0)).map_err(err)?;
+        rows.collect::<rusqlite::Result<Vec<String>>>().map_err(err)
+    })
 }
 
 /// Filenames in the student's workspace with a supported extension, sorted.

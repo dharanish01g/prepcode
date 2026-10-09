@@ -77,6 +77,16 @@ export function writePractice(question: string, extension: string, content: stri
   return enqueue(() => invoke<void>("write_practice", { question, extension, content }));
 }
 
+/** Records a solved practice question: a Submit that passed every example. */
+export function markPracticeSolved(question: string, extension: string) {
+  return invoke<void>("mark_practice_solved", { question, extension });
+}
+
+/** The practice questions the student has solved, in any language, by slug. */
+export function listPracticeSolved() {
+  return invoke<string[]>("list_practice_solved");
+}
+
 /** Resolves once every queued save has finished (successfully or not). */
 export function whenSavesSettled() {
   return saveQueue.then(

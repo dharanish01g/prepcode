@@ -31,6 +31,14 @@ export function syncNow() {
   return invoke<SyncReport>("sync_now");
 }
 
+/**
+ * Syncs one practice answer alone (on Submit): only that file is pulled and
+ * pushed, committed with `message`. Everything else waits for a full sync.
+ */
+export function syncPractice(question: string, extension: string, message: string) {
+  return invoke<SyncReport>("sync_practice", { question, extension, message });
+}
+
 /** Brings down what changed on GitHub, without pushing (at sign-in). */
 export function pullFromGitHub() {
   return invoke<SyncReport>("pull_from_github");

@@ -108,6 +108,18 @@ const MIGRATIONS: &[&str] = &[
     ALTER TABLE languages ADD COLUMN server TEXT;
     DELETE FROM meta WHERE key = 'catalog_version';
 ",
+    "
+    -- Practice questions a student has solved: a Submit that passed every
+    -- example, first time in each language. Kept here until tracking moves to
+    -- Supabase.
+    CREATE TABLE practice_solved (
+        user_id   TEXT NOT NULL,     -- workspace id, e.g. gh-12345678
+        question  TEXT NOT NULL,     -- slug, e.g. leap-year
+        extension TEXT NOT NULL,     -- language, e.g. py
+        solved_at INTEGER NOT NULL,  -- milliseconds since the Unix epoch
+        PRIMARY KEY (user_id, question, extension)
+    );
+",
 ];
 
 fn migrate(conn: &mut Connection) -> rusqlite::Result<()> {

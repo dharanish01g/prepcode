@@ -5,6 +5,7 @@ import {
   deleteFile,
   listFileHistory,
   listFiles,
+  listPracticeSolved,
   readFile,
   renameFile,
   writeFile,
@@ -17,6 +18,11 @@ import { syncStatus } from "@/lib/sync";
 export const queryKeys = {
   files: (userId: string) => ["files", userId] as const,
   fileContent: (userId: string, filename: string) => ["file", userId, filename] as const,
+  /** The practice questions a student has solved. */
+  solved: (userId: string) => ["practice-solved", userId] as const,
+  /** A student's saved answer to a practice question in one language. */
+  practice: (userId: string, question: string, extension: string) =>
+    ["practice", userId, question, extension] as const,
   fileHistory: (userId: string) => ["file-history", userId] as const,
   syncStatus: (userId: string) => ["sync-status", userId] as const,
   accountDetails: (userId: string) => ["account-details", userId] as const,
@@ -85,6 +91,14 @@ export function useFileHistoryQuery(userId: string) {
 function invalidateHistory(queryClient: ReturnType<typeof useQueryClient>, userId: string) {
   queryClient.invalidateQueries({ queryKey: queryKeys.syncStatus(userId) });
   return queryClient.invalidateQueries({ queryKey: queryKeys.fileHistory(userId) });
+}
+
+/** The practice questions the student has solved, as a set of slugs. */
+export function useSolvedQuery(userId: string) {
+  return useQuery({
+    queryKey: queryKeys.solved(userId),
+    queryFn: async () => new Set(await listPracticeSolved()),
+  });
 }
 
 /** What isn't synced to GitHub yet. Students only: guests don't sync. */

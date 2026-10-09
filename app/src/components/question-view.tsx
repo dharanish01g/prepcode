@@ -24,6 +24,8 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { useSidebar } from "@/components/ui/sidebar";
 import { useIsDark } from "@/hooks/use-theme";
 import { readPractice, writePractice } from "@/lib/files";
+import { queryKeys } from "@/lib/queries";
+import { queryClient } from "@/lib/query-client";
 import type { Language } from "@/lib/languages";
 import {
   blockClipboard,
@@ -272,7 +274,7 @@ function PracticeEditor({
   const editorRef = useRef<MonacoEditor | null>(null);
   const { extension } = language;
   const saved = useQuery({
-    queryKey: ["practice", userId, question, extension],
+    queryKey: queryKeys.practice(userId, question, extension),
     queryFn: () => readPractice(question, extension),
   });
 
@@ -284,10 +286,12 @@ function PracticeEditor({
     const content = pending.current;
     if (content === null) return;
     pending.current = null;
-    writePractice(question, extension, content).catch((err) =>
-      toast.error("Couldn't save your code", { description: String(err) }),
+    writePractice(question, extension, content).then(
+      // So the unsynced count, and the sync on close, include it.
+      () => queryClient.invalidateQueries({ queryKey: queryKeys.syncStatus(userId) }),
+      (err) => toast.error("Couldn't save your code", { description: String(err) }),
     );
-  }, [question, extension]);
+  }, [question, extension, userId]);
 
   // Layout effects so the cleanups run synchronously: edits are saved when the
   // question or language changes, and when the editor unmounts.

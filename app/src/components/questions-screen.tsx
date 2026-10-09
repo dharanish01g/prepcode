@@ -1,4 +1,5 @@
-import { useRef, useState } from "react";
+import { Fragment, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { ChevronLeftIcon, ChevronRightIcon, PlayIcon, SendIcon } from "lucide-react";
 import { passedCount, type CheckState } from "@/components/check-results";
 import type { FlushRef } from "@/components/code-editor";
@@ -6,6 +7,7 @@ import { LanguagePicker } from "@/components/language-picker";
 import {
   Breadcrumb,
   BreadcrumbItem,
+  BreadcrumbLink,
   BreadcrumbList,
   BreadcrumbPage,
   BreadcrumbSeparator,
@@ -17,8 +19,10 @@ import { SidebarTrigger } from "@/components/ui/sidebar";
 import { Spinner } from "@/components/ui/spinner";
 import { celebrate } from "@/lib/celebrate";
 import { buildProgram, encodeInput } from "@/lib/drivers";
-import { getLanguages } from "@/lib/languages";
-import { QUESTIONS } from "@/lib/questions";
+import { markPracticeSolved } from "@/lib/files";
+import { queryKeys } from "@/lib/queries";
+import { getLanguages, type Language } from "@/lib/languages";
+import type { Question } from "@/lib/questions";
 import { checkPractice, stopProgram } from "@/lib/run";
 import { useInstalledRuntimes } from "@/lib/runtimes";
 
@@ -28,25 +32,43 @@ import { useInstalledRuntimes } from "@/lib/runtimes";
  */
 const MIN_CHECK_MS = 1000;
 
+/** A step in the header's breadcrumb before the question, e.g. Practice. */
+export type Crumb = { label: string; onClick?: () => void };
+
 /**
- * Questions: where the practice question screens are built for now. They'll
- * move into Practice, opened from a category. The questions are listed in the
- * sidebar; the open one shows here.
+ * A Practice category's questions, solved one at a time. They're listed in
+ * the sidebar; previous/next step through them in the header.
  */
 export function QuestionsScreen({
   userId,
+  questions,
+  parents,
+  sidebarTrigger = true,
+  empty,
   selectedQuestion,
   onSelectQuestion,
   flushRef,
+  onSubmitted,
 }: {
   userId: string;
+  /** The questions previous/next step through, in order. */
+  questions: Question[];
+  /** The breadcrumb before the question's title. */
+  parents: Crumb[];
+  /** Show the button that opens the sidebar's list (not in full-screen views). */
+  sidebarTrigger?: boolean;
+  /** Shown when no question is open. */
+  empty?: React.ReactNode;
   selectedQuestion: string | null;
   onSelectQuestion: (slug: string) => void;
   /** Set to a function that saves pending edits (used before logout). */
   flushRef: FlushRef;
+  /** After a Submit has run: e.g. sync the answer to GitHub. */
+  onSubmitted?: (question: Question, language: Language) => void;
 }) {
-  const index = QUESTIONS.findIndex((q) => q.slug === selectedQuestion);
-  const question = index >= 0 ? QUESTIONS[index] : undefined;
+  const queryClient = useQueryClient();
+  const index = questions.findIndex((q) => q.slug === selectedQuestion);
+  const question = index >= 0 ? questions[index] : undefined;
   const runtimes = useInstalledRuntimes();
   const languages = getLanguages("program");
   const installed = languages.filter((lang) => runtimes.data?.includes(lang.extension));
@@ -92,6 +114,13 @@ export function QuestionsScreen({
       // Every example passed on Run.
       const count = passedCount(done);
       if (kind === "run" && count && count.passed === count.total) celebrate();
+      // Solved: a Submit that passed every example.
+      if (kind === "submit" && count && count.passed === count.total) {
+        void markPracticeSolved(question.slug, language.extension).then(() =>
+          queryClient.invalidateQueries({ queryKey: queryKeys.solved(userId) }),
+        );
+      }
+      if (kind === "submit") onSubmitted?.(question, language);
     } catch (err) {
       await minimum;
       setCheck({ status: "error", message: err instanceof Error ? err.message : String(err) });
@@ -103,16 +132,41 @@ export function QuestionsScreen({
       <header className="flex h-16 shrink-0 items-center gap-2 border-b bg-background px-4">
         {/* Three columns, so the question number stays centred. */}
         <div className="flex min-w-0 flex-1 basis-0 items-center gap-2">
-          <SidebarTrigger className="-ml-1" />
-          <Separator
-            orientation="vertical"
-            className="mr-2 data-vertical:h-4 data-vertical:self-auto"
-          />
+          {sidebarTrigger && (
+            <>
+              <SidebarTrigger className="-ml-1" />
+              <Separator
+                orientation="vertical"
+                className="mr-2 data-vertical:h-4 data-vertical:self-auto"
+              />
+            </>
+          )}
           <Breadcrumb className="min-w-0">
             <BreadcrumbList>
-              <BreadcrumbItem>
-                {question ? "Questions" : <BreadcrumbPage>Questions</BreadcrumbPage>}
-              </BreadcrumbItem>
+              {parents.map((parent, i) => (
+                <Fragment key={parent.label}>
+                  {i > 0 && <BreadcrumbSeparator />}
+                  <BreadcrumbItem>
+                    {!question && i === parents.length - 1 ? (
+                      <BreadcrumbPage>{parent.label}</BreadcrumbPage>
+                    ) : parent.onClick ? (
+                      <BreadcrumbLink
+                        render={
+                          <button
+                            type="button"
+                            className="cursor-pointer"
+                            onClick={parent.onClick}
+                          />
+                        }
+                      >
+                        {parent.label}
+                      </BreadcrumbLink>
+                    ) : (
+                      parent.label
+                    )}
+                  </BreadcrumbItem>
+                </Fragment>
+              ))}
               {question && (
                 <>
                   <BreadcrumbSeparator />
@@ -130,19 +184,19 @@ export function QuestionsScreen({
               variant="ghost"
               size="icon-sm"
               disabled={index === 0}
-              onClick={() => onSelectQuestion(QUESTIONS[index - 1].slug)}
+              onClick={() => onSelectQuestion(questions[index - 1].slug)}
               aria-label="Previous question"
             >
               <ChevronLeftIcon />
             </Button>
             <span className="min-w-14 text-center text-sm tabular-nums">
-              {index + 1} / {QUESTIONS.length}
+              {index + 1} / {questions.length}
             </span>
             <Button
               variant="ghost"
               size="icon-sm"
-              disabled={index === QUESTIONS.length - 1}
-              onClick={() => onSelectQuestion(QUESTIONS[index + 1].slug)}
+              disabled={index === questions.length - 1}
+              onClick={() => onSelectQuestion(questions[index + 1].slug)}
               aria-label="Next question"
             >
               <ChevronRightIcon />
@@ -195,7 +249,7 @@ export function QuestionsScreen({
           }
         />
       ) : (
-        <div className="min-h-0 flex-1" />
+        (empty ?? <div className="min-h-0 flex-1" />)
       )}
     </>
   );
