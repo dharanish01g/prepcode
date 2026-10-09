@@ -67,6 +67,26 @@ export function deleteFile(filename: string) {
   return enqueue(() => invoke<void>("delete_file", { filename }));
 }
 
+/** The student's saved code for a practice question, or null if they haven't started it. */
+export function readPractice(question: string, extension: string) {
+  return invoke<string | null>("read_practice", { question, extension });
+}
+
+/** Saves the student's code for a practice question, queued like other saves. */
+export function writePractice(question: string, extension: string, content: string) {
+  return enqueue(() => invoke<void>("write_practice", { question, extension, content }));
+}
+
+/** Records a solved practice question: a Submit that passed every example. */
+export function markPracticeSolved(question: string, extension: string) {
+  return invoke<void>("mark_practice_solved", { question, extension });
+}
+
+/** The practice questions the student has solved, in any language, by slug. */
+export function listPracticeSolved() {
+  return invoke<string[]>("list_practice_solved");
+}
+
 /** Resolves once every queued save has finished (successfully or not). */
 export function whenSavesSettled() {
   return saveQueue.then(

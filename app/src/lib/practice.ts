@@ -44,23 +44,3 @@ export function useSectionsQuery() {
     staleTime: 10 * 60 * 1000,
   });
 }
-
-/** A practice question. Programs read the input from stdin and print the answer. */
-export type Question = {
-  slug: string;
-  /** The slug of its category. */
-  category: string;
-  title: string;
-  difficulty: "Easy" | "Medium" | "Hard";
-  /** Markdown. */
-  description: string;
-  /** Starter code by language extension, e.g. "py". */
-  starterCode: Record<string, string>;
-  /** Shown with the question, and pre-filled as the custom input. */
-  samples: { input: string; output: string }[];
-  solved: boolean;
-};
-
-// No questions yet: they'll come from Supabase. Until then every category
-// shows as coming soon.
-export const QUESTIONS: Question[] = [];

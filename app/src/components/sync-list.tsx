@@ -52,13 +52,15 @@ export function SyncList({
           {entries.map(({ file, from, kind }) => {
             const { icon: Icon, label } = KINDS[kind];
             const deleted = kind === "deleted";
+            // A practice answer opens from its question, not here.
+            const practice = file.startsWith("practice/");
             return (
               <SidebarMenuItem key={`${kind}:${file}`}>
                 <SidebarMenuButton
                   isActive={!deleted && selectedFile === file}
                   disabled={deleted}
-                  onClick={() => onSelectFile(file)}
-                  title={label}
+                  onClick={practice ? undefined : () => onSelectFile(file)}
+                  title={practice ? `${label}. Open it from its question.` : label}
                 >
                   <FileIcon filename={file} />
                   {from ? (

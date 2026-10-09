@@ -7,6 +7,8 @@ import { NavUser } from "@/components/nav-user";
 import { ProfileDialog } from "@/components/profile-dialog";
 import { DeleteFileDialog } from "@/components/delete-file-dialog";
 import { HistoryList } from "@/components/history-list";
+import { QuestionList } from "@/components/question-list";
+import type { Question } from "@/lib/questions";
 import { SyncList } from "@/components/sync-list";
 import { NewFileDialog } from "@/components/new-file-dialog";
 import { RenameFileDialog } from "@/components/rename-file-dialog";
@@ -52,11 +54,23 @@ const data: { navMain: { title: View; icon: React.ReactNode }[] } = {
     { title: "Database", icon: <DatabaseIcon /> },
     // What isn't on GitHub yet, and the Sync button. Students only.
     { title: "Sync", icon: <RefreshCwIcon /> },
-    // Questions to solve. Takes the whole main area, so this column hides.
+    // Questions to solve, by category. The categories take the whole main
+    // area, so this column hides; an open category lists its questions here.
     { title: "Practice", icon: <BookCheckIcon /> },
     // Openings to search and apply to. Also takes the whole main area.
     { title: "Jobs", icon: <BriefcaseBusinessIcon /> },
   ],
+};
+
+/** A list of questions shown in the sidebar's second column. */
+export type QuestionColumn = {
+  /** The column's heading: the category, e.g. "Programming Basics". */
+  title: string;
+  list: Question[];
+  /** Solved questions, by slug. */
+  solved: ReadonlySet<string>;
+  selected: string | null;
+  onSelect: (slug: string) => void;
 };
 
 export function AppSidebar({
@@ -72,6 +86,7 @@ export function AppSidebar({
   unsynced,
   syncing,
   onSync,
+  questions,
   ...props
 }: React.ComponentProps<typeof Sidebar> & {
   session: Session;
@@ -90,12 +105,19 @@ export function AppSidebar({
   unsynced: number;
   syncing: boolean;
   onSync: () => void;
+  /** A Practice category's questions to list in this column; null for none. */
+  questions: QuestionColumn | null;
 }) {
   const navItems = data.navMain.filter((item) => !session.guest || item.title !== "Sync");
   const { theme, toggleTheme } = useTheme();
   const filesQuery = useFilesQuery(session.id);
   const files = filesQuery.data ?? [];
   const [search, setSearch] = React.useState("");
+  // Its own, so a file search doesn't carry over to the questions. Cleared
+  // when a different list opens.
+  const [questionSearch, setQuestionSearch] = React.useState("");
+  const questionsTitle = questions?.title;
+  React.useEffect(() => setQuestionSearch(""), [questionsTitle]);
   const [newFileOpen, setNewFileOpen] = React.useState(false);
   const [renaming, setRenaming] = React.useState<string | null>(null);
   const [deleting, setDeleting] = React.useState<string | null>(null);
@@ -209,8 +231,14 @@ export function AppSidebar({
       >
         {/* h-16 and its bottom border line up with the main area's top bar. */}
         <SidebarHeader className="h-16 flex-row items-center justify-between border-b px-4 py-0">
-          <div className="text-base font-medium text-foreground">{view}</div>
-          {view === "Sync" ? (
+          <div className="min-w-0 truncate text-base font-medium text-foreground">
+            {questions?.title ?? view}
+          </div>
+          {questions ? (
+            <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
+              {questions.list.length} {questions.list.length === 1 ? "question" : "questions"}
+            </span>
+          ) : view === "Sync" ? (
             <Button
               size="sm"
               disabled={syncing}
@@ -248,9 +276,26 @@ export function AppSidebar({
             />
           </SidebarHeader>
         )}
+        {questions && (
+          <SidebarHeader className="p-4 pb-0">
+            <SidebarInput
+              placeholder="Search by title or number..."
+              value={questionSearch}
+              onChange={(e) => setQuestionSearch(e.currentTarget.value)}
+            />
+          </SidebarHeader>
+        )}
         <SidebarContent className="py-2">
           {view === "Sync" ? (
             <SyncList status={syncStatus} selectedFile={selectedFile} onSelectFile={onSelectFile} />
+          ) : questions ? (
+            <QuestionList
+              questions={questions.list}
+              solved={questions.solved}
+              search={questionSearch.trim().toLowerCase()}
+              selectedQuestion={questions.selected}
+              onSelectQuestion={questions.onSelect}
+            />
           ) : (
             <HistoryList
               kind={view === "Database" ? "database" : "program"}

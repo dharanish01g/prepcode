@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { toast } from "sonner";
-import { AppSidebar, type View } from "@/components/app-sidebar";
+import { AppSidebar, type QuestionColumn, type View } from "@/components/app-sidebar";
 import { CodeEditor } from "@/components/code-editor";
 import { FileIcon } from "@/components/file-icon";
 import { ConsolePanel } from "@/components/console-panel";
@@ -9,6 +9,7 @@ import { ResultsPanel } from "@/components/results-panel";
 import { GuestLogoutDialog } from "@/components/guest-logout-dialog";
 import { JobsScreen } from "@/components/jobs-screen";
 import { PracticeScreen } from "@/components/practice-screen";
+import { QuestionsScreen } from "@/components/questions-screen";
 import { RepoSetupSteps } from "@/components/repo-setup";
 import { SaveStatus } from "@/components/save-status";
 import { UnsyncedDialog } from "@/components/unsynced-dialog";
@@ -46,10 +47,17 @@ import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/s
 import { displayName, type Session } from "@/lib/auth";
 import { allowClose, isCloseBlocked, setCloseGuarded } from "@/lib/close-guard";
 import { exportGuestFiles, extensionOf, whenSavesSettled } from "@/lib/files";
-import { findLanguage } from "@/lib/languages";
-import { useFilesQuery, useSyncStatusQuery } from "@/lib/queries";
+import { findLanguage, type Language } from "@/lib/languages";
+import { useFilesQuery, useSolvedQuery, useSyncStatusQuery } from "@/lib/queries";
+import type { Category } from "@/lib/practice";
+import { questionsIn, type Question } from "@/lib/questions";
 import { unsyncedCount } from "@/lib/sync";
 import logo from "@/assets/logo.png";
+
+const FULL_SCREEN_VIEWS: View[] = ["Practice", "Jobs"];
+
+/** How often unsynced work is sent to GitHub on its own (see useSync). */
+const AUTO_SYNC_MS = 15 * 60 * 1000;
 
 export function WorkspaceScreen({ session, onLogout }: { session: Session; onLogout: () => void }) {
   const [view, setView] = useState<View>("Programs");
@@ -57,10 +65,27 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
   // view comes back to the file it had open.
   const [programFile, setProgramFile] = useState<string | null>(null);
   const [databaseFile, setDatabaseFile] = useState<string | null>(null);
+  // The Practice category open, and its question; null shows the categories.
+  const [practice, setPractice] = useState<{ category: Category; question: string | null } | null>(
+    null,
+  );
   // Practice and Jobs use the whole main area, so the sidebar's second column
   // stays hidden there, and comes back as it was when leaving.
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const fullScreen = view === "Practice" || view === "Jobs";
+  // Practice is full screen for its categories, but lists a category's
+  // questions in the sidebar once one is open.
+  const fullScreen = FULL_SCREEN_VIEWS.includes(view) && !(view === "Practice" && practice);
+  const solved = useSolvedQuery(session.id);
+  const questionColumn: QuestionColumn | null =
+    view === "Practice" && practice
+      ? {
+          title: practice.category.title,
+          list: questionsIn(practice.category.slug),
+          solved: solved.data ?? new Set(),
+          selected: practice.question,
+          onSelect: (slug) => setPractice({ ...practice, question: slug }),
+        }
+      : null;
   const flushEditorRef = useRef<() => void>(() => {});
   const formatEditorRef = useRef<() => Promise<void>>(async () => {});
   const cursorLineRef = useRef<() => number | null>(() => null);
@@ -111,12 +136,43 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
       if (!isCloseBlocked()) return;
       event.preventDefault();
       if (session.guest) setGuestAction("close");
-      else setUnsyncedAction("close");
+      else closeAfterSyncRef.current();
     });
     return () => {
       listening.then((stop) => stop());
     };
   }, [session.guest]);
+
+  // Closing syncs first, quietly, then closes. If it can't (offline), the
+  // student is asked instead, so nothing is lost without them knowing.
+  const { backgroundSync } = sync;
+  const closeAfterSyncRef = useRef(() => {});
+  useLayoutEffect(() => {
+    closeAfterSyncRef.current = async () => {
+      const id = toast.loading("Saving your work to GitHub…");
+      const synced = await backgroundSync();
+      toast.dismiss(id);
+      if (synced) closeWindow();
+      else setUnsyncedAction("close");
+    };
+  });
+
+  // Every 15 minutes, quietly send everything that's changed.
+  useEffect(() => {
+    if (session.guest) return;
+    const timer = setInterval(() => void backgroundSync(), AUTO_SYNC_MS);
+    return () => clearInterval(timer);
+  }, [session.guest, backgroundSync]);
+  // A Submit sends just that answer to GitHub, in its own commit.
+  const { syncAnswer } = sync;
+  const onSubmitted = session.guest
+    ? undefined
+    : (question: Question, language: Language) =>
+        void syncAnswer(
+          question.slug,
+          language.extension,
+          `Submit ${question.title} (${language.name})`,
+        );
 
   function closeWindow() {
     allowClose();
@@ -170,8 +226,10 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
   }
 
   function handleViewChange(next: View) {
+    // Practice again while in a category goes back to the categories.
+    if (next === "Practice" && view === "Practice") setPractice(null);
     setView(next);
-    if (next !== "Practice" && next !== "Jobs") setSidebarOpen(true);
+    if (!FULL_SCREEN_VIEWS.includes(next)) setSidebarOpen(true);
   }
 
   return (
@@ -202,13 +260,45 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
         unsynced={unsynced}
         syncing={sync.syncing}
         onSync={sync.sync}
+        questions={questionColumn}
       />
       {/* min-w-0: let the main area shrink when the sidebar expands. Without it,
           Monaco's pixel width (set while collapsed) holds it wide and pushes
           the header, including Run, off screen. */}
       <SidebarInset className="min-h-0 min-w-0">
-        {view === "Practice" ? (
-          <PracticeScreen />
+        {view === "Practice" && practice ? (
+          // A category's questions, in the same screen as Questions.
+          <QuestionsScreen
+            key={practice.category.slug}
+            userId={session.id}
+            questions={questionsIn(practice.category.slug)}
+            parents={[
+              { label: "Practice", onClick: () => setPractice(null) },
+              { label: practice.category.title },
+            ]}
+            empty={
+              <Empty className="pb-24">
+                <EmptyHeader>
+                  <EmptyTitle>No questions yet</EmptyTitle>
+                  <EmptyDescription>
+                    {practice.category.title} doesn't have any questions yet. Check back soon.
+                  </EmptyDescription>
+                </EmptyHeader>
+              </Empty>
+            }
+            selectedQuestion={practice.question}
+            onSelectQuestion={(slug) => setPractice({ ...practice, question: slug })}
+            flushRef={flushEditorRef}
+            onSubmitted={onSubmitted}
+          />
+        ) : view === "Practice" ? (
+          <PracticeScreen
+            userId={session.id}
+            onOpenCategory={(category) => {
+              setPractice({ category, question: questionsIn(category.slug)[0]?.slug ?? null });
+              setSidebarOpen(true);
+            }}
+          />
         ) : view === "Jobs" ? (
           // A guest logs in by logging out of the guest session.
           <JobsScreen guest={session.guest} onLogin={() => setGuestAction("log out")} />
@@ -330,6 +420,8 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
                     <ResizableHandle withHandle />
                     <ResizablePanel id="console" defaultSize="30%" minSize="10%">
                       <ConsolePanel
+                        filename={selectedFile}
+                        summary={fileConsole.summary}
                         entries={fileConsole.entries}
                         loading={fileConsole.loading}
                         running={fileConsole.running}

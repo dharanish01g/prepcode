@@ -1,7 +1,7 @@
 {
   "name": "app",
   "private": true,
-  "version": "0.0.18",
+  "version": "0.0.19",
   "license": "GPL-3.0-only",
   "type": "module",
   "scripts": {
@@ -17,7 +17,6 @@
     "@fontsource/fira-sans": "^5.3.0",
     "@monaco-editor/react": "^4.7.0",
     "@supabase/supabase-js": "^2.117.2",
-    "@tailwindcss/typography": "^0.5.20",
     "@tailwindcss/vite": "^4.3.3",
     "@tanstack/react-query": "^5.104.0",
     "@tauri-apps/api": "^2",
@@ -28,6 +27,7 @@
     "@wasm-fmt/clang-format": "^23.1.1",
     "@wasm-fmt/gofmt": "^0.7.3",
     "@wasm-fmt/ruff_fmt": "^0.15.20",
+    "canvas-confetti": "^1.9.4",
     "class-variance-authority": "^0.7.1",
     "cn": "^0.4.0",
     "date-fns": "^4.4.0",
@@ -48,6 +48,7 @@
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2",
+    "@types/canvas-confetti": "^1.9.0",
     "@types/node": "^26.6.3",
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",

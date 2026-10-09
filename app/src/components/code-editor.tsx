@@ -14,7 +14,7 @@ import { formatCode, NoFormatterError } from "@/lib/format";
 import { useFileContentQuery, useSaveFileMutation } from "@/lib/queries";
 
 /** How long to wait after the last keystroke before saving. */
-const AUTOSAVE_DELAY_MS = 500;
+export const AUTOSAVE_DELAY_MS = 500;
 
 export type FlushRef = React.RefObject<() => void>;
 export type FormatRef = React.RefObject<() => Promise<void>>;
