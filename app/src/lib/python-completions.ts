@@ -1092,6 +1092,11 @@ export function registerPythonCompletions(mInstance?: Monaco) {
 
       // Check if user is typing immediately after a dot (e.g. "math." or "math.sq")
       if (textBeforeWord.endsWith(".")) {
+        // If preceded by a number literal (e.g. "5." or "3.14."), do not suggest member completions
+        if (/\d\.$/.test(textBeforeWord)) {
+          return { suggestions: [] };
+        }
+
         const match = textBeforeWord.match(/([a-zA-Z0-9_]+)\.$/);
         const target = match ? match[1].toLowerCase() : "";
 
@@ -1145,7 +1150,7 @@ export function registerPythonCompletions(mInstance?: Monaco) {
         };
       }
 
-      // Otherwise: suggest Builtin Functions, Keywords, Modules, Snippets, and Document Identifiers
+      // Otherwise: suggest Builtin Functions, Keywords, Modules, and Snippets
       const builtinItems: monacoDefault.languages.CompletionItem[] = toCompletionItems(
         BUILTIN_FUNCTIONS,
         range,
@@ -1178,39 +1183,8 @@ export function registerPythonCompletions(mInstance?: Monaco) {
         range,
       }));
 
-      // Extract existing local identifiers from the document for IntelliSense
-      const docText = model.getValue();
-      const identifierRegex = /\b([a-zA-Z_][a-zA-Z0-9_]*)\b/g;
-      const seen = new Set<string>([
-        ...PYTHON_KEYWORDS,
-        ...PYTHON_MODULES.map((mod) => mod.name),
-        ...BUILTIN_FUNCTIONS.map((b) => b.label),
-      ]);
-      const docSymbols: monacoDefault.languages.CompletionItem[] = [];
-
-      let matchExec: RegExpExecArray | null;
-      while ((matchExec = identifierRegex.exec(docText)) !== null) {
-        const id = matchExec[1];
-        if (id.length > 2 && !seen.has(id)) {
-          seen.add(id);
-          docSymbols.push({
-            label: id,
-            kind: m.languages.CompletionItemKind.Variable,
-            insertText: id,
-            detail: `symbol ${id}`,
-            range,
-          });
-        }
-      }
-
       return {
-        suggestions: [
-          ...snippetItems,
-          ...builtinItems,
-          ...keywordItems,
-          ...moduleItems,
-          ...docSymbols,
-        ],
+        suggestions: [...snippetItems, ...builtinItems, ...keywordItems, ...moduleItems],
       };
     },
   });
@@ -1222,69 +1196,197 @@ export function registerPythonCompletions(mInstance?: Monaco) {
       if (!word) return null;
 
       const name = word.word;
-      const builtinMatch = BUILTIN_FUNCTIONS.find((item) => item.label === name);
-      if (builtinMatch) {
-        return {
-          range: new m.Range(
-            position.lineNumber,
-            word.startColumn,
-            position.lineNumber,
-            word.endColumn,
-          ),
-          contents: [
-            { value: `\`\`\`python\n${builtinMatch.detail ?? builtinMatch.label}\n\`\`\`` },
-            { value: builtinMatch.documentation ?? "" },
-          ],
-        };
+      const lineContent = model.getLineContent(position.lineNumber);
+      const textBefore = lineContent.slice(0, word.startColumn - 1).trimEnd();
+
+      // Only show math member docs when preceded by "math."
+      if (textBefore.endsWith("math.")) {
+        const mathMatch = MATH_MEMBERS.find((item) => item.label === name);
+        if (mathMatch) {
+          return {
+            range: new m.Range(
+              position.lineNumber,
+              word.startColumn,
+              position.lineNumber,
+              word.endColumn,
+            ),
+            contents: [
+              { value: `\`\`\`python\n${mathMatch.detail ?? mathMatch.label}\n\`\`\`` },
+              { value: mathMatch.documentation ?? "" },
+            ],
+          };
+        }
       }
 
-      const mathMatch = MATH_MEMBERS.find((item) => item.label === name);
-      if (mathMatch) {
-        return {
-          range: new m.Range(
-            position.lineNumber,
-            word.startColumn,
-            position.lineNumber,
-            word.endColumn,
-          ),
-          contents: [
-            { value: `\`\`\`python\n${mathMatch.detail ?? mathMatch.label}\n\`\`\`` },
-            { value: mathMatch.documentation ?? "" },
-          ],
-        };
+      // Only show random member docs when preceded by "random."
+      if (textBefore.endsWith("random.")) {
+        const randMatch = RANDOM_MEMBERS.find((item) => item.label === name);
+        if (randMatch) {
+          return {
+            range: new m.Range(
+              position.lineNumber,
+              word.startColumn,
+              position.lineNumber,
+              word.endColumn,
+            ),
+            contents: [
+              { value: `\`\`\`python\n${randMatch.detail ?? randMatch.label}\n\`\`\`` },
+              { value: randMatch.documentation ?? "" },
+            ],
+          };
+        }
       }
 
-      const moduleMatch = PYTHON_MODULES.find((mod) => mod.name === name);
-      if (moduleMatch) {
-        return {
-          range: new m.Range(
-            position.lineNumber,
-            word.startColumn,
-            position.lineNumber,
-            word.endColumn,
-          ),
-          contents: [
-            { value: `\`\`\`python\nmodule ${moduleMatch.name}\n\`\`\`` },
-            { value: moduleMatch.doc },
-          ],
-        };
+      // Only show sys member docs when preceded by "sys."
+      if (textBefore.endsWith("sys.")) {
+        const sysMatch = SYS_MEMBERS.find((item) => item.label === name);
+        if (sysMatch) {
+          return {
+            range: new m.Range(
+              position.lineNumber,
+              word.startColumn,
+              position.lineNumber,
+              word.endColumn,
+            ),
+            contents: [
+              { value: `\`\`\`python\n${sysMatch.detail ?? sysMatch.label}\n\`\`\`` },
+              { value: sysMatch.documentation ?? "" },
+            ],
+          };
+        }
+      }
+
+      // Only show os.path member docs when preceded by "os.path." or "path."
+      if (textBefore.endsWith("os.path.") || textBefore.endsWith("path.")) {
+        const pathMatch = OS_PATH_MEMBERS.find((item) => item.label === name);
+        if (pathMatch) {
+          return {
+            range: new m.Range(
+              position.lineNumber,
+              word.startColumn,
+              position.lineNumber,
+              word.endColumn,
+            ),
+            contents: [
+              { value: `\`\`\`python\n${pathMatch.detail ?? pathMatch.label}\n\`\`\`` },
+              { value: pathMatch.documentation ?? "" },
+            ],
+          };
+        }
+      }
+
+      // Only show os member docs when preceded by "os."
+      if (textBefore.endsWith("os.")) {
+        const osMatch = OS_MEMBERS.find((item) => item.label === name);
+        if (osMatch) {
+          return {
+            range: new m.Range(
+              position.lineNumber,
+              word.startColumn,
+              position.lineNumber,
+              word.endColumn,
+            ),
+            contents: [
+              { value: `\`\`\`python\n${osMatch.detail ?? osMatch.label}\n\`\`\`` },
+              { value: osMatch.documentation ?? "" },
+            ],
+          };
+        }
+      }
+
+      // Only show json member docs when preceded by "json."
+      if (textBefore.endsWith("json.")) {
+        const jsonMatch = JSON_MEMBERS.find((item) => item.label === name);
+        if (jsonMatch) {
+          return {
+            range: new m.Range(
+              position.lineNumber,
+              word.startColumn,
+              position.lineNumber,
+              word.endColumn,
+            ),
+            contents: [
+              { value: `\`\`\`python\n${jsonMatch.detail ?? jsonMatch.label}\n\`\`\`` },
+              { value: jsonMatch.documentation ?? "" },
+            ],
+          };
+        }
+      }
+
+      // Only show Builtin functions and module docs when not preceded by a dot
+      if (!textBefore.endsWith(".")) {
+        const builtinMatch = BUILTIN_FUNCTIONS.find((item) => item.label === name);
+        if (builtinMatch) {
+          return {
+            range: new m.Range(
+              position.lineNumber,
+              word.startColumn,
+              position.lineNumber,
+              word.endColumn,
+            ),
+            contents: [
+              { value: `\`\`\`python\n${builtinMatch.detail ?? builtinMatch.label}\n\`\`\`` },
+              { value: builtinMatch.documentation ?? "" },
+            ],
+          };
+        }
+
+        const moduleMatch = PYTHON_MODULES.find((mod) => mod.name === name);
+        if (moduleMatch) {
+          return {
+            range: new m.Range(
+              position.lineNumber,
+              word.startColumn,
+              position.lineNumber,
+              word.endColumn,
+            ),
+            contents: [
+              { value: `\`\`\`python\nmodule ${moduleMatch.name}\n\`\`\`` },
+              { value: moduleMatch.doc },
+            ],
+          };
+        }
       }
 
       return null;
     },
   });
 
-  // 3. Signature Help Provider: shows parameter hints when typing "(" or ","
+  // 3. Signature Help Provider: shows parameter hints for known calls and handles nested parens
   m.languages.registerSignatureHelpProvider("python", {
     signatureHelpTriggerCharacters: ["(", ","],
     provideSignatureHelp(model, position) {
       const lineContent = model.getLineContent(position.lineNumber);
       const textBefore = lineContent.slice(0, position.column - 1);
 
-      const match = textBefore.match(/([A-Za-z0-9_]+)\s*\([^)]*$/);
+      // Parse backwards to track nested parenthesis depth and comma count
+      let parenDepth = 0;
+      let activeParameter = 0;
+      let callEnd = -1;
+
+      for (let i = textBefore.length - 1; i >= 0; i--) {
+        const ch = textBefore[i];
+        if (ch === ")") {
+          parenDepth++;
+        } else if (ch === "(") {
+          if (parenDepth > 0) {
+            parenDepth--;
+          } else {
+            callEnd = i;
+            break;
+          }
+        } else if (ch === "," && parenDepth === 0) {
+          activeParameter++;
+        }
+      }
+
+      if (callEnd === -1) return null;
+
+      const textBeforeCall = textBefore.slice(0, callEnd).trimEnd();
+      const match = textBeforeCall.match(/([A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)?)$/);
       if (!match) return null;
 
-      const funcName = match[1];
+      const callTarget = match[1];
 
       const signaturesMap: Record<string, { label: string; doc: string; params: string[] }> = {
         print: {
@@ -1343,24 +1445,110 @@ export function registerPythonCompletions(mInstance?: Monaco) {
           doc: "Return whether an object is an instance of a class.",
           params: ["obj: object to check", "class_or_tuple: type or tuple of types"],
         },
-        sqrt: {
+        enumerate: {
+          label: "enumerate(iterable, start=0)",
+          doc: "Return an enumerate object yielding (index, value) pairs.",
+          params: ["iterable: an iterable object", "start=0: starting index"],
+        },
+        zip: {
+          label: "zip(*iterables, strict=False)",
+          doc: "Iterate over several iterables in parallel.",
+          params: ["*iterables: iterable sequences", "strict=False: verify equal length"],
+        },
+        min: {
+          label: "min(iterable, *[, key, default]) | min(arg1, arg2, *args, [key])",
+          doc: "With a single iterable argument, return its smallest item.",
+          params: ["iterable: container", "*args: multiple arguments"],
+        },
+        max: {
+          label: "max(iterable, *[, key, default]) | max(arg1, arg2, *args, [key])",
+          doc: "With a single iterable argument, return its largest item.",
+          params: ["iterable: container", "*args: multiple arguments"],
+        },
+        abs: {
+          label: "abs(x, /) -> number",
+          doc: "Return the absolute value of the argument.",
+          params: ["x: numeric value"],
+        },
+        sum: {
+          label: "sum(iterable, /, start=0) -> number",
+          doc: "Return the sum of a 'start' value plus an iterable of numbers.",
+          params: ["iterable: numbers to add", "start=0: starting value"],
+        },
+        sorted: {
+          label: "sorted(iterable, /, *, key=None, reverse=False) -> list",
+          doc: "Return a new list containing all items from the iterable in ascending order.",
+          params: ["iterable: sequence to sort", "key=None: sort key function", "reverse=False"],
+        },
+        "math.sqrt": {
           label: "math.sqrt(x, /) -> float",
           doc: "Return the square root of x.",
           params: ["x: float value"],
         },
-        pow: {
+        "math.pow": {
           label: "math.pow(x, y, /) -> float",
           doc: "Return x**y (x to the power of y).",
           params: ["x: base", "y: exponent"],
         },
+        "math.floor": {
+          label: "math.floor(x, /) -> int",
+          doc: "Return the floor of x as an Integral.",
+          params: ["x: float value"],
+        },
+        "math.ceil": {
+          label: "math.ceil(x, /) -> int",
+          doc: "Return the ceiling of x as an Integral.",
+          params: ["x: float value"],
+        },
+        "math.gcd": {
+          label: "math.gcd(*integers) -> int",
+          doc: "Greatest Common Divisor.",
+          params: ["*integers: integer values"],
+        },
+        "math.log": {
+          label: "math.log(x, [base=math.e]) -> float",
+          doc: "Return the logarithm of x to the given base.",
+          params: ["x: float value", "base=math.e: logarithmic base"],
+        },
+        "random.randint": {
+          label: "random.randint(a, b) -> int",
+          doc: "Return random integer in range [a, b], including both end points.",
+          params: ["a: lower bound (inclusive)", "b: upper bound (inclusive)"],
+        },
+        "random.choice": {
+          label: "random.choice(seq) -> element",
+          doc: "Choose a random element from a non-empty sequence.",
+          params: ["seq: non-empty sequence"],
+        },
+        "random.sample": {
+          label: "random.sample(population, k, *, counts=None) -> list",
+          doc: "Chooses k unique random elements from a population sequence or set.",
+          params: ["population: sequence or set", "k: sample count"],
+        },
+        "json.dumps": {
+          label: "json.dumps(obj, *, indent=None) -> str",
+          doc: "Serialize obj to a JSON formatted str.",
+          params: ["obj: python object to serialize", "indent=None: formatting indentation"],
+        },
+        "json.loads": {
+          label: "json.loads(s) -> Any",
+          doc: "Deserialize s (a str, bytes or bytearray instance containing a JSON document) to a Python object.",
+          params: ["s: json string to parse"],
+        },
+        "os.path.join": {
+          label: "os.path.join(path, *paths) -> str",
+          doc: "Join two or more pathname components inserting '/' as needed.",
+          params: ["path: initial path segment", "*paths: path segments to append"],
+        },
+        "sys.exit": {
+          label: "sys.exit([status])",
+          doc: "Exit the interpreter by raising SystemExit(status).",
+          params: ["status: exit code or error message"],
+        },
       };
 
-      const sigInfo = signaturesMap[funcName];
+      const sigInfo = signaturesMap[callTarget];
       if (!sigInfo) return null;
-
-      const openParenIndex = textBefore.lastIndexOf("(");
-      const argsText = textBefore.slice(openParenIndex + 1);
-      const activeParameter = (argsText.match(/,/g) || []).length;
 
       return {
         value: {
