@@ -954,6 +954,18 @@ export function registerCSharpCompletions(mInstance?: Monaco) {
 
         const target = match[1].toLowerCase();
 
+        if (target === "system") {
+          return {
+            suggestions: CSHARP_TYPES.map((t) => ({
+              label: t.name,
+              kind: m.languages.CompletionItemKind.Class,
+              insertText: t.name,
+              detail: `class System.${t.name}`,
+              documentation: t.doc,
+              range,
+            })),
+          };
+        }
         if (target === "console") {
           return { suggestions: toCompletionItems(CONSOLE_MEMBERS, range) };
         }
@@ -1090,8 +1102,8 @@ export function registerCSharpCompletions(mInstance?: Monaco) {
         }
       }
 
-      // Only show Class docs when hovering directly on the type name (not after a dot)
-      if (!textBefore.endsWith(".")) {
+      // Only show Class docs when hovering directly on the type name or preceded by System.
+      if (!textBefore.endsWith(".") || textBefore.endsWith("System.")) {
         const typeMatch = CSHARP_TYPES.find((t) => t.name === name);
         if (typeMatch) {
           return {
