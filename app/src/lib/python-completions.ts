@@ -1,0 +1,1384 @@
+import * as monacoDefault from "monaco-editor";
+
+type Monaco = typeof monacoDefault;
+
+interface CompletionItemDef {
+  label: string;
+  kind?: monacoDefault.languages.CompletionItemKind;
+  snippet?: string;
+  detail?: string;
+  documentation?: string;
+}
+
+const BUILTIN_FUNCTIONS: CompletionItemDef[] = [
+  {
+    label: "print",
+    kind: monacoDefault.languages.CompletionItemKind.Function,
+    snippet: "print(${1})",
+    detail: "print(*values, sep=' ', end='\\n', file=sys.stdout, flush=False)",
+    documentation: "Prints the values to a stream, or to sys.stdout by default.",
+  },
+  {
+    label: "len",
+    kind: monacoDefault.languages.CompletionItemKind.Function,
+    snippet: "len(${1:obj})",
+    detail: "len(obj, /) -> int",
+    documentation: "Return the number of items in a container.",
+  },
+  {
+    label: "range",
+    kind: monacoDefault.languages.CompletionItemKind.Function,
+    snippet: "range(${1:stop})",
+    detail: "range(stop) -> range object | range(start, stop[, step])",
+    documentation:
+      "Returns an object that produces a sequence of integers from start to stop by step.",
+  },
+  {
+    label: "input",
+    kind: monacoDefault.languages.CompletionItemKind.Function,
+    snippet: "input(${1:prompt})",
+    detail: "input(prompt='', /) -> str",
+    documentation: "Read a string from standard input. The trailing newline is stripped.",
+  },
+  {
+    label: "int",
+    kind: monacoDefault.languages.CompletionItemKind.Class,
+    snippet: "int(${1:x})",
+    detail: "int(x=0) -> integer | int(x, base=10)",
+    documentation:
+      "Convert a number or string to an integer, or return 0 if no arguments are given.",
+  },
+  {
+    label: "str",
+    kind: monacoDefault.languages.CompletionItemKind.Class,
+    snippet: "str(${1:object})",
+    detail: "str(object='') -> str",
+    documentation: "Create a new string object from the given object.",
+  },
+  {
+    label: "float",
+    kind: monacoDefault.languages.CompletionItemKind.Class,
+    snippet: "float(${1:x})",
+    detail: "float(x=0) -> floating point number",
+    documentation: "Convert a string or number to a floating point number.",
+  },
+  {
+    label: "bool",
+    kind: monacoDefault.languages.CompletionItemKind.Class,
+    snippet: "bool(${1:x})",
+    detail: "bool(x=False) -> bool",
+    documentation: "Returns True when the argument x is true, False otherwise.",
+  },
+  {
+    label: "list",
+    kind: monacoDefault.languages.CompletionItemKind.Class,
+    snippet: "list(${1:iterable})",
+    detail: "list(iterable=(), /) -> new list",
+    documentation: "Built-in mutable sequence.",
+  },
+  {
+    label: "dict",
+    kind: monacoDefault.languages.CompletionItemKind.Class,
+    snippet: "dict(${1})",
+    detail: "dict() -> new empty dictionary",
+    documentation: "Built-in mutable key-value associative mapping.",
+  },
+  {
+    label: "set",
+    kind: monacoDefault.languages.CompletionItemKind.Class,
+    snippet: "set(${1:iterable})",
+    detail: "set(iterable=(), /) -> new set object",
+    documentation: "Built-in mutable unordered collection of unique elements.",
+  },
+  {
+    label: "tuple",
+    kind: monacoDefault.languages.CompletionItemKind.Class,
+    snippet: "tuple(${1:iterable})",
+    detail: "tuple(iterable=(), /) -> empty tuple",
+    documentation: "Built-in immutable sequence.",
+  },
+  {
+    label: "enumerate",
+    kind: monacoDefault.languages.CompletionItemKind.Function,
+    snippet: "enumerate(${1:iterable})",
+    detail: "enumerate(iterable, start=0) -> enumerate object",
+    documentation:
+      "Yields pairs containing a count (from start) and the values obtained from iterating over iterable.",
+  },
+  {
+    label: "zip",
+    kind: monacoDefault.languages.CompletionItemKind.Function,
+    snippet: "zip(${1:iter1}, ${2:iter2})",
+    detail: "zip(*iterables, strict=False) -> zip object",
+    documentation:
+      "The zip object yields n-length tuples, where n is the number of iterables passed as arguments.",
+  },
+  {
+    label: "map",
+    kind: monacoDefault.languages.CompletionItemKind.Function,
+    snippet: "map(${1:function}, ${2:iterable})",
+    detail: "map(func, *iterables) -> map object",
+    documentation:
+      "Make an iterator that computes the function using arguments from each of the iterables.",
+  },
+  {
+    label: "filter",
+    kind: monacoDefault.languages.CompletionItemKind.Function,
+    snippet: "filter(${1:function}, ${2:iterable})",
+    detail: "filter(function or None, iterable) -> filter object",
+    documentation:
+      "Return an iterator yielding those items of iterable for which function(item) is true.",
+  },
+  {
+    label: "sorted",
+    kind: monacoDefault.languages.CompletionItemKind.Function,
+    snippet: "sorted(${1:iterable})",
+    detail: "sorted(iterable, /, *, key=None, reverse=False) -> list",
+    documentation: "Return a new list containing all items from the iterable in ascending order.",
+  },
+  {
+    label: "sum",
+    kind: monacoDefault.languages.CompletionItemKind.Function,
+    snippet: "sum(${1:iterable})",
+    detail: "sum(iterable, /, start=0) -> number",
+    documentation: "Return the sum of a 'start' value (default: 0) plus an iterable of numbers.",
+  },
+  {
+    label: "min",
+    kind: monacoDefault.languages.CompletionItemKind.Function,
+    snippet: "min(${1:arg1}, ${2:arg2})",
+    detail:
+      "min(iterable, *[, default=obj, key=func]) -> value | min(arg1, arg2, *args, *[, key=func])",
+    documentation:
+      "Return the smallest item in an iterable or the smallest of two or more arguments.",
+  },
+  {
+    label: "max",
+    kind: monacoDefault.languages.CompletionItemKind.Function,
+    snippet: "max(${1:arg1}, ${2:arg2})",
+    detail:
+      "max(iterable, *[, default=obj, key=func]) -> value | max(arg1, arg2, *args, *[, key=func])",
+    documentation:
+      "Return the largest item in an iterable or the largest of two or more arguments.",
+  },
+  {
+    label: "abs",
+    kind: monacoDefault.languages.CompletionItemKind.Function,
+    snippet: "abs(${1:x})",
+    detail: "abs(x, /) -> number",
+    documentation: "Return the absolute value of the argument.",
+  },
+  {
+    label: "round",
+    kind: monacoDefault.languages.CompletionItemKind.Function,
+    snippet: "round(${1:number}, ${2:ndigits})",
+    detail: "round(number, ndigits=None) -> number",
+    documentation: "Round a number to a given precision in decimal digits.",
+  },
+  {
+    label: "type",
+    kind: monacoDefault.languages.CompletionItemKind.Function,
+    snippet: "type(${1:object})",
+    detail: "type(object) -> the object's type",
+    documentation: "Returns the type of an object.",
+  },
+  {
+    label: "isinstance",
+    kind: monacoDefault.languages.CompletionItemKind.Function,
+    snippet: "isinstance(${1:object}, ${2:classinfo})",
+    detail: "isinstance(obj, class_or_tuple, /) -> bool",
+    documentation: "Return whether an object is an instance of a class or of a subclass thereof.",
+  },
+  {
+    label: "open",
+    kind: monacoDefault.languages.CompletionItemKind.Function,
+    snippet: 'open(${1:file}, "${2:r}")',
+    detail:
+      "open(file, mode='r', buffering=-1, encoding=None, errors=None, newline=None, closefd=True, opener=None)",
+    documentation: "Open file and return a stream.",
+  },
+  {
+    label: "any",
+    kind: monacoDefault.languages.CompletionItemKind.Function,
+    snippet: "any(${1:iterable})",
+    detail: "any(iterable, /) -> bool",
+    documentation: "Return True if bool(x) is True for any x in the iterable.",
+  },
+  {
+    label: "all",
+    kind: monacoDefault.languages.CompletionItemKind.Function,
+    snippet: "all(${1:iterable})",
+    detail: "all(iterable, /) -> bool",
+    documentation: "Return True if bool(x) is True for all values x in the iterable.",
+  },
+  {
+    label: "reversed",
+    kind: monacoDefault.languages.CompletionItemKind.Function,
+    snippet: "reversed(${1:sequence})",
+    detail: "reversed(sequence, /) -> reverse iterator",
+    documentation: "Return a reverse iterator over the values of the given sequence.",
+  },
+  {
+    label: "chr",
+    kind: monacoDefault.languages.CompletionItemKind.Function,
+    snippet: "chr(${1:i})",
+    detail: "chr(i, /) -> str",
+    documentation: "Return a Unicode string of one character with ordinal i; 0 <= i <= 0x10ffff.",
+  },
+  {
+    label: "ord",
+    kind: monacoDefault.languages.CompletionItemKind.Function,
+    snippet: "ord(${1:c})",
+    detail: "ord(c, /) -> int",
+    documentation: "Return the integer ordinal of a one-character string.",
+  },
+  {
+    label: "bin",
+    kind: monacoDefault.languages.CompletionItemKind.Function,
+    snippet: "bin(${1:number})",
+    detail: "bin(number, /) -> str",
+    documentation: "Return the binary representation of an integer.",
+  },
+  {
+    label: "hex",
+    kind: monacoDefault.languages.CompletionItemKind.Function,
+    snippet: "hex(${1:number})",
+    detail: "hex(number, /) -> str",
+    documentation: "Return the hexadecimal representation of an integer.",
+  },
+  {
+    label: "oct",
+    kind: monacoDefault.languages.CompletionItemKind.Function,
+    snippet: "oct(${1:number})",
+    detail: "oct(number, /) -> str",
+    documentation: "Return the octal representation of an integer.",
+  },
+];
+
+const MATH_MEMBERS: CompletionItemDef[] = [
+  {
+    label: "sqrt",
+    snippet: "sqrt(${1:x})",
+    detail: "math.sqrt(x, /) -> float",
+    documentation: "Return the square root of x.",
+  },
+  {
+    label: "ceil",
+    snippet: "ceil(${1:x})",
+    detail: "math.ceil(x, /) -> int",
+    documentation: "Return the ceiling of x as an Integral.",
+  },
+  {
+    label: "floor",
+    snippet: "floor(${1:x})",
+    detail: "math.floor(x, /) -> int",
+    documentation: "Return the floor of x as an Integral.",
+  },
+  {
+    label: "pow",
+    snippet: "pow(${1:x}, ${2:y})",
+    detail: "math.pow(x, y, /) -> float",
+    documentation: "Return x**y (x to the power of y).",
+  },
+  {
+    label: "fabs",
+    snippet: "fabs(${1:x})",
+    detail: "math.fabs(x, /) -> float",
+    documentation: "Return the absolute value of the float x.",
+  },
+  {
+    label: "factorial",
+    snippet: "factorial(${1:n})",
+    detail: "math.factorial(n, /) -> int",
+    documentation: "Find n!.",
+  },
+  {
+    label: "gcd",
+    snippet: "gcd(${1:a}, ${2:b})",
+    detail: "math.gcd(*integers) -> int",
+    documentation: "Greatest Common Divisor.",
+  },
+  {
+    label: "lcm",
+    snippet: "lcm(${1:a}, ${2:b})",
+    detail: "math.lcm(*integers) -> int",
+    documentation: "Least Common Multiple.",
+  },
+  {
+    label: "sin",
+    snippet: "sin(${1:x})",
+    detail: "math.sin(x, /) -> float",
+    documentation: "Return the sine of x (measured in radians).",
+  },
+  {
+    label: "cos",
+    snippet: "cos(${1:x})",
+    detail: "math.cos(x, /) -> float",
+    documentation: "Return the cosine of x (measured in radians).",
+  },
+  {
+    label: "tan",
+    snippet: "tan(${1:x})",
+    detail: "math.tan(x, /) -> float",
+    documentation: "Return the tangent of x (measured in radians).",
+  },
+  {
+    label: "log",
+    snippet: "log(${1:x}, ${2:base})",
+    detail: "math.log(x, [base=math.e]) -> float",
+    documentation: "Return the logarithm of x to the given base.",
+  },
+  {
+    label: "log10",
+    snippet: "log10(${1:x})",
+    detail: "math.log10(x, /) -> float",
+    documentation: "Return the base 10 logarithm of x.",
+  },
+  {
+    label: "log2",
+    snippet: "log2(${1:x})",
+    detail: "math.log2(x, /) -> float",
+    documentation: "Return the base 2 logarithm of x.",
+  },
+  {
+    label: "exp",
+    snippet: "exp(${1:x})",
+    detail: "math.exp(x, /) -> float",
+    documentation: "Return e raised to the power of x.",
+  },
+  {
+    label: "degrees",
+    snippet: "degrees(${1:x})",
+    detail: "math.degrees(x, /) -> float",
+    documentation: "Convert angle x from radians to degrees.",
+  },
+  {
+    label: "radians",
+    snippet: "radians(${1:x})",
+    detail: "math.radians(x, /) -> float",
+    documentation: "Convert angle x from degrees to radians.",
+  },
+  {
+    label: "pi",
+    kind: monacoDefault.languages.CompletionItemKind.Field,
+    snippet: "pi",
+    detail: "math.pi = 3.141592653589793",
+    documentation: "The mathematical constant π = 3.141592…",
+  },
+  {
+    label: "e",
+    kind: monacoDefault.languages.CompletionItemKind.Field,
+    snippet: "e",
+    detail: "math.e = 2.718281828459045",
+    documentation: "The mathematical constant e = 2.718281…",
+  },
+  {
+    label: "inf",
+    kind: monacoDefault.languages.CompletionItemKind.Field,
+    snippet: "inf",
+    detail: "math.inf",
+    documentation: "A floating-point positive infinity.",
+  },
+];
+
+const RANDOM_MEMBERS: CompletionItemDef[] = [
+  {
+    label: "randint",
+    snippet: "randint(${1:a}, ${2:b})",
+    detail: "random.randint(a, b) -> int",
+    documentation: "Return random integer in range [a, b], including both end points.",
+  },
+  {
+    label: "choice",
+    snippet: "choice(${1:seq})",
+    detail: "random.choice(seq) -> element",
+    documentation: "Choose a random element from a non-empty sequence.",
+  },
+  {
+    label: "choices",
+    snippet: "choices(${1:population}, k=${2:1})",
+    detail: "random.choices(population, weights=None, *, cum_weights=None, k=1)",
+    documentation: "Return a k sized list of population elements chosen with replacement.",
+  },
+  {
+    label: "shuffle",
+    snippet: "shuffle(${1:x})",
+    detail: "random.shuffle(x) -> None",
+    documentation: "Shuffle list x in place, and return None.",
+  },
+  {
+    label: "random",
+    snippet: "random()",
+    detail: "random.random() -> float",
+    documentation: "Return the next random floating point number in the range [0.0, 1.0).",
+  },
+  {
+    label: "uniform",
+    snippet: "uniform(${1:a}, ${2:b})",
+    detail: "random.uniform(a, b) -> float",
+    documentation: "Get a random number in the range [a, b) or [a, b] depending on rounding.",
+  },
+  {
+    label: "randrange",
+    snippet: "randrange(${1:start}, ${2:stop})",
+    detail: "random.randrange(start, stop[, step]) -> int",
+    documentation: "Choose a random item from range(start, stop[, step]).",
+  },
+  {
+    label: "sample",
+    snippet: "sample(${1:population}, ${2:k})",
+    detail: "random.sample(population, k, *, counts=None) -> list",
+    documentation: "Chooses k unique random elements from a population sequence or set.",
+  },
+  {
+    label: "seed",
+    snippet: "seed(${1:a})",
+    detail: "random.seed(a=None, version=2) -> None",
+    documentation: "Initialize internal state from a hashable object.",
+  },
+];
+
+const SYS_MEMBERS: CompletionItemDef[] = [
+  {
+    label: "argv",
+    kind: monacoDefault.languages.CompletionItemKind.Field,
+    snippet: "argv",
+    detail: "sys.argv: list[str]",
+    documentation: "The list of command line arguments passed to a Python script.",
+  },
+  {
+    label: "exit",
+    snippet: "exit(${1:0})",
+    detail: "sys.exit([status])",
+    documentation: "Exit the interpreter by raising SystemExit(status).",
+  },
+  {
+    label: "stdin",
+    kind: monacoDefault.languages.CompletionItemKind.Field,
+    snippet: "stdin",
+    detail: "sys.stdin",
+    documentation: "Standard input stream.",
+  },
+  {
+    label: "stdout",
+    kind: monacoDefault.languages.CompletionItemKind.Field,
+    snippet: "stdout",
+    detail: "sys.stdout",
+    documentation: "Standard output stream.",
+  },
+  {
+    label: "stderr",
+    kind: monacoDefault.languages.CompletionItemKind.Field,
+    snippet: "stderr",
+    detail: "sys.stderr",
+    documentation: "Standard error stream.",
+  },
+  {
+    label: "version",
+    kind: monacoDefault.languages.CompletionItemKind.Field,
+    snippet: "version",
+    detail: "sys.version: str",
+    documentation: "A string containing the version number of the Python interpreter.",
+  },
+  {
+    label: "path",
+    kind: monacoDefault.languages.CompletionItemKind.Field,
+    snippet: "path",
+    detail: "sys.path: list[str]",
+    documentation: "A list of strings that specifies the search path for modules.",
+  },
+  {
+    label: "maxsize",
+    kind: monacoDefault.languages.CompletionItemKind.Field,
+    snippet: "maxsize",
+    detail: "sys.maxsize: int",
+    documentation: "An integer giving the maximum value a variable of type Py_ssize_t can take.",
+  },
+];
+
+const OS_MEMBERS: CompletionItemDef[] = [
+  {
+    label: "path",
+    kind: monacoDefault.languages.CompletionItemKind.Module,
+    snippet: "path",
+    detail: "os.path",
+    documentation: "Common pathname manipulations.",
+  },
+  {
+    label: "listdir",
+    snippet: 'listdir(${1:"."})',
+    detail: "os.listdir(path='.') -> list[str]",
+    documentation: "Return a list containing the names of the entries in the directory.",
+  },
+  {
+    label: "getcwd",
+    snippet: "getcwd()",
+    detail: "os.getcwd() -> str",
+    documentation: "Return a string representing the current working directory.",
+  },
+  {
+    label: "mkdir",
+    snippet: "mkdir(${1:path})",
+    detail: "os.mkdir(path, mode=0o777) -> None",
+    documentation: "Create a directory named path.",
+  },
+  {
+    label: "makedirs",
+    snippet: "makedirs(${1:name}, exist_ok=True)",
+    detail: "os.makedirs(name, mode=0o777, exist_ok=False) -> None",
+    documentation: "Super-mkdir; create-directory recursively.",
+  },
+  {
+    label: "remove",
+    snippet: "remove(${1:path})",
+    detail: "os.remove(path) -> None",
+    documentation: "Remove (delete) the file path.",
+  },
+  {
+    label: "environ",
+    kind: monacoDefault.languages.CompletionItemKind.Field,
+    snippet: "environ",
+    detail: "os.environ: Mapping",
+    documentation: "A mapping object representing the string environment.",
+  },
+  {
+    label: "system",
+    snippet: "system(${1:command})",
+    detail: "os.system(command) -> int",
+    documentation: "Execute the command in a subshell.",
+  },
+  {
+    label: "name",
+    kind: monacoDefault.languages.CompletionItemKind.Field,
+    snippet: "name",
+    detail: "os.name: str",
+    documentation:
+      "The name of the operating system dependent module imported ('posix', 'nt', etc.).",
+  },
+];
+
+const OS_PATH_MEMBERS: CompletionItemDef[] = [
+  {
+    label: "exists",
+    snippet: "exists(${1:path})",
+    detail: "os.path.exists(path) -> bool",
+    documentation: "Test whether a path exists.",
+  },
+  {
+    label: "join",
+    snippet: "join(${1:path}, *${2:paths})",
+    detail: "os.path.join(path, *paths) -> str",
+    documentation: "Join two or more pathname components inserting '/' as needed.",
+  },
+  {
+    label: "basename",
+    snippet: "basename(${1:path})",
+    detail: "os.path.basename(path) -> str",
+    documentation: "Returns the final component of a pathname.",
+  },
+  {
+    label: "dirname",
+    snippet: "dirname(${1:path})",
+    detail: "os.path.dirname(path) -> str",
+    documentation: "Returns the directory component of a pathname.",
+  },
+  {
+    label: "split",
+    snippet: "split(${1:path})",
+    detail: "os.path.split(path) -> tuple[str, str]",
+    documentation: "Split a pathname into (head, tail).",
+  },
+  {
+    label: "splitext",
+    snippet: "splitext(${1:path})",
+    detail: "os.path.splitext(path) -> tuple[str, str]",
+    documentation: "Split the extension from a pathname (root, ext).",
+  },
+  {
+    label: "isfile",
+    snippet: "isfile(${1:path})",
+    detail: "os.path.isfile(path) -> bool",
+    documentation: "Test whether a path is a regular file.",
+  },
+  {
+    label: "isdir",
+    snippet: "isdir(${1:path})",
+    detail: "os.path.isdir(path) -> bool",
+    documentation: "Test whether a path is a directory.",
+  },
+  {
+    label: "getsize",
+    snippet: "getsize(${1:path})",
+    detail: "os.path.getsize(path) -> int",
+    documentation: "Return the size of a file in bytes.",
+  },
+];
+
+const JSON_MEMBERS: CompletionItemDef[] = [
+  {
+    label: "dumps",
+    snippet: "dumps(${1:obj}, indent=${2:4})",
+    detail: "json.dumps(obj, *, indent=None) -> str",
+    documentation: "Serialize obj to a JSON formatted str.",
+  },
+  {
+    label: "loads",
+    snippet: "loads(${1:s})",
+    detail: "json.loads(s) -> Any",
+    documentation:
+      "Deserialize s (a str, bytes or bytearray instance containing a JSON document) to a Python object.",
+  },
+  {
+    label: "dump",
+    snippet: "dump(${1:obj}, ${2:fp})",
+    detail: "json.dump(obj, fp, *, indent=None)",
+    documentation: "Serialize obj as a JSON formatted stream to fp.",
+  },
+  {
+    label: "load",
+    snippet: "load(${1:fp})",
+    detail: "json.load(fp) -> Any",
+    documentation:
+      "Deserialize fp (a .read()-supporting file-like object containing a JSON document) to a Python object.",
+  },
+];
+
+const COMMON_INSTANCE_MEMBERS: CompletionItemDef[] = [
+  // String methods
+  {
+    label: "split",
+    snippet: 'split("${1: }")',
+    detail: "str.split(sep=None, maxsplit=-1) -> list[str]",
+    documentation: "Return a list of the words in the string, using sep as the delimiter.",
+  },
+  {
+    label: "join",
+    snippet: "join(${1:iterable})",
+    detail: "str.join(iterable, /) -> str",
+    documentation: "Concatenate any number of strings.",
+  },
+  {
+    label: "strip",
+    snippet: "strip()",
+    detail: "str.strip(chars=None, /) -> str",
+    documentation: "Return a copy of the string with leading and trailing whitespace removed.",
+  },
+  {
+    label: "lstrip",
+    snippet: "lstrip()",
+    detail: "str.lstrip(chars=None, /) -> str",
+    documentation: "Return a copy of the string with leading whitespace removed.",
+  },
+  {
+    label: "rstrip",
+    snippet: "rstrip()",
+    detail: "str.rstrip(chars=None, /) -> str",
+    documentation: "Return a copy of the string with trailing whitespace removed.",
+  },
+  {
+    label: "lower",
+    snippet: "lower()",
+    detail: "str.lower() -> str",
+    documentation: "Return a copy of the string converted to lowercase.",
+  },
+  {
+    label: "upper",
+    snippet: "upper()",
+    detail: "str.upper() -> str",
+    documentation: "Return a copy of the string converted to uppercase.",
+  },
+  {
+    label: "replace",
+    snippet: 'replace("${1:old}", "${2:new}")',
+    detail: "str.replace(old, new, count=-1) -> str",
+    documentation: "Return a copy with all occurrences of substring old replaced by new.",
+  },
+  {
+    label: "startswith",
+    snippet: 'startswith("${1:prefix}")',
+    detail: "str.startswith(prefix[, start[, end]]) -> bool",
+    documentation: "Return True if the string starts with the specified prefix.",
+  },
+  {
+    label: "endswith",
+    snippet: 'endswith("${1:suffix}")',
+    detail: "str.endswith(suffix[, start[, end]]) -> bool",
+    documentation: "Return True if the string ends with the specified suffix.",
+  },
+  {
+    label: "find",
+    snippet: 'find("${1:sub}")',
+    detail: "str.find(sub[, start[, end]]) -> int",
+    documentation:
+      "Return the lowest index in S where substring sub is found. Return -1 on failure.",
+  },
+  {
+    label: "count",
+    snippet: "count(${1:value})",
+    detail: "count(value) -> int",
+    documentation: "Return number of occurrences of value.",
+  },
+  {
+    label: "format",
+    snippet: "format(${1:args})",
+    detail: "str.format(*args, **kwargs) -> str",
+    documentation: "Return a formatted version of S, using substitutions from args and kwargs.",
+  },
+  {
+    label: "isdigit",
+    snippet: "isdigit()",
+    detail: "str.isdigit() -> bool",
+    documentation: "Return True if all characters in S are digits.",
+  },
+  {
+    label: "isalpha",
+    snippet: "isalpha()",
+    detail: "str.isalpha() -> bool",
+    documentation: "Return True if all characters in S are alphabetic.",
+  },
+  {
+    label: "isalnum",
+    snippet: "isalnum()",
+    detail: "str.isalnum() -> bool",
+    documentation: "Return True if all characters in S are alphanumeric.",
+  },
+
+  // List methods
+  {
+    label: "append",
+    snippet: "append(${1:item})",
+    detail: "list.append(object, /) -> None",
+    documentation: "Append object to the end of the list.",
+  },
+  {
+    label: "extend",
+    snippet: "extend(${1:iterable})",
+    detail: "list.extend(iterable, /) -> None",
+    documentation: "Extend list by appending elements from the iterable.",
+  },
+  {
+    label: "insert",
+    snippet: "insert(${1:index}, ${2:item})",
+    detail: "list.insert(index, object, /) -> None",
+    documentation: "Insert object before index.",
+  },
+  {
+    label: "pop",
+    snippet: "pop()",
+    detail: "pop([index]) -> item",
+    documentation: "Remove and return item at index (default last).",
+  },
+  {
+    label: "remove",
+    snippet: "remove(${1:value})",
+    detail: "remove(value, /) -> None",
+    documentation: "Remove first occurrence of value.",
+  },
+  {
+    label: "clear",
+    snippet: "clear()",
+    detail: "clear() -> None",
+    documentation: "Remove all items.",
+  },
+  {
+    label: "index",
+    snippet: "index(${1:value})",
+    detail: "index(value, [start, [stop]]) -> int",
+    documentation: "Return first index of value.",
+  },
+  {
+    label: "sort",
+    snippet: "sort()",
+    detail: "list.sort(*, key=None, reverse=False) -> None",
+    documentation: "Sort the list in ascending order and return None.",
+  },
+  {
+    label: "reverse",
+    snippet: "reverse()",
+    detail: "list.reverse() -> None",
+    documentation: "Reverse IN PLACE.",
+  },
+  {
+    label: "copy",
+    snippet: "copy()",
+    detail: "copy() -> shallow copy",
+    documentation: "Return a shallow copy.",
+  },
+
+  // Dict methods
+  {
+    label: "keys",
+    snippet: "keys()",
+    detail: "dict.keys() -> a set-like object providing a view on D's keys",
+    documentation: "Return a set-like object of dictionary keys.",
+  },
+  {
+    label: "values",
+    snippet: "values()",
+    detail: "dict.values() -> an object providing a view on D's values",
+    documentation: "Return an object of dictionary values.",
+  },
+  {
+    label: "items",
+    snippet: "items()",
+    detail: "dict.items() -> a set-like object providing a view on D's items",
+    documentation: "Return a set-like object of dictionary (key, value) pairs.",
+  },
+  {
+    label: "get",
+    snippet: "get(${1:key}, ${2:default})",
+    detail: "dict.get(key, default=None, /) -> value",
+    documentation: "Return the value for key if key is in the dictionary, else default.",
+  },
+  {
+    label: "update",
+    snippet: "update(${1:other})",
+    detail: "dict.update([E, ]**F) -> None",
+    documentation: "Update D from dict/iterable E and F.",
+  },
+  {
+    label: "setdefault",
+    snippet: "setdefault(${1:key}, ${2:default})",
+    detail: "dict.setdefault(key, default=None, /) -> value",
+    documentation: "Insert key with a value of default if key is not in the dictionary.",
+  },
+
+  // Set methods
+  {
+    label: "add",
+    snippet: "add(${1:element})",
+    detail: "set.add(element, /) -> None",
+    documentation: "Add an element to a set.",
+  },
+  {
+    label: "discard",
+    snippet: "discard(${1:element})",
+    detail: "set.discard(element, /) -> None",
+    documentation: "Remove an element from a set if it is a member.",
+  },
+  {
+    label: "union",
+    snippet: "union(${1:other})",
+    detail: "set.union(*others) -> set",
+    documentation: "Return the union of sets as a new set.",
+  },
+  {
+    label: "intersection",
+    snippet: "intersection(${1:other})",
+    detail: "set.intersection(*others) -> set",
+    documentation: "Return the intersection of two sets as a new set.",
+  },
+  {
+    label: "difference",
+    snippet: "difference(${1:other})",
+    detail: "set.difference(*others) -> set",
+    documentation: "Return the difference of two or more sets as a new set.",
+  },
+];
+
+const PYTHON_KEYWORDS = [
+  "False",
+  "None",
+  "True",
+  "and",
+  "as",
+  "assert",
+  "async",
+  "await",
+  "break",
+  "class",
+  "continue",
+  "def",
+  "del",
+  "elif",
+  "else",
+  "except",
+  "finally",
+  "for",
+  "from",
+  "global",
+  "if",
+  "import",
+  "in",
+  "is",
+  "lambda",
+  "nonlocal",
+  "not",
+  "or",
+  "pass",
+  "raise",
+  "return",
+  "try",
+  "while",
+  "with",
+  "yield",
+];
+
+const PYTHON_MODULES = [
+  { name: "math", doc: "Provides access to the mathematical functions defined by the C standard." },
+  { name: "random", doc: "Implements pseudo-random number generators for various distributions." },
+  { name: "sys", doc: "Provides access to some variables used or maintained by the interpreter." },
+  { name: "os", doc: "Provides a portable way of using operating system dependent functionality." },
+  { name: "json", doc: "JSON (JavaScript Object Notation) encoder and decoder." },
+  { name: "time", doc: "Provides various time-related functions." },
+  { name: "datetime", doc: "Supplies classes for manipulating dates and times." },
+  { name: "re", doc: "Regular expression operations." },
+  {
+    name: "collections",
+    doc: "High-performance container datatypes (Counter, defaultdict, deque, etc.).",
+  },
+  { name: "itertools", doc: "Functions creating iterators for efficient looping." },
+  { name: "functools", doc: "Higher-order functions and operations on callable objects." },
+  { name: "heapq", doc: "Heap queue algorithm, also known as the priority queue algorithm." },
+  { name: "bisect", doc: "Array bisection algorithm for maintaining lists in sorted order." },
+  { name: "copy", doc: "Shallow and deep copy operations." },
+  { name: "string", doc: "Common string operations and constants." },
+];
+
+const SNIPPETS = [
+  {
+    label: "main",
+    insertText: 'if __name__ == "__main__":\n    ${0:main()}',
+    detail: "Main entry point boilerplate",
+    documentation: "Boilerplate check for direct script execution.",
+  },
+  {
+    label: "def",
+    insertText: "def ${1:func_name}(${2:args}):\n    ${0:pass}",
+    detail: "def function",
+    documentation: "Define a new function.",
+  },
+  {
+    label: "class",
+    insertText: "class ${1:ClassName}:\n    def __init__(self, ${2:args}):\n        ${0:pass}",
+    detail: "class definition",
+    documentation: "Define a new class with an __init__ constructor.",
+  },
+  {
+    label: "for",
+    insertText: "for ${1:i} in range(${2:n}):\n    ${0:pass}",
+    detail: "for loop with range",
+    documentation: "Iterate over a sequence of numbers generated by range.",
+  },
+  {
+    label: "forin",
+    insertText: "for ${1:item} in ${2:iterable}:\n    ${0:pass}",
+    detail: "for-in loop",
+    documentation: "Iterate over elements of an iterable.",
+  },
+  {
+    label: "forenum",
+    insertText: "for ${1:i}, ${2:item} in enumerate(${3:iterable}):\n    ${0:pass}",
+    detail: "for-in loop with enumerate",
+    documentation: "Iterate over elements with an index counter.",
+  },
+  {
+    label: "while",
+    insertText: "while ${1:condition}:\n    ${0:pass}",
+    detail: "while loop",
+    documentation: "Executes a block of code as long as a condition is true.",
+  },
+  {
+    label: "if",
+    insertText: "if ${1:condition}:\n    ${0:pass}",
+    detail: "if statement",
+    documentation: "Conditional statement.",
+  },
+  {
+    label: "ifelse",
+    insertText: "if ${1:condition}:\n    ${2:pass}\nelse:\n    ${0:pass}",
+    detail: "if-else statement",
+    documentation: "Conditional branch with an else clause.",
+  },
+  {
+    label: "ifelif",
+    insertText:
+      "if ${1:condition1}:\n    ${2:pass}\nelif ${3:condition2}:\n    ${4:pass}\nelse:\n    ${0:pass}",
+    detail: "if-elif-else statement",
+    documentation: "Multi-branch conditional statement.",
+  },
+  {
+    label: "try",
+    insertText: "try:\n    ${1:pass}\nexcept ${2:Exception} as ${3:e}:\n    ${0:print(e)}",
+    detail: "try-except block",
+    documentation: "Structured exception handling block.",
+  },
+  {
+    label: "with",
+    insertText: 'with open(${1:"filename"}, "${2:r}") as ${3:f}:\n    ${0:content = f.read()}',
+    detail: "with open() context manager",
+    documentation: "Safely open a file with automatic closing on exit.",
+  },
+  {
+    label: "lam",
+    insertText: "lambda ${1:x}: ${0:x}",
+    detail: "lambda anonymous function",
+    documentation: "Small anonymous inline function.",
+  },
+  {
+    label: "listcomp",
+    insertText: "[${1:x} for ${1:x} in ${2:iterable}]",
+    detail: "list comprehension",
+    documentation: "Construct a new list using a comprehension expression.",
+  },
+  {
+    label: "dictcomp",
+    insertText: "{${1:k}: ${2:v} for ${1:k}, ${2:v} in ${3:iterable}}",
+    detail: "dict comprehension",
+    documentation: "Construct a new dictionary using a comprehension expression.",
+  },
+  {
+    label: "mapinp",
+    insertText: "list(map(int, input().split()))",
+    detail: "read integer list from input",
+    documentation: "Standard competitive programming idiom to read space-separated integers.",
+  },
+  {
+    label: "intinp",
+    insertText: "int(input())",
+    detail: "read single integer from input",
+    documentation: "Read a line from stdin and convert it to an integer.",
+  },
+  {
+    label: "strinp",
+    insertText: "input().strip()",
+    detail: "read stripped string from input",
+    documentation: "Read a line from stdin and strip surrounding whitespace.",
+  },
+];
+
+function toCompletionItems(
+  items: CompletionItemDef[],
+  range: monacoDefault.IRange,
+): monacoDefault.languages.CompletionItem[] {
+  return items.map((m) => ({
+    label: m.label,
+    kind: m.kind ?? monacoDefault.languages.CompletionItemKind.Method,
+    insertText: m.snippet ?? m.label,
+    insertTextRules: m.snippet
+      ? monacoDefault.languages.CompletionItemInsertTextRule.InsertAsSnippet
+      : undefined,
+    detail: m.detail,
+    documentation: m.documentation,
+    range,
+  }));
+}
+
+let isRegistered = false;
+
+/**
+ * Registers offline autocomplete suggestions, standard library completions,
+ * Python snippets, and signature assistance for Python in the Monaco Editor.
+ */
+export function registerPythonCompletions(mInstance?: Monaco) {
+  const m = mInstance ?? monacoDefault;
+  if (isRegistered) return;
+  isRegistered = true;
+
+  // 1. Autocomplete & Suggestions Provider
+  m.languages.registerCompletionItemProvider("python", {
+    triggerCharacters: ["."],
+    provideCompletionItems(model, position) {
+      const word = model.getWordUntilPosition(position);
+      const range: monacoDefault.IRange = {
+        startLineNumber: position.lineNumber,
+        endLineNumber: position.lineNumber,
+        startColumn: word.startColumn,
+        endColumn: word.endColumn,
+      };
+
+      const lineContent = model.getLineContent(position.lineNumber);
+      const textBeforeWord = lineContent.slice(0, word.startColumn - 1).trimEnd();
+
+      // Check if user is typing immediately after a dot (e.g. "math." or "math.sq")
+      if (textBeforeWord.endsWith(".")) {
+        const match = textBeforeWord.match(/([a-zA-Z0-9_]+)\.$/);
+        const target = match ? match[1].toLowerCase() : "";
+
+        if (target === "math") {
+          return { suggestions: toCompletionItems(MATH_MEMBERS, range) };
+        }
+        if (target === "random") {
+          return { suggestions: toCompletionItems(RANDOM_MEMBERS, range) };
+        }
+        if (target === "sys") {
+          return { suggestions: toCompletionItems(SYS_MEMBERS, range) };
+        }
+        if (target === "os") {
+          return { suggestions: toCompletionItems(OS_MEMBERS, range) };
+        }
+        if (target === "path") {
+          return { suggestions: toCompletionItems(OS_PATH_MEMBERS, range) };
+        }
+        if (target === "json") {
+          return { suggestions: toCompletionItems(JSON_MEMBERS, range) };
+        }
+
+        // Default member access for any object / instance expression (strings, lists, dicts, sets, etc.):
+        return { suggestions: toCompletionItems(COMMON_INSTANCE_MEMBERS, range) };
+      }
+
+      // Check if user is typing an import statement
+      if (textBeforeWord.startsWith("import")) {
+        return {
+          suggestions: PYTHON_MODULES.map((mod) => ({
+            label: mod.name,
+            kind: m.languages.CompletionItemKind.Module,
+            insertText: mod.name,
+            detail: `module ${mod.name}`,
+            documentation: mod.doc,
+            range,
+          })),
+        };
+      }
+
+      if (textBeforeWord.startsWith("from")) {
+        return {
+          suggestions: PYTHON_MODULES.map((mod) => ({
+            label: mod.name,
+            kind: m.languages.CompletionItemKind.Module,
+            insertText: `${mod.name} import `,
+            detail: `from ${mod.name} import ...`,
+            documentation: mod.doc,
+            range,
+          })),
+        };
+      }
+
+      // Otherwise: suggest Builtin Functions, Keywords, Modules, Snippets, and Document Identifiers
+      const builtinItems: monacoDefault.languages.CompletionItem[] = toCompletionItems(
+        BUILTIN_FUNCTIONS,
+        range,
+      );
+
+      const keywordItems: monacoDefault.languages.CompletionItem[] = PYTHON_KEYWORDS.map((kw) => ({
+        label: kw,
+        kind: m.languages.CompletionItemKind.Keyword,
+        insertText: kw,
+        detail: `keyword ${kw}`,
+        range,
+      }));
+
+      const moduleItems: monacoDefault.languages.CompletionItem[] = PYTHON_MODULES.map((mod) => ({
+        label: mod.name,
+        kind: m.languages.CompletionItemKind.Module,
+        insertText: mod.name,
+        detail: `module ${mod.name}`,
+        documentation: mod.doc,
+        range,
+      }));
+
+      const snippetItems: monacoDefault.languages.CompletionItem[] = SNIPPETS.map((s) => ({
+        label: s.label,
+        kind: m.languages.CompletionItemKind.Snippet,
+        insertText: s.insertText,
+        insertTextRules: m.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+        detail: s.detail,
+        documentation: s.documentation,
+        range,
+      }));
+
+      // Extract existing local identifiers from the document for IntelliSense
+      const docText = model.getValue();
+      const identifierRegex = /\b([a-zA-Z_][a-zA-Z0-9_]*)\b/g;
+      const seen = new Set<string>([
+        ...PYTHON_KEYWORDS,
+        ...PYTHON_MODULES.map((mod) => mod.name),
+        ...BUILTIN_FUNCTIONS.map((b) => b.label),
+      ]);
+      const docSymbols: monacoDefault.languages.CompletionItem[] = [];
+
+      let matchExec: RegExpExecArray | null;
+      while ((matchExec = identifierRegex.exec(docText)) !== null) {
+        const id = matchExec[1];
+        if (id.length > 2 && !seen.has(id)) {
+          seen.add(id);
+          docSymbols.push({
+            label: id,
+            kind: m.languages.CompletionItemKind.Variable,
+            insertText: id,
+            detail: `symbol ${id}`,
+            range,
+          });
+        }
+      }
+
+      return {
+        suggestions: [
+          ...snippetItems,
+          ...builtinItems,
+          ...keywordItems,
+          ...moduleItems,
+          ...docSymbols,
+        ],
+      };
+    },
+  });
+
+  // 2. Hover Provider: displays function signatures and docstrings on mouse hover
+  m.languages.registerHoverProvider("python", {
+    provideHover(model, position) {
+      const word = model.getWordAtPosition(position);
+      if (!word) return null;
+
+      const name = word.word;
+      const builtinMatch = BUILTIN_FUNCTIONS.find((item) => item.label === name);
+      if (builtinMatch) {
+        return {
+          range: new m.Range(
+            position.lineNumber,
+            word.startColumn,
+            position.lineNumber,
+            word.endColumn,
+          ),
+          contents: [
+            { value: `\`\`\`python\n${builtinMatch.detail ?? builtinMatch.label}\n\`\`\`` },
+            { value: builtinMatch.documentation ?? "" },
+          ],
+        };
+      }
+
+      const mathMatch = MATH_MEMBERS.find((item) => item.label === name);
+      if (mathMatch) {
+        return {
+          range: new m.Range(
+            position.lineNumber,
+            word.startColumn,
+            position.lineNumber,
+            word.endColumn,
+          ),
+          contents: [
+            { value: `\`\`\`python\n${mathMatch.detail ?? mathMatch.label}\n\`\`\`` },
+            { value: mathMatch.documentation ?? "" },
+          ],
+        };
+      }
+
+      const moduleMatch = PYTHON_MODULES.find((mod) => mod.name === name);
+      if (moduleMatch) {
+        return {
+          range: new m.Range(
+            position.lineNumber,
+            word.startColumn,
+            position.lineNumber,
+            word.endColumn,
+          ),
+          contents: [
+            { value: `\`\`\`python\nmodule ${moduleMatch.name}\n\`\`\`` },
+            { value: moduleMatch.doc },
+          ],
+        };
+      }
+
+      return null;
+    },
+  });
+
+  // 3. Signature Help Provider: shows parameter hints when typing "(" or ","
+  m.languages.registerSignatureHelpProvider("python", {
+    signatureHelpTriggerCharacters: ["(", ","],
+    provideSignatureHelp(model, position) {
+      const lineContent = model.getLineContent(position.lineNumber);
+      const textBefore = lineContent.slice(0, position.column - 1);
+
+      const match = textBefore.match(/([A-Za-z0-9_]+)\s*\([^)]*$/);
+      if (!match) return null;
+
+      const funcName = match[1];
+
+      const signaturesMap: Record<string, { label: string; doc: string; params: string[] }> = {
+        print: {
+          label: "print(*values, sep=' ', end='\\n', file=sys.stdout, flush=False)",
+          doc: "Prints the values to a stream, or to sys.stdout by default.",
+          params: [
+            "*values: objects to print",
+            "sep=' ': string inserted between values",
+            "end='\\n': string appended after the last value",
+            "file=sys.stdout",
+            "flush=False",
+          ],
+        },
+        range: {
+          label: "range(stop) | range(start, stop[, step])",
+          doc: "Returns a sequence of numbers from start to stop by step.",
+          params: ["start: start number", "stop: stop number", "step=1: step difference"],
+        },
+        input: {
+          label: "input(prompt='', /) -> str",
+          doc: "Read a string from standard input.",
+          params: ["prompt='': prompt message to display"],
+        },
+        round: {
+          label: "round(number, ndigits=None) -> number",
+          doc: "Round a number to a given precision in decimal digits.",
+          params: ["number: number to round", "ndigits=None: precision digits"],
+        },
+        int: {
+          label: "int(x=0) -> int | int(x, base=10)",
+          doc: "Convert a number or string to an integer.",
+          params: ["x: value to convert", "base=10: numeric base"],
+        },
+        float: {
+          label: "float(x=0.0) -> float",
+          doc: "Convert a string or number to a floating point number.",
+          params: ["x: value to convert"],
+        },
+        str: {
+          label: "str(object='') -> str",
+          doc: "Create a new string object from the given object.",
+          params: ["object: value to convert"],
+        },
+        len: {
+          label: "len(obj, /) -> int",
+          doc: "Return the number of items in a container.",
+          params: ["obj: container object"],
+        },
+        open: {
+          label: "open(file, mode='r', encoding=None)",
+          doc: "Open file and return a stream.",
+          params: ["file: path to file", "mode='r': opening mode", "encoding=None"],
+        },
+        isinstance: {
+          label: "isinstance(obj, class_or_tuple, /) -> bool",
+          doc: "Return whether an object is an instance of a class.",
+          params: ["obj: object to check", "class_or_tuple: type or tuple of types"],
+        },
+        sqrt: {
+          label: "math.sqrt(x, /) -> float",
+          doc: "Return the square root of x.",
+          params: ["x: float value"],
+        },
+        pow: {
+          label: "math.pow(x, y, /) -> float",
+          doc: "Return x**y (x to the power of y).",
+          params: ["x: base", "y: exponent"],
+        },
+      };
+
+      const sigInfo = signaturesMap[funcName];
+      if (!sigInfo) return null;
+
+      const openParenIndex = textBefore.lastIndexOf("(");
+      const argsText = textBefore.slice(openParenIndex + 1);
+      const activeParameter = (argsText.match(/,/g) || []).length;
+
+      return {
+        value: {
+          signatures: [
+            {
+              label: sigInfo.label,
+              documentation: sigInfo.doc,
+              parameters: sigInfo.params.map((p) => ({
+                label: p,
+                documentation: p,
+              })),
+            },
+          ],
+          activeSignature: 0,
+          activeParameter: Math.min(activeParameter, Math.max(0, sigInfo.params.length - 1)),
+        },
+        dispose: () => {},
+      };
+    },
+  });
+}
