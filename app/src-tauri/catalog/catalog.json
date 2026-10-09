@@ -1,5 +1,5 @@
 {
-  "version": 6,
+  "version": 9,
   "runtimes": [
     {
       "id": "python-3.13.15",
@@ -256,6 +256,66 @@
       ]
     },
     {
+      "id": "dotnet-10.0.401",
+      "exe": {
+        "windows": "dotnet.exe",
+        "macos": "dotnet",
+        "linux": "dotnet"
+      },
+      "version_args": [
+        "--version"
+      ],
+      "env": {
+        "DOTNET_CLI_HOME": "{shared}/dotnet-home",
+        "NUGET_PACKAGES": "{shared}/nuget-packages",
+        "DOTNET_CLI_TELEMETRY_OPTOUT": "1",
+        "DOTNET_NOLOGO": "1",
+        "DOTNET_SKIP_FIRST_TIME_EXPERIENCE": "1",
+        "DOTNET_MULTILEVEL_LOOKUP": "0"
+      },
+      "warmup": [
+        {
+          "files": {
+            "warmup.cs": "System.Console.WriteLine(\"ok\");\n"
+          },
+          "args": [
+            "run",
+            "warmup.cs"
+          ]
+        }
+      ],
+      "downloads": [
+        {
+          "os": "windows",
+          "arch": "x86_64",
+          "url": "https://builds.dotnet.microsoft.com/dotnet/Sdk/10.0.401/dotnet-sdk-10.0.401-win-x64.zip",
+          "sha256": "c1b96dea223e1ab2af8a51187e0cc96338d14c68834be1656136be18953cea09",
+          "kind": "zip"
+        },
+        {
+          "os": "macos",
+          "arch": "aarch64",
+          "url": "https://builds.dotnet.microsoft.com/dotnet/Sdk/10.0.401/dotnet-sdk-10.0.401-osx-arm64.tar.gz",
+          "sha256": "d143ccec4474dce17d7b778854598137a2599b81828bce51e809897fe8bdf035",
+          "kind": "tar.gz"
+        },
+        {
+          "os": "macos",
+          "arch": "x86_64",
+          "url": "https://builds.dotnet.microsoft.com/dotnet/Sdk/10.0.401/dotnet-sdk-10.0.401-osx-x64.tar.gz",
+          "sha256": "0616332aa0b5edfa19443a9d217d14d086d2e9605d7c72979cf8ebbb494ac792",
+          "kind": "tar.gz"
+        },
+        {
+          "os": "linux",
+          "arch": "x86_64",
+          "url": "https://builds.dotnet.microsoft.com/dotnet/Sdk/10.0.401/dotnet-sdk-10.0.401-linux-x64.tar.gz",
+          "sha256": "137268c8ad939c064ff1ee2a6fdf0899d8725377114ea012fbd1ad5fa2550418",
+          "kind": "tar.gz"
+        }
+      ]
+    },
+    {
       "id": "mysql-8.4.11",
       "exe": {
         "windows": "bin/mysqld.exe",
@@ -411,6 +471,20 @@
       },
       "run": {
         "program": "{binary}"
+      }
+    },
+    {
+      "extension": "cs",
+      "name": "C#",
+      "monaco": "csharp",
+      "formatter": "clang-format",
+      "runtime": "dotnet-10.0.401",
+      "icon": "<svg viewBox=\"0 0 24 24\" xmlns=\"http://www.w3.org/2000/svg\"><path d=\"m11.5 15.97.41 2.44c-.26.14-.68.27-1.24.39-.57.13-1.24.2-2.01.2-2.21-.04-3.87-.7-4.98-1.96C2.56 15.77 2 14.16 2 12.21c.05-2.31.72-4.08 2-5.32C5.32 5.64 6.96 5 8.94 5c.75 0 1.4.07 1.94.19s.94.25 1.2.4l-.58 2.49-1.06-.34c-.4-.1-.86-.15-1.39-.15-1.16-.01-2.12.36-2.87 1.1-.76.73-1.15 1.85-1.18 3.34 0 1.36.37 2.42 1.08 3.2.71.77 1.71 1.17 2.99 1.18l1.33-.12c.43-.08.79-.19 1.1-.32M13.89 19l.61-4H13l.34-2h1.5l.32-2h-1.5L14 9h1.5l.61-4h2l-.61 4h1l.61-4h2l-.61 4H22l-.34 2h-1.5l-.32 2h1.5L21 15h-1.5l-.61 4h-2l.61-4h-1l-.61 4h-2m2.95-6h1l.32-2h-1l-.32 2z\" fill=\"#0277bd\"/></svg>",
+      "run": {
+        "args": [
+          "run",
+          "{filename}"
+        ]
       }
     },
     {

@@ -515,7 +515,7 @@ mod tests {
 
         let languages = languages(&conn).unwrap();
         let exts: Vec<_> = languages.iter().map(|l| l.extension.as_str()).collect();
-        assert_eq!(exts, ["py", "js", "c", "cpp", "java", "go", "mysql.sql"]);
+        assert_eq!(exts, ["py", "js", "c", "cpp", "java", "go", "cs", "mysql.sql"]);
 
         let c = language(&conn, "c").unwrap().unwrap();
         assert_eq!(c.kind, Kind::Program);
@@ -526,6 +526,7 @@ mod tests {
         assert_eq!(zig.downloads.len(), 4);
         assert_eq!(zig.warmup.len(), 2);
         assert!(is_supported(&conn, "java").unwrap());
+        assert!(is_supported(&conn, "cs").unwrap());
         assert!(!is_supported(&conn, "rb").unwrap());
 
         let mysql = language(&conn, "mysql.sql").unwrap().unwrap();
