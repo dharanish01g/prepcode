@@ -848,6 +848,12 @@ const SNIPPETS = [
     documentation: "Standard entry point for a C# program.",
   },
   {
+    label: "svm",
+    insertText: "static void Main(string[] args)\n{\n    $0\n}",
+    detail: "static void Main method",
+    documentation: "Standard entry point for a C# program.",
+  },
+  {
     label: "prop",
     insertText: "public ${1:int} ${2:MyProperty} { get; set; }$0",
     detail: "auto-implemented property",
@@ -941,10 +947,31 @@ export function registerCSharpCompletions(mInstance?: Monaco) {
 
       // Check if user is typing immediately after a dot (e.g. "Console." or "Console.W")
       if (textBeforeWord.endsWith(".")) {
-        // Find identifier before the dot, handling chains like "System.Console."
-        const match = textBeforeWord.match(/([a-zA-Z0-9_]+)\.$/);
-        const target = match ? match[1].toLowerCase() : "";
+        // If the token before the dot is a numeric literal (e.g. "5."), do not suggest members
+        if (/\b\d+\.$/.test(textBeforeWord)) {
+          return { suggestions: [] };
+        }
 
+        // Find identifier before the dot, handling chains like "System.Console."
+        const match = textBeforeWord.match(/([a-zA-Z_][a-zA-Z0-9_]*)\.$/);
+        if (!match) {
+          return { suggestions: [] };
+        }
+
+        const target = match[1].toLowerCase();
+
+        if (target === "system") {
+          return {
+            suggestions: CSHARP_TYPES.map((t) => ({
+              label: t.name,
+              kind: m.languages.CompletionItemKind.Class,
+              insertText: t.name,
+              detail: `class System.${t.name}`,
+              documentation: t.doc,
+              range,
+            })),
+          };
+        }
         if (target === "console") {
           return { suggestions: toCompletionItems(CONSOLE_MEMBERS, range) };
         }
@@ -980,7 +1007,7 @@ export function registerCSharpCompletions(mInstance?: Monaco) {
         };
       }
 
-      // Otherwise: suggest Keywords, Types, Snippets, and Document Identifiers
+      // Otherwise: suggest Keywords, Types, and Snippets (Monaco handles document word completions natively)
       const keywordItems: monacoDefault.languages.CompletionItem[] = CSHARP_KEYWORDS.map((kw) => ({
         label: kw,
         kind: m.languages.CompletionItemKind.Keyword,
@@ -998,227 +1025,239 @@ export function registerCSharpCompletions(mInstance?: Monaco) {
         range,
       }));
 
-      const snippetItems: monacoDefault.languages.CompletionItem[] = SNIPPETS.map((s) => ({
-        label: s.label,
-        kind: m.languages.CompletionItemKind.Snippet,
-        insertText: s.insertText,
-        insertTextRules: m.languages.CompletionItemInsertTextRule.InsertAsSnippet,
-        detail: s.detail,
-        documentation: s.documentation,
-        range,
-      }));
+      const snippetItems: monacoDefault.languages.CompletionItem[] = SNIPPETS.map((s) => {
+        let insertText = s.insertText;
 
-      // Top-level common method shortcuts:
-      const commonMethodItems = toCompletionItems(
-        [
-          {
-            label: "WriteLine",
-            snippet: "Console.WriteLine(${1});",
-            detail: "Console.WriteLine(object? value)",
-            documentation: "Writes line to standard output.",
-          },
-          {
-            label: "Write",
-            snippet: "Console.Write(${1});",
-            detail: "Console.Write(object? value)",
-            documentation: "Writes data to standard output.",
-          },
-          {
-            label: "ReadLine",
-            snippet: "Console.ReadLine()",
-            detail: "Console.ReadLine()",
-            documentation: "Reads line from standard input.",
-          },
-          {
-            label: "Concat",
-            snippet: "string.Concat(${1:a}, ${2:b})",
-            detail: "string.Concat(str0, str1)",
-          },
-          { label: "Contains", snippet: "Contains(${1})", detail: "bool Contains(item)" },
-          { label: "ContainsKey", snippet: "ContainsKey(${1})", detail: "bool ContainsKey(key)" },
-          {
-            label: "ContainsValue",
-            snippet: "ContainsValue(${1})",
-            detail: "bool ContainsValue(value)",
-          },
-          {
-            label: "Count",
-            kind: m.languages.CompletionItemKind.Property,
-            snippet: "Count",
-            detail: "int Count",
-          },
-        ],
-        range,
-      );
-
-      // Extract existing local identifiers from the document for IntelliSense
-      const docText = model.getValue();
-      const identifierRegex = /\b([a-zA-Z_][a-zA-Z0-9_]*)\b/g;
-      const seen = new Set<string>([...CSHARP_KEYWORDS, ...CSHARP_TYPES.map((t) => t.name)]);
-      const docSymbols: monacoDefault.languages.CompletionItem[] = [];
-
-      let matchExec: RegExpExecArray | null;
-      while ((matchExec = identifierRegex.exec(docText)) !== null) {
-        const id = matchExec[1];
-        if (id.length > 2 && !seen.has(id)) {
-          seen.add(id);
-          docSymbols.push({
-            label: id,
-            kind: m.languages.CompletionItemKind.Variable,
-            insertText: id,
-            detail: `symbol ${id}`,
-            range,
-          });
+        // Context-aware adjustment for "main" / "svm" snippet:
+        // If user already typed "static void", "static", or "void", avoid duplicating keywords.
+        if (s.label === "main" || s.label === "svm") {
+          if (/(?:^|\s)static\s+void$/.test(textBeforeWord)) {
+            insertText = "Main(string[] args)\n{\n    $0\n}";
+          } else if (/(?:^|\s)static$/.test(textBeforeWord)) {
+            insertText = "void Main(string[] args)\n{\n    $0\n}";
+          } else if (/(?:^|\s)void$/.test(textBeforeWord)) {
+            insertText = "Main(string[] args)\n{\n    $0\n}";
+          }
         }
-      }
+
+        return {
+          label: s.label,
+          kind: m.languages.CompletionItemKind.Snippet,
+          insertText,
+          insertTextRules: m.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+          detail: s.detail,
+          documentation: s.documentation,
+          range,
+        };
+      });
 
       return {
-        suggestions: [
-          ...snippetItems,
-          ...typeItems,
-          ...keywordItems,
-          ...commonMethodItems,
-          ...docSymbols,
-        ],
+        suggestions: [...snippetItems, ...typeItems, ...keywordItems],
       };
     },
   });
 
-  // 2. Hover Provider: displays method signatures and docs on mouse hover
+  // 2. Hover Provider: displays method signatures and docs on mouse hover only when properly qualified
   m.languages.registerHoverProvider("csharp", {
     provideHover(model, position) {
       const word = model.getWordAtPosition(position);
       if (!word) return null;
 
+      const lineContent = model.getLineContent(position.lineNumber);
+      const textBefore = lineContent.slice(0, word.startColumn - 1).trimEnd();
       const name = word.word;
-      const consoleMatch = CONSOLE_MEMBERS.find((item) => item.label === name);
-      if (consoleMatch) {
-        return {
-          range: new m.Range(
-            position.lineNumber,
-            word.startColumn,
-            position.lineNumber,
-            word.endColumn,
-          ),
-          contents: [
-            { value: `\`\`\`csharp\n${consoleMatch.detail ?? consoleMatch.label}\n\`\`\`` },
-            { value: consoleMatch.documentation ?? "" },
-          ],
-        };
+
+      // Only show Console member docs when preceded by "Console."
+      if (textBefore.endsWith("Console.")) {
+        const consoleMatch = CONSOLE_MEMBERS.find((item) => item.label === name);
+        if (consoleMatch) {
+          return {
+            range: new m.Range(
+              position.lineNumber,
+              word.startColumn,
+              position.lineNumber,
+              word.endColumn,
+            ),
+            contents: [
+              { value: `\`\`\`csharp\n${consoleMatch.detail ?? consoleMatch.label}\n\`\`\`` },
+              { value: consoleMatch.documentation ?? "" },
+            ],
+          };
+        }
       }
 
-      const mathMatch = MATH_MEMBERS.find((item) => item.label === name);
-      if (mathMatch) {
-        return {
-          range: new m.Range(
-            position.lineNumber,
-            word.startColumn,
-            position.lineNumber,
-            word.endColumn,
-          ),
-          contents: [
-            { value: `\`\`\`csharp\n${mathMatch.detail ?? mathMatch.label}\n\`\`\`` },
-            { value: mathMatch.documentation ?? "" },
-          ],
-        };
+      // Only show Math member docs when preceded by "Math."
+      if (textBefore.endsWith("Math.")) {
+        const mathMatch = MATH_MEMBERS.find((item) => item.label === name);
+        if (mathMatch) {
+          return {
+            range: new m.Range(
+              position.lineNumber,
+              word.startColumn,
+              position.lineNumber,
+              word.endColumn,
+            ),
+            contents: [
+              { value: `\`\`\`csharp\n${mathMatch.detail ?? mathMatch.label}\n\`\`\`` },
+              { value: mathMatch.documentation ?? "" },
+            ],
+          };
+        }
       }
 
-      const typeMatch = CSHARP_TYPES.find((t) => t.name === name);
-      if (typeMatch) {
-        return {
-          range: new m.Range(
-            position.lineNumber,
-            word.startColumn,
-            position.lineNumber,
-            word.endColumn,
-          ),
-          contents: [
-            { value: `\`\`\`csharp\nclass System.${typeMatch.name}\n\`\`\`` },
-            { value: typeMatch.doc },
-          ],
-        };
+      // Only show Convert member docs when preceded by "Convert."
+      if (textBefore.endsWith("Convert.")) {
+        const convertMatch = CONVERT_MEMBERS.find((item) => item.label === name);
+        if (convertMatch) {
+          return {
+            range: new m.Range(
+              position.lineNumber,
+              word.startColumn,
+              position.lineNumber,
+              word.endColumn,
+            ),
+            contents: [
+              { value: `\`\`\`csharp\n${convertMatch.detail ?? convertMatch.label}\n\`\`\`` },
+              { value: convertMatch.documentation ?? "" },
+            ],
+          };
+        }
+      }
+
+      // Only show Class docs when hovering directly on the type name or preceded by System.
+      if (!textBefore.endsWith(".") || textBefore.endsWith("System.")) {
+        const typeMatch = CSHARP_TYPES.find((t) => t.name === name);
+        if (typeMatch) {
+          return {
+            range: new m.Range(
+              position.lineNumber,
+              word.startColumn,
+              position.lineNumber,
+              word.endColumn,
+            ),
+            contents: [
+              { value: `\`\`\`csharp\nclass System.${typeMatch.name}\n\`\`\`` },
+              { value: typeMatch.doc },
+            ],
+          };
+        }
       }
 
       return null;
     },
   });
 
-  // 3. Signature Help Provider: shows parameter hints when typing "(" or ","
+  // 3. Signature Help Provider: shows parameter hints for known qualified calls and correctly handles nested parens
   m.languages.registerSignatureHelpProvider("csharp", {
     signatureHelpTriggerCharacters: ["(", ","],
     provideSignatureHelp(model, position) {
       const lineContent = model.getLineContent(position.lineNumber);
       const textBefore = lineContent.slice(0, position.column - 1);
 
-      const match = textBefore.match(/([A-Za-z0-9_]+)\s*\([^)]*$/);
+      // Parse nested parentheses backwards to find the enclosing call and active parameter
+      let parenDepth = 0;
+      let activeParameter = 0;
+      let callEnd = -1;
+
+      for (let i = textBefore.length - 1; i >= 0; i--) {
+        const ch = textBefore[i];
+        if (ch === ")") {
+          parenDepth++;
+        } else if (ch === "(") {
+          if (parenDepth > 0) {
+            parenDepth--;
+          } else {
+            callEnd = i;
+            break;
+          }
+        } else if (ch === "," && parenDepth === 0) {
+          activeParameter++;
+        }
+      }
+
+      if (callEnd === -1) return null;
+
+      const textBeforeCall = textBefore.slice(0, callEnd).trimEnd();
+      const match = textBeforeCall.match(/([A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)?)$/);
       if (!match) return null;
 
-      const methodName = match[1];
+      const callTarget = match[1];
 
       const signaturesMap: Record<string, { label: string; doc: string; params: string[] }> = {
-        WriteLine: {
+        "Console.WriteLine": {
           label: "void Console.WriteLine(object? value)",
           doc: "Writes the specified value to standard output followed by a line terminator.",
           params: ["value: The value to write."],
         },
-        Write: {
+        "Console.Write": {
           label: "void Console.Write(object? value)",
           doc: "Writes the specified value to standard output.",
           params: ["value: The value to write."],
         },
-        ReadLine: {
+        "Console.ReadLine": {
           label: "string? Console.ReadLine()",
           doc: "Reads the next line of characters from standard input.",
           params: [],
         },
-        Abs: {
+        "Math.Abs": {
           label: "T Math.Abs(T value)",
           doc: "Returns the absolute value of a number.",
           params: ["value: A number."],
         },
-        Max: {
+        "Math.Max": {
           label: "T Math.Max(T val1, T val2)",
           doc: "Returns the larger of two numbers.",
           params: ["val1: The first of two values.", "val2: The second of two values."],
         },
-        Min: {
+        "Math.Min": {
           label: "T Math.Min(T val1, T val2)",
           doc: "Returns the smaller of two numbers.",
           params: ["val1: The first of two values.", "val2: The second of two values."],
         },
-        Pow: {
+        "Math.Pow": {
           label: "double Math.Pow(double x, double y)",
           doc: "Returns a specified number raised to the specified power.",
           params: ["x: A double to be raised to a power.", "y: A double that specifies a power."],
         },
-        Sqrt: {
+        "Math.Sqrt": {
           label: "double Math.Sqrt(double d)",
           doc: "Returns the square root of a specified number.",
           params: ["d: The number whose square root is to be found."],
         },
-        Round: {
+        "Math.Round": {
           label: "double Math.Round(double a)",
           doc: "Rounds a value to the nearest integral value.",
           params: ["a: A double-precision floating-point number to be rounded."],
         },
-        ToInt32: {
+        "Convert.ToInt32": {
           label: "int Convert.ToInt32(object? value)",
           doc: "Converts a value to a 32-bit signed integer.",
           params: ["value: The value to convert."],
         },
-        Parse: {
+        "int.Parse": {
           label: "int int.Parse(string s)",
           doc: "Converts the string representation of a number to its 32-bit signed integer equivalent.",
           params: ["s: A string containing a number to convert."],
         },
+        "Int32.Parse": {
+          label: "int int.Parse(string s)",
+          doc: "Converts the string representation of a number to its 32-bit signed integer equivalent.",
+          params: ["s: A string containing a number to convert."],
+        },
+        "double.Parse": {
+          label: "double double.Parse(string s)",
+          doc: "Converts the string representation of a number to its double-precision floating-point equivalent.",
+          params: ["s: A string containing a number to convert."],
+        },
+        "Double.Parse": {
+          label: "double double.Parse(string s)",
+          doc: "Converts the string representation of a number to its double-precision floating-point equivalent.",
+          params: ["s: A string containing a number to convert."],
+        },
       };
 
-      const sigInfo = signaturesMap[methodName];
+      const sigInfo = signaturesMap[callTarget];
       if (!sigInfo) return null;
-
-      const openParenIndex = textBefore.lastIndexOf("(");
-      const argsText = textBefore.slice(openParenIndex + 1);
-      const activeParameter = (argsText.match(/,/g) || []).length;
 
       return {
         value: {
