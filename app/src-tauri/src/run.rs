@@ -33,6 +33,9 @@ pub enum RunEvent {
     /// The run is over. `stage` is "compile" if compilation failed.
     Exit {
         code: Option<i32>,
+        /// On macOS and Linux, the signal that ended it (e.g. 11 for a crash)
+        /// when there's no exit code.
+        signal: Option<i32>,
         stopped: bool,
         stage: &'static str,
     },
@@ -146,6 +149,7 @@ struct RunContext<'a> {
 
 struct Finished {
     code: Option<i32>,
+    signal: Option<i32>,
     stopped: bool,
 }
 
@@ -195,6 +199,7 @@ impl RunContext<'_> {
             if finished.stopped || finished.code != Some(0) || !binary.is_file() {
                 self.send(RunEvent::Exit {
                     code: finished.code,
+                    signal: finished.signal,
                     stopped: finished.stopped,
                     stage: "compile",
                 });
@@ -206,7 +211,12 @@ impl RunContext<'_> {
         let mut program = Command::from(step_command(run, runtime, exe, &vars));
         program.current_dir(workdir);
         let finished = self.execute(program, true).await?;
-        self.send(RunEvent::Exit { code: finished.code, stopped: finished.stopped, stage: "run" });
+        self.send(RunEvent::Exit {
+            code: finished.code,
+            signal: finished.signal,
+            stopped: finished.stopped,
+            stage: "run",
+        });
         Ok(())
     }
 
@@ -263,7 +273,11 @@ impl RunContext<'_> {
         }
 
         let status = status.map_err(|e| format!("Lost track of the program: {e}"))?;
-        Ok(Finished { code: status.code(), stopped })
+        #[cfg(unix)]
+        let signal = std::os::unix::process::ExitStatusExt::signal(&status);
+        #[cfg(windows)]
+        let signal = None;
+        Ok(Finished { code: status.code(), signal, stopped })
     }
 }
 
