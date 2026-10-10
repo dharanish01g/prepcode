@@ -994,18 +994,36 @@ export function registerCSharpCompletions(mInstance?: Monaco) {
         return { suggestions: toCompletionItems(COMMON_INSTANCE_MEMBERS, range) };
       }
 
-      // Check if user is typing a `using` directive at top-level or namespace (e.g. "using System")
+      // Check if user is typing a `using` directive (e.g. "using System" or "using static System.")
+      // Directives can only appear before class/type definitions and must not match `using var` or `using (...)`
       const textBeforeCursor = lineContent.slice(0, position.column - 1);
-      if (/^\s*(?:global\s+)?using\s+(?:static\s+)?([a-zA-Z_][\w.]*)?$/.test(textBeforeCursor)) {
-        return {
-          suggestions: COMMON_NAMESPACES.map((ns) => ({
-            label: ns,
-            kind: m.languages.CompletionItemKind.Module,
-            insertText: `${ns};`,
-            detail: `namespace ${ns}`,
-            range,
-          })),
-        };
+      const isUsingDirectivePattern =
+        /^\s*(?:global\s+)?using\s+(?:static\s+)?(?!var\b|\()([a-zA-Z_][\w.]*)?$/.test(
+          textBeforeCursor,
+        );
+
+      if (isUsingDirectivePattern) {
+        // Ensure we are not inside a class / method body
+        let hasClassBefore = false;
+        for (let ln = 1; ln < position.lineNumber; ln++) {
+          const l = model.getLineContent(ln);
+          if (/\b(?:class|struct|interface|record|enum)\b/.test(l)) {
+            hasClassBefore = true;
+            break;
+          }
+        }
+
+        if (!hasClassBefore) {
+          return {
+            suggestions: COMMON_NAMESPACES.map((ns) => ({
+              label: ns,
+              kind: m.languages.CompletionItemKind.Module,
+              insertText: `${ns};`,
+              detail: `namespace ${ns}`,
+              range,
+            })),
+          };
+        }
       }
 
       // Otherwise: suggest Keywords, Types, and Snippets (Monaco handles document word completions natively)
