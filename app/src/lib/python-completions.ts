@@ -643,8 +643,7 @@ const JSON_MEMBERS: CompletionItemDef[] = [
   },
 ];
 
-const COMMON_INSTANCE_MEMBERS: CompletionItemDef[] = [
-  // String methods
+const STRING_MEMBERS: CompletionItemDef[] = [
   {
     label: "split",
     snippet: 'split("${1: }")',
@@ -742,8 +741,9 @@ const COMMON_INSTANCE_MEMBERS: CompletionItemDef[] = [
     detail: "str.isalnum() -> bool",
     documentation: "Return True if all characters in S are alphanumeric.",
   },
+];
 
-  // List methods
+const LIST_MEMBERS: CompletionItemDef[] = [
   {
     label: "append",
     snippet: "append(${1:item})",
@@ -804,8 +804,9 @@ const COMMON_INSTANCE_MEMBERS: CompletionItemDef[] = [
     detail: "copy() -> shallow copy",
     documentation: "Return a shallow copy.",
   },
+];
 
-  // Dict methods
+const DICT_MEMBERS: CompletionItemDef[] = [
   {
     label: "keys",
     snippet: "keys()",
@@ -842,8 +843,9 @@ const COMMON_INSTANCE_MEMBERS: CompletionItemDef[] = [
     detail: "dict.setdefault(key, default=None, /) -> value",
     documentation: "Insert key with a value of default if key is not in the dictionary.",
   },
+];
 
-  // Set methods
+const SET_MEMBERS: CompletionItemDef[] = [
   {
     label: "add",
     snippet: "add(${1:element})",
@@ -873,6 +875,70 @@ const COMMON_INSTANCE_MEMBERS: CompletionItemDef[] = [
     snippet: "difference(${1:other})",
     detail: "set.difference(*others) -> set",
     documentation: "Return the difference of two or more sets as a new set.",
+  },
+];
+
+const COMMON_INSTANCE_MEMBERS: CompletionItemDef[] = [
+  {
+    label: "__class__",
+    snippet: "__class__",
+    detail: "type(self)",
+    documentation: "The type/class of the instance.",
+  },
+  {
+    label: "__doc__",
+    snippet: "__doc__",
+    detail: "Documentation string",
+    documentation: "The documentation string of the object.",
+  },
+  {
+    label: "__init__",
+    snippet: "__init__(${1:self})",
+    detail: "Constructor method",
+    documentation: "Called when the instance is created.",
+  },
+  {
+    label: "__str__",
+    snippet: "__str__()",
+    detail: "str(self) string representation",
+    documentation: "Called by str(object) and the built-in format() and print().",
+  },
+  {
+    label: "__repr__",
+    snippet: "__repr__()",
+    detail: "repr(self) formal representation",
+    documentation: "Called by the repr() built-in function to compute the string representation.",
+  },
+  {
+    label: "__eq__",
+    snippet: "__eq__(${1:other})",
+    detail: "bool self.__eq__(other)",
+    documentation: "Equality comparison operator (==).",
+  },
+  {
+    label: "__ne__",
+    snippet: "__ne__(${1:other})",
+    detail: "bool self.__ne__(other)",
+    documentation: "Inequality comparison operator (!=).",
+  },
+  {
+    label: "__hash__",
+    snippet: "__hash__()",
+    detail: "int self.__hash__()",
+    documentation:
+      "Called by built-in function hash() and for operations on members of hashed collections.",
+  },
+  {
+    label: "__sizeof__",
+    snippet: "__sizeof__()",
+    detail: "int self.__sizeof__()",
+    documentation: "Returns the size of the object in bytes.",
+  },
+  {
+    label: "__dir__",
+    snippet: "__dir__()",
+    detail: "list[str] self.__dir__()",
+    documentation: "Returns list of valid attributes for the object.",
   },
 ];
 
@@ -1076,7 +1142,586 @@ function toCompletionItems(
   }));
 }
 
-let isRegistered = false;
+const PYTHON_KEYWORD_SET = new Set(PYTHON_KEYWORDS);
+const PYTHON_BUILTIN_SET = new Set(BUILTIN_FUNCTIONS.map((f) => f.label));
+const PYTHON_MODULE_SET = new Set(PYTHON_MODULES.map((m) => m.name));
+
+/**
+ * Deduplicates completion items keyed by label, kind, insertText, and detail.
+ * Preserves legitimate overloads while removing identical duplicate items.
+ */
+function deduplicateSuggestions(
+  items: monacoDefault.languages.CompletionItem[],
+): monacoDefault.languages.CompletionItem[] {
+  const seen = new Set<string>();
+  const unique: monacoDefault.languages.CompletionItem[] = [];
+  for (const item of items) {
+    const insertKey =
+      typeof item.insertText === "string" ? item.insertText : JSON.stringify(item.insertText);
+    const key = `${item.label}|${item.kind ?? ""}|${insertKey}|${item.detail ?? ""}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      unique.push(item);
+    }
+  }
+  return unique;
+}
+
+/**
+ * Strips Python '#' comments from a single line while respecting string literals.
+ * Preserves '#' characters occurring inside single or double quoted strings.
+ */
+function stripPythonComment(line: string): string {
+  let inQuote: string | null = null;
+  let isEscaped = false;
+
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (isEscaped) {
+      isEscaped = false;
+      continue;
+    }
+    if (ch === "\\") {
+      isEscaped = true;
+      continue;
+    }
+    if (inQuote !== null) {
+      if (ch === inQuote) {
+        inQuote = null;
+      }
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      inQuote = ch;
+      continue;
+    }
+    if (ch === "#") {
+      return line.slice(0, i);
+    }
+  }
+  return line;
+}
+
+interface PythonScopes {
+  /** owner[ln] = header line of the innermost def/class that contains line ln (0 = module level). */
+  owner: number[];
+  /** Header lines of the def/class scopes whose names are visible from the cursor line. */
+  visible: Set<number>;
+  /** Whether each header line is a def or a class. */
+  kind: Map<number, "def" | "class">;
+}
+
+/**
+ * Works out which def/class body every line belongs to, and which of those scopes
+ * the cursor can see. Indented lines inside module-level if/for/while/with blocks
+ * still belong to the module, so their variables stay visible after the block ends.
+ */
+function computePythonScopes(
+  model: monacoDefault.editor.ITextModel,
+  cursorLine: number,
+): PythonScopes {
+  const lineCount = model.getLineCount();
+  const owner: number[] = new Array(lineCount + 2).fill(0);
+  const parent = new Map<number, number>();
+  const kind = new Map<number, "def" | "class">();
+  const stack: { line: number; indent: number }[] = [];
+  let cursorOwner = 0;
+
+  for (let ln = 1; ln <= lineCount; ln++) {
+    const raw = model.getLineContent(ln);
+    const code = stripPythonComment(raw);
+    const isCursor = ln === cursorLine;
+    if (!code.trim() && !isCursor) {
+      owner[ln] = stack.length ? stack[stack.length - 1].line : 0;
+      continue;
+    }
+    const indent = raw.match(/^\s*/)?.[0].length ?? 0;
+    // A line starting with a closing bracket continues a multi-line statement
+    if (!isCursor && /^\s*[)\\]}]/.test(code)) {
+      owner[ln] = stack.length ? stack[stack.length - 1].line : 0;
+      continue;
+    }
+    while (stack.length && stack[stack.length - 1].indent >= indent) stack.pop();
+    const top = stack.length ? stack[stack.length - 1].line : 0;
+    owner[ln] = top;
+    if (isCursor) cursorOwner = top;
+
+    const header = code.match(/^\s*(?:async\s+)?(def|class)\s+[a-zA-Z_]\w*/);
+    if (header) {
+      parent.set(ln, top);
+      kind.set(ln, header[1] === "def" ? "def" : "class");
+      stack.push({ line: ln, indent });
+    }
+  }
+
+  // Python rule: a function body can't see the variables of an enclosing class body.
+  const visible = new Set<number>();
+  let sawDef = false;
+  for (let c = cursorOwner; c !== 0; c = parent.get(c) ?? 0) {
+    if (kind.get(c) === "def") {
+      visible.add(c);
+      sawDef = true;
+    } else if (!sawDef) {
+      visible.add(c);
+    }
+  }
+  return { owner, visible, kind };
+}
+
+function isLineVisible(scopes: PythonScopes, ln: number): boolean {
+  const o = scopes.owner[ln] ?? 0;
+  return o === 0 || scopes.visible.has(o);
+}
+
+/**
+ * Lightweight type inference for Python expressions preceding a dot.
+ * Scans the preceding code backwards to find assignments, type annotations,
+ * or literal values to determine if the target is a str, list, dict, set, etc.
+ */
+function inferPythonType(
+  model: monacoDefault.editor.ITextModel,
+  position: monacoDefault.Position,
+  textBeforeWord: string,
+): "str" | "list" | "dict" | "set" | "unknown" {
+  const expr = textBeforeWord.slice(0, -1).trim();
+  if (!expr) return "unknown";
+
+  // Only look at declarations the cursor can actually see (not other functions' locals)
+  const scopes = computePythonScopes(model, position.lineNumber);
+
+  // Check literal expressions:
+  if (
+    (expr.startsWith('"') && expr.endsWith('"')) ||
+    (expr.startsWith("'") && expr.endsWith("'")) ||
+    (/^f["']/.test(expr) && (expr.endsWith('"') || expr.endsWith("'")))
+  ) {
+    return "str";
+  }
+
+  // List literal: must start with [ and end with ] (not subscript indexing like student["name"])
+  if (expr.startsWith("[") && expr.endsWith("]")) {
+    return "list";
+  }
+
+  // Dict / Set literal: must start with { and end with }
+  if (expr.startsWith("{") && expr.endsWith("}")) {
+    return expr.includes(":") ? "dict" : "set";
+  }
+
+  // Subscript / index access: e.g. student["name"], arr[0], or text[0]
+  const subscriptMatch = expr.match(/^([a-zA-Z_]\w*)\[(.*)\]$/);
+  if (subscriptMatch) {
+    const baseVar = subscriptMatch[1];
+    const keyPart = subscriptMatch[2].trim();
+    // Scan backwards to find the base variable's declaration
+    for (let ln = position.lineNumber; ln >= 1; ln--) {
+      const rawLine = model.getLineContent(ln);
+      const line = stripPythonComment(rawLine).trim();
+      if (!line) continue;
+      if (!isLineVisible(scopes, ln)) continue;
+
+      // Type annotations: baseVar: list[str], baseVar: list[list[int]], baseVar: str
+      const annotMatch = line.match(new RegExp(`^${baseVar}\\s*:\\s*(.+)`));
+      if (annotMatch) {
+        const hint = annotMatch[1].toLowerCase();
+        if (
+          hint.startsWith("str") ||
+          hint.includes("list[str]") ||
+          hint.includes("list[string]") ||
+          hint.includes("dict[str, str]")
+        ) {
+          return "str";
+        }
+        if (hint.includes("list[list") || hint.includes("list[list[")) {
+          return "list";
+        }
+      }
+
+      const assignMatch = line.match(new RegExp(`^${baseVar}\\s*(?::[^=]+)?\\s*=\\s*(.+)`));
+      if (assignMatch) {
+        const rhs = assignMatch[1].trim();
+
+        // 1. Indexing a string literal or string function produces a str (e.g. text[0])
+        if (
+          (rhs.startsWith('"') && rhs.endsWith('"')) ||
+          (rhs.startsWith("'") && rhs.endsWith("'")) ||
+          /^f["']/.test(rhs) ||
+          /^str\s*\(/.test(rhs) ||
+          /^input\s*\(/.test(rhs)
+        ) {
+          return "str";
+        }
+
+        // 2. Indexing a nested list produces a list (e.g. matrix = [[1, 2]]; matrix[0].)
+        if (/^\[\s*\[/.test(rhs)) {
+          return "list";
+        }
+
+        // 3. Indexing a list of dicts produces a dict (e.g. records = [{"a": 1}]; records[0].)
+        if (/^\[\s*\{/.test(rhs)) {
+          return "dict";
+        }
+
+        // 4. Indexing a list of strings produces a str (e.g. words = ["hello", "world"] or words = text.split(); words[0].)
+        if (/\.split(?:lines)?\s*\(/.test(rhs) || /^\[\s*["']/.test(rhs)) {
+          return "str";
+        }
+
+        // 5. Indexing a dict literal: inspect the specific key's value if possible
+        if (rhs.startsWith("{")) {
+          let dictContent = rhs;
+          if (!dictContent.includes("}")) {
+            for (let fwd = ln + 1; fwd <= Math.min(model.getLineCount(), ln + 25); fwd++) {
+              const nextL = stripPythonComment(model.getLineContent(fwd)).trim();
+              dictContent += " " + nextL;
+              if (nextL.includes("}")) break;
+            }
+          }
+          const cleanKey = keyPart.replace(/['"]/g, "");
+          // Escape regex special characters in the key to prevent crashes
+          const escapedKey = cleanKey.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+          // Use exact key match with word boundaries to avoid substring matching
+          // e.g. "name" must not match inside "username"
+          const keyRegex = new RegExp(`["']${escapedKey}["']\\s*:\\s*(.+)`);
+          const valMatch = dictContent.match(keyRegex);
+          if (valMatch) {
+            const valRhs = valMatch[1].trim();
+            if (valRhs.startsWith('"') || valRhs.startsWith("'") || /^f["']/.test(valRhs)) {
+              return "str";
+            }
+            if (valRhs.startsWith("[")) return "list";
+            if (valRhs.startsWith("{")) return "dict";
+          }
+          return "unknown";
+        }
+        break;
+      }
+    }
+    // Subscript result is not guaranteed to be a list or str; return unknown
+    return "unknown";
+  }
+
+  // Extract the variable or identifier immediately before the dot
+  const match = expr.match(/([a-zA-Z_]\w*)$/);
+  if (!match) return "unknown";
+  const varName = match[1];
+
+  // Scan backwards from the current line to line 1
+  const startLine = position.lineNumber;
+  for (let ln = startLine; ln >= 1; ln--) {
+    const rawLine = model.getLineContent(ln);
+    const line = stripPythonComment(rawLine).trim();
+    if (!line) continue;
+    if (!isLineVisible(scopes, ln)) continue;
+
+    // Type annotation: varName: str or varName: list[...]
+    const annotMatch = line.match(new RegExp(`^${varName}\\s*:\\s*([a-zA-Z_]\\w*)`));
+    if (annotMatch) {
+      const typeHint = annotMatch[1].toLowerCase();
+      if (typeHint === "str") return "str";
+      if (typeHint === "list") return "list";
+      if (typeHint === "dict") return "dict";
+      if (typeHint === "set") return "set";
+    }
+
+    // Function parameter type annotation: def ...(varName: str, ...)
+    // Only for the def(s) that actually enclose the cursor
+    if (scopes.visible.has(ln) && scopes.kind.get(ln) === "def") {
+      const paramMatch = line.match(new RegExp(`\\b${varName}\\s*:\\s*([a-zA-Z_]\\w*)`));
+      if (paramMatch) {
+        const typeHint = paramMatch[1].toLowerCase();
+        if (typeHint === "str") return "str";
+        if (typeHint === "list") return "list";
+        if (typeHint === "dict") return "dict";
+        if (typeHint === "set") return "set";
+      }
+    }
+
+    // Variable assignment: varName = ...
+    const assignMatch = line.match(new RegExp(`^${varName}\\s*(?::[^=]+)?\\s*=\\s*(.+)`));
+    if (assignMatch) {
+      const rhs = assignMatch[1].trim();
+
+      // List detection (placed before string detection to correctly handle "hello world".split())
+      // Only match .split()/.splitlines() when it's the outermost call, not wrapped inside
+      // another function like len(text.strip())
+      if (
+        (/^\.split(?:lines)?\s*\(/.test(rhs.slice(rhs.search(/\.split/))) &&
+          !(/^[a-zA-Z_]\w*\s*\(/.test(rhs) && !/\.split/.test(rhs.slice(0, rhs.indexOf("("))))) ||
+        /^"[^"]*"\.split(?:lines)?\s*\(/.test(rhs) ||
+        /^'[^']*'\.split(?:lines)?\s*\(/.test(rhs) ||
+        /^[a-zA-Z_]\w*\.split(?:lines)?\s*\(/.test(rhs) ||
+        rhs.startsWith("[") ||
+        /^list\s*\(/.test(rhs)
+      ) {
+        return "list";
+      }
+
+      // String detection — only match patterns that clearly produce a string.
+      // Do NOT match .strip()/.lower() etc. when they appear inside wrapping calls
+      // like len(text.strip()), since the outer call determines the type.
+      const isOutermostStringMethod =
+        /^[a-zA-Z_]\w*\.(strip|lower|upper|replace|format|title|capitalize)\s*\(/.test(rhs) ||
+        /^"[^"]*"\.(strip|lower|upper|replace|format|title|capitalize)\s*\(/.test(rhs) ||
+        /^'[^']*'\.(strip|lower|upper|replace|format|title|capitalize)\s*\(/.test(rhs);
+      if (
+        (rhs.startsWith('"') && rhs.endsWith('"') && !rhs.includes(".split")) ||
+        (rhs.startsWith("'") && rhs.endsWith("'") && !rhs.includes(".split")) ||
+        (/^f["']/.test(rhs) && (rhs.endsWith('"') || rhs.endsWith("'"))) ||
+        (/^r["']/.test(rhs) && (rhs.endsWith('"') || rhs.endsWith("'"))) ||
+        /^str\s*\(/.test(rhs) ||
+        /^input\s*\(/.test(rhs) ||
+        isOutermostStringMethod ||
+        /["']\.join\s*\(/.test(rhs)
+      ) {
+        return "str";
+      }
+
+      // Dict detection
+      if (
+        (rhs.startsWith("{") && (rhs.includes(":") || rhs === "{}")) ||
+        /^dict\s*\(/.test(rhs) ||
+        /json\.loads\s*\(/.test(rhs)
+      ) {
+        return "dict";
+      }
+
+      // Set detection
+      if ((rhs.startsWith("{") && !rhs.includes(":")) || /^set\s*\(/.test(rhs)) {
+        return "set";
+      }
+
+      // If assigned to something else, stop tracing further
+      break;
+    }
+
+    // For loop: for varName in ...
+    const forMatch = line.match(new RegExp(`^for\\s+${varName}\\s+in\\s+(.+):?`));
+    if (forMatch) {
+      const iterable = forMatch[1].trim().replace(/:$/, "").trim();
+      // Iterating a string, or the list returned by a final .split()/.splitlines() call,
+      // yields strings. Don't match a .split() buried inside range(len(...)) and similar.
+      if (
+        iterable.startsWith('"') ||
+        iterable.startsWith("'") ||
+        /\.(?:split|splitlines)\s*\([^()]*\)$/.test(iterable)
+      ) {
+        return "str";
+      }
+      // The for-loop is the most recent binding for this variable; stop searching.
+      break;
+    }
+  }
+
+  return "unknown";
+}
+
+/**
+ * Scans the current document for user-defined variables, functions,
+ * classes, and identifiers so they appear instantly in autocomplete.
+ */
+function extractPythonDocumentSymbols(
+  model: monacoDefault.editor.ITextModel,
+  position: monacoDefault.Position,
+  range: monacoDefault.IRange,
+  monaco: Monaco,
+): monacoDefault.languages.CompletionItem[] {
+  const lineCount = model.getLineCount();
+  const currentWord = model.getWordUntilPosition(position).word;
+  const currentLine = position.lineNumber;
+
+  // Which def/class bodies can the cursor see? Variables inside other functions stay hidden,
+  // while variables inside module-level if/for/while/with blocks remain visible everywhere.
+  const scopes = computePythonScopes(model, currentLine);
+
+  const seen = new Set<string>();
+  const items: monacoDefault.languages.CompletionItem[] = [];
+
+  for (let ln = 1; ln <= lineCount; ln++) {
+    const rawLine = model.getLineContent(ln);
+    const line = stripPythonComment(rawLine);
+    if (!line.trim()) continue;
+
+    // Function definition (always visible module-wide)
+    const funcMatch = line.match(/^\s*def\s+([a-zA-Z_]\w*)/);
+    if (funcMatch) {
+      const name = funcMatch[1];
+      if (!seen.has(name) && name !== currentWord && !PYTHON_KEYWORD_SET.has(name)) {
+        seen.add(name);
+        items.push({
+          label: name,
+          kind: monaco.languages.CompletionItemKind.Function,
+          insertText: `${name}(${ln === currentLine ? "" : "$0"})`,
+          insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+          detail: `def ${name}() (local function)`,
+          range,
+          sortText: `0_${name}`,
+        });
+      }
+
+      // If this is the active enclosing function, also extract its parameters
+      if (scopes.visible.has(ln) && scopes.kind.get(ln) === "def") {
+        const paramMatch = line.match(/def\s+[a-zA-Z_]\w*\s*\(([^)]*)\)/);
+        if (paramMatch) {
+          const params: string[] = [];
+          let currentParam = "";
+          let pBracketDepth = 0;
+          for (let i = 0; i < paramMatch[1].length; i++) {
+            const ch = paramMatch[1][i];
+            if (ch === "[" || ch === "(") pBracketDepth++;
+            else if (ch === "]" || ch === ")") pBracketDepth--;
+
+            if (ch === "," && pBracketDepth === 0) {
+              params.push(currentParam);
+              currentParam = "";
+            } else {
+              currentParam += ch;
+            }
+          }
+          if (currentParam) params.push(currentParam);
+
+          for (const p of params) {
+            // Strip leading * or ** from parameter names (*args -> args, **kwargs -> kwargs)
+            let pRaw = p.trim().replace(/^\*{1,2}/, "");
+            // Split on first : or = that's not inside brackets (for type annotations like Dict[str, int])
+            let bracketD = 0;
+            let splitIdx = -1;
+            for (let ci = 0; ci < pRaw.length; ci++) {
+              const cc = pRaw[ci];
+              if (cc === "[" || cc === "(") bracketD++;
+              else if (cc === "]" || cc === ")") bracketD--;
+              else if ((cc === ":" || cc === "=") && bracketD === 0) {
+                splitIdx = ci;
+                break;
+              }
+            }
+            const pName = splitIdx === -1 ? pRaw.trim() : pRaw.slice(0, splitIdx).trim();
+            if (
+              pName &&
+              pName !== "self" &&
+              pName !== "cls" &&
+              !seen.has(pName) &&
+              pName !== currentWord &&
+              !PYTHON_KEYWORD_SET.has(pName)
+            ) {
+              seen.add(pName);
+              items.push({
+                label: pName,
+                kind: monaco.languages.CompletionItemKind.Variable,
+                insertText: pName,
+                detail: `parameter ${pName}`,
+                range,
+                sortText: `0_${pName}`,
+              });
+            }
+          }
+        }
+      }
+    }
+
+    // Class definition (always visible module-wide)
+    const classMatch = line.match(/^\s*class\s+([a-zA-Z_]\w*)/);
+    if (classMatch) {
+      const name = classMatch[1];
+      if (!seen.has(name) && name !== currentWord && !PYTHON_KEYWORD_SET.has(name)) {
+        seen.add(name);
+        items.push({
+          label: name,
+          kind: monaco.languages.CompletionItemKind.Class,
+          insertText: name,
+          detail: `class ${name} (local class)`,
+          range,
+          sortText: `0_${name}`,
+        });
+      }
+    }
+
+    // Check scope for local variables and loop variables:
+    // Module-level variables (unindented) are always in scope.
+    // Indented variables are only in scope if defined within the current active function,
+    // or within a module-level block (if/for/while/with) that contains the cursor.
+    const isIndented = /^\s+/.test(rawLine);
+    if (!isLineVisible(scopes, ln)) continue;
+
+    // Variable assignment: username = ... or username: str = ...
+    const varMatch = line.match(/^\s*([a-zA-Z_]\w*)\s*(?::\s*[^=]+)?\s*=/);
+    if (varMatch) {
+      const name = varMatch[1];
+      if (!seen.has(name) && name !== currentWord && !PYTHON_KEYWORD_SET.has(name)) {
+        seen.add(name);
+        items.push({
+          label: name,
+          kind: monaco.languages.CompletionItemKind.Variable,
+          insertText: name,
+          detail: `variable ${name} (${isIndented ? "local" : "module"})`,
+          range,
+          sortText: `0_${name}`,
+        });
+      }
+    }
+
+    // For loop variable: for user in users:
+    const forMatch = line.match(/^\s*for\s+([a-zA-Z_]\w*)\s+in\b/);
+    if (forMatch) {
+      const name = forMatch[1];
+      if (!seen.has(name) && name !== currentWord && !PYTHON_KEYWORD_SET.has(name)) {
+        seen.add(name);
+        items.push({
+          label: name,
+          kind: monaco.languages.CompletionItemKind.Variable,
+          insertText: name,
+          detail: `variable ${name} (loop)`,
+          range,
+          sortText: `0_${name}`,
+        });
+      }
+    }
+  }
+
+  // Also collect general identifier words from code only (excluding multiline strings, strings, and comments)
+  // But skip method/attribute names (words that appear immediately after a dot) to avoid
+  // polluting suggestions with things like 'append', 'strip', 'lower', etc.
+  const fullText = model.getValue();
+  const codeOnly = fullText
+    .replace(/"""[\s\S]*?"""/g, " ")
+    .replace(/'''[\s\S]*?'''/g, " ")
+    .replace(/"(?:\\.|[^"\\])*"/g, " ")
+    .replace(/'(?:\\.|[^'\\])*'/g, " ")
+    .replace(/#.*$/gm, " ");
+
+  const codeLines = codeOnly.split("\n");
+  for (let ln = 1; ln <= codeLines.length; ln++) {
+    if (!isLineVisible(scopes, ln)) continue;
+    const cleanLine = codeLines[ln - 1];
+    let wMatch: RegExpExecArray | null;
+    // Match identifiers but skip those preceded by a dot (method/attribute names)
+    const lineWordRegex = /(?:^|[^.])\b([a-zA-Z_]\w{1,})\b/g;
+    while ((wMatch = lineWordRegex.exec(cleanLine)) !== null) {
+      const word = wMatch[1];
+      if (
+        !seen.has(word) &&
+        word !== currentWord &&
+        !PYTHON_KEYWORD_SET.has(word) &&
+        !PYTHON_BUILTIN_SET.has(word) &&
+        !PYTHON_MODULE_SET.has(word)
+      ) {
+        seen.add(word);
+        items.push({
+          label: word,
+          kind: monaco.languages.CompletionItemKind.Variable,
+          insertText: word,
+          detail: `identifier (in scope)`,
+          range,
+          sortText: `1_${word}`,
+        });
+      }
+    }
+  }
+
+  return items;
+}
+
+const registeredMonacoInstances = new WeakSet<object>();
 
 /**
  * Registers offline autocomplete suggestions, standard library completions,
@@ -1084,8 +1729,8 @@ let isRegistered = false;
  */
 export function registerPythonCompletions(mInstance?: Monaco) {
   const m = mInstance ?? monacoDefault;
-  if (isRegistered) return;
-  isRegistered = true;
+  if (registeredMonacoInstances.has(m)) return;
+  registeredMonacoInstances.add(m);
 
   // 1. Autocomplete & Suggestions Provider
   m.languages.registerCompletionItemProvider("python", {
@@ -1127,6 +1772,21 @@ export function registerPythonCompletions(mInstance?: Monaco) {
         }
         if (/(?:^|[^\w.])json\.$/.test(textBeforeWord)) {
           return { suggestions: toCompletionItems(JSON_MEMBERS, range) };
+        }
+
+        // Infer type of the expression immediately before the dot:
+        const inferred = inferPythonType(model, position, textBeforeWord);
+        if (inferred === "str") {
+          return { suggestions: toCompletionItems(STRING_MEMBERS, range) };
+        }
+        if (inferred === "list") {
+          return { suggestions: toCompletionItems(LIST_MEMBERS, range) };
+        }
+        if (inferred === "dict") {
+          return { suggestions: toCompletionItems(DICT_MEMBERS, range) };
+        }
+        if (inferred === "set") {
+          return { suggestions: toCompletionItems(SET_MEMBERS, range) };
         }
 
         // Default member access for any object / instance expression (strings, lists, dicts, sets, etc.):
@@ -1222,8 +1882,16 @@ export function registerPythonCompletions(mInstance?: Monaco) {
         range,
       }));
 
+      const localSymbols = extractPythonDocumentSymbols(model, position, range, m);
+
       return {
-        suggestions: [...snippetItems, ...builtinItems, ...keywordItems, ...moduleItems],
+        suggestions: deduplicateSuggestions([
+          ...localSymbols,
+          ...snippetItems,
+          ...builtinItems,
+          ...keywordItems,
+          ...moduleItems,
+        ]),
       };
     },
   });
@@ -1402,16 +2070,30 @@ export function registerPythonCompletions(mInstance?: Monaco) {
   m.languages.registerSignatureHelpProvider("python", {
     signatureHelpTriggerCharacters: ["(", ","],
     provideSignatureHelp(model, position) {
-      const lineContent = model.getLineContent(position.lineNumber);
-      const textBefore = lineContent.slice(0, position.column - 1);
+      // Scan up to 50 lines backwards to support multiline function calls
+      const startLine = Math.max(1, position.lineNumber - 50);
+      const textBefore = model.getValueInRange({
+        startLineNumber: startLine,
+        startColumn: 1,
+        endLineNumber: position.lineNumber,
+        endColumn: position.column,
+      });
+
+      // Strip Python comments from each line before parsing, so that
+      // apostrophes inside comments (like # don't forget) do not
+      // corrupt the string-tracking state.
+      const strippedLines = textBefore.split("\n").map((l) => stripPythonComment(l));
+      const cleanedText = strippedLines.join("\n");
 
       // Parse from left to right tracking quotes ("...", '...') and nested parenthesis depth
       const parenStack: { openIdx: number; argCount: number; lastCommaIdx: number }[] = [];
       let inQuote: string | null = null;
       let isEscaped = false;
+      let bracketDepth = 0;
+      let braceDepth = 0;
 
-      for (let i = 0; i < textBefore.length; i++) {
-        const ch = textBefore[i];
+      for (let i = 0; i < cleanedText.length; i++) {
+        const ch = cleanedText[i];
         if (isEscaped) {
           isEscaped = false;
           continue;
@@ -1435,8 +2117,16 @@ export function registerPythonCompletions(mInstance?: Monaco) {
           parenStack.push({ openIdx: i, argCount: 0, lastCommaIdx: i });
         } else if (ch === ")") {
           parenStack.pop();
+        } else if (ch === "[") {
+          bracketDepth++;
+        } else if (ch === "]") {
+          if (bracketDepth > 0) bracketDepth--;
+        } else if (ch === "{") {
+          braceDepth++;
+        } else if (ch === "}") {
+          if (braceDepth > 0) braceDepth--;
         } else if (ch === ",") {
-          if (parenStack.length > 0) {
+          if (parenStack.length > 0 && bracketDepth === 0 && braceDepth === 0) {
             parenStack[parenStack.length - 1].argCount++;
             parenStack[parenStack.length - 1].lastCommaIdx = i;
           }
@@ -1449,7 +2139,7 @@ export function registerPythonCompletions(mInstance?: Monaco) {
       const callEnd = activeCall.openIdx;
       let activeParameter = activeCall.argCount;
 
-      const textBeforeCall = textBefore.slice(0, callEnd).trimEnd();
+      const textBeforeCall = cleanedText.slice(0, callEnd).trimEnd();
       // Match full qualified target chain (e.g. "os.path.join" or "math.sqrt" or "print")
       const match = textBeforeCall.match(/(?:^|[^\w.])([a-zA-Z_]\w*(?:\.[a-zA-Z_]\w*)*)$/);
       if (!match) return null;
@@ -1705,7 +2395,7 @@ export function registerPythonCompletions(mInstance?: Monaco) {
       if (!sigInfo) return null;
 
       // Handle varargs highlighting (e.g. print(a, b, c) keeps *values active for all positional args)
-      const currentArgText = textBefore.slice(activeCall.lastCommaIdx + 1).trim();
+      const currentArgText = cleanedText.slice(activeCall.lastCommaIdx + 1).trim();
       if (sigInfo.varargPositionalIdx !== undefined) {
         const isKeywordArg = currentArgText.includes("=");
         if (!isKeywordArg && activeParameter >= sigInfo.varargPositionalIdx) {

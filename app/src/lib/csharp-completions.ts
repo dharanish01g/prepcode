@@ -901,6 +901,75 @@ const COMMON_NAMESPACES = [
   "System.Threading.Tasks",
 ];
 
+const STATIC_TYPES = [
+  {
+    name: "Math",
+    fullName: "System.Math",
+    doc: "Provides constants and static methods for trigonometric, logarithmic, and mathematical functions.",
+  },
+  {
+    name: "Console",
+    fullName: "System.Console",
+    doc: "Represents standard input, output, and error streams for console applications.",
+  },
+  {
+    name: "Convert",
+    fullName: "System.Convert",
+    doc: "Converts a base data type to another base data type.",
+  },
+  {
+    name: "String",
+    fullName: "System.String",
+    doc: "Represents text as a sequence of UTF-16 code units.",
+  },
+  {
+    name: "Array",
+    fullName: "System.Array",
+    doc: "Provides methods for creating, manipulating, searching, and sorting arrays.",
+  },
+  {
+    name: "Environment",
+    fullName: "System.Environment",
+    doc: "Provides information about, and means to manipulate, the current environment and platform.",
+  },
+  {
+    name: "File",
+    fullName: "System.IO.File",
+    doc: "Provides static methods for the creation, copying, deletion, moving, and opening of a single file.",
+  },
+  {
+    name: "Directory",
+    fullName: "System.IO.Directory",
+    doc: "Exposes static methods for creating, moving, and enumerating through directories and subdirectories.",
+  },
+  {
+    name: "Path",
+    fullName: "System.IO.Path",
+    doc: "Performs operations on String instances that contain file or directory path information.",
+  },
+];
+
+/**
+ * Deduplicates completion items keyed by label, kind, insertText, and detail.
+ * Preserves legitimate overloads while removing identical duplicate items.
+ */
+function deduplicateSuggestions(
+  items: monacoDefault.languages.CompletionItem[],
+): monacoDefault.languages.CompletionItem[] {
+  const seen = new Set<string>();
+  const unique: monacoDefault.languages.CompletionItem[] = [];
+  for (const item of items) {
+    const insertKey =
+      typeof item.insertText === "string" ? item.insertText : JSON.stringify(item.insertText);
+    const key = `${item.label}|${item.kind ?? ""}|${insertKey}|${item.detail ?? ""}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      unique.push(item);
+    }
+  }
+  return unique;
+}
+
 function toCompletionItems(
   items: MethodItem[],
   range: monacoDefault.IRange,
@@ -918,7 +987,131 @@ function toCompletionItems(
   }));
 }
 
-let isRegistered = false;
+const CSHARP_KEYWORD_SET = new Set(CSHARP_KEYWORDS);
+const CSHARP_TYPE_SET = new Set(CSHARP_TYPES.map((t) => t.name));
+
+/**
+ * Scans the current C# document for user-defined variables, methods,
+ * classes, and identifiers so they appear instantly in autocomplete.
+ */
+function extractCSharpDocumentSymbols(
+  model: monacoDefault.editor.ITextModel,
+  position: monacoDefault.Position,
+  range: monacoDefault.IRange,
+  monaco: Monaco,
+): monacoDefault.languages.CompletionItem[] {
+  const lineCount = model.getLineCount();
+  const currentWord = model.getWordUntilPosition(position).word;
+
+  const seen = new Set<string>();
+  const items: monacoDefault.languages.CompletionItem[] = [];
+
+  for (let ln = 1; ln <= lineCount; ln++) {
+    const rawLine = model.getLineContent(ln);
+    const line = rawLine.split("//")[0].trim();
+    if (!line) continue;
+
+    // Variable declaration: `string username = ...` or `var username = ...` or `int count = 0;`
+    const varMatch = line.match(
+      /\b(?:var|[a-zA-Z_]\w*(?:<[^>]+>)?(?:\[\])?)\s+([a-zA-Z_]\w*)\s*(?:=|;|,)/,
+    );
+    if (varMatch) {
+      const name = varMatch[1];
+      if (
+        !seen.has(name) &&
+        name !== currentWord &&
+        !CSHARP_KEYWORD_SET.has(name) &&
+        !CSHARP_TYPE_SET.has(name)
+      ) {
+        seen.add(name);
+        items.push({
+          label: name,
+          kind: monaco.languages.CompletionItemKind.Variable,
+          insertText: name,
+          detail: `variable ${name} (local)`,
+          range,
+          sortText: `0_${name}`,
+        });
+      }
+    }
+
+    // Foreach variable: `foreach (var user in users)` or `foreach (string user in users)`
+    const foreachMatch = line.match(
+      /\bforeach\s*\(\s*(?:var|[a-zA-Z_]\w*)\s+([a-zA-Z_]\w*)\s+in\b/,
+    );
+    if (foreachMatch) {
+      const name = foreachMatch[1];
+      if (
+        !seen.has(name) &&
+        name !== currentWord &&
+        !CSHARP_KEYWORD_SET.has(name) &&
+        !CSHARP_TYPE_SET.has(name)
+      ) {
+        seen.add(name);
+        items.push({
+          label: name,
+          kind: monaco.languages.CompletionItemKind.Variable,
+          insertText: name,
+          detail: `variable ${name} (foreach)`,
+          range,
+          sortText: `0_${name}`,
+        });
+      }
+    }
+
+    // Class definition: `class MyClass`
+    const classMatch = line.match(/\bclass\s+([a-zA-Z_]\w*)/);
+    if (classMatch) {
+      const name = classMatch[1];
+      if (!seen.has(name) && name !== currentWord && !CSHARP_KEYWORD_SET.has(name)) {
+        seen.add(name);
+        items.push({
+          label: name,
+          kind: monaco.languages.CompletionItemKind.Class,
+          insertText: name,
+          detail: `class ${name} (local)`,
+          range,
+          sortText: `0_${name}`,
+        });
+      }
+    }
+  }
+
+  // Strip comments and string literals so words in comments or strings
+  // are not suggested as identifiers.
+  const fullText = model.getValue();
+  const codeWithoutCommentsAndStrings = fullText
+    .replace(/\/\*[\s\S]*?\*\//g, " ")
+    .replace(/\/\/.*$/gm, " ")
+    .replace(/@"(?:""|[^"])*"/g, " ")
+    .replace(/"(?:\\.|[^"\\])*"/g, " ");
+
+  const wordRegex = /\b([a-zA-Z_]\w{1,})\b/g;
+  let wMatch: RegExpExecArray | null;
+  while ((wMatch = wordRegex.exec(codeWithoutCommentsAndStrings)) !== null) {
+    const word = wMatch[1];
+    if (
+      !seen.has(word) &&
+      word !== currentWord &&
+      !CSHARP_KEYWORD_SET.has(word) &&
+      !CSHARP_TYPE_SET.has(word)
+    ) {
+      seen.add(word);
+      items.push({
+        label: word,
+        kind: monaco.languages.CompletionItemKind.Variable,
+        insertText: word,
+        detail: `identifier (document)`,
+        range,
+        sortText: `1_${word}`,
+      });
+    }
+  }
+
+  return items;
+}
+
+const registeredMonacoInstances = new WeakSet<object>();
 
 /**
  * Registers offline autocomplete suggestions, standard library completions,
@@ -926,8 +1119,8 @@ let isRegistered = false;
  */
 export function registerCSharpCompletions(mInstance?: Monaco) {
   const m = mInstance ?? monacoDefault;
-  if (isRegistered) return;
-  isRegistered = true;
+  if (registeredMonacoInstances.has(m)) return;
+  registeredMonacoInstances.add(m);
 
   // 1. Autocomplete & Suggestions Provider
   m.languages.registerCompletionItemProvider("csharp", {
@@ -945,12 +1138,19 @@ export function registerCSharpCompletions(mInstance?: Monaco) {
       // The text on this line preceding the word currently being typed:
       const textBeforeWord = lineContent.slice(0, word.startColumn - 1).trimEnd();
 
-      // Check if user is typing immediately after a dot (e.g. "Console." or "Console.W")
+      // Check if user is typing immediately after a dot (e.g. "Console." or "Console.W" or "using static System.")
       if (textBeforeWord.endsWith(".")) {
         // If the token before the dot is a numeric literal (e.g. "5."), do not suggest members
         if (/\b\d+\.$/.test(textBeforeWord)) {
           return { suggestions: [] };
         }
+
+        const isUsingStaticLine = /^\s*(?:global\s+)?using\s+static\s+/i.test(
+          lineContent.slice(0, position.column - 1),
+        );
+        const isUsingNamespaceLine =
+          !isUsingStaticLine &&
+          /^\s*(?:global\s+)?using\s+/i.test(lineContent.slice(0, position.column - 1));
 
         // Find identifier before the dot, handling chains like "System.Console."
         const match = textBeforeWord.match(/([a-zA-Z_][a-zA-Z0-9_]*)\.$/);
@@ -961,50 +1161,138 @@ export function registerCSharpCompletions(mInstance?: Monaco) {
         const target = match[1].toLowerCase();
 
         if (target === "system") {
+          if (isUsingNamespaceLine) {
+            // In `using System.`, suggest sub-namespaces under System
+            const subNamespaces = COMMON_NAMESPACES.filter(
+              (ns) => ns.startsWith("System.") && ns !== "System",
+            ).map((ns) => ns.slice("System.".length));
+
+            return {
+              suggestions: deduplicateSuggestions(
+                subNamespaces.map((sub) => ({
+                  label: sub,
+                  kind: m.languages.CompletionItemKind.Module,
+                  insertText: `${sub};`,
+                  detail: `namespace System.${sub}`,
+                  range,
+                })),
+              ),
+            };
+          }
+
+          // Otherwise (e.g. `using static System.` or `System.` in code): suggest System types
           return {
-            suggestions: CSHARP_TYPES.map((t) => ({
-              label: t.name,
-              kind: m.languages.CompletionItemKind.Class,
-              insertText: t.name,
-              detail: `class System.${t.name}`,
-              documentation: t.doc,
-              range,
-            })),
+            suggestions: deduplicateSuggestions(
+              CSHARP_TYPES.map((t) => ({
+                label: t.name,
+                kind: m.languages.CompletionItemKind.Class,
+                insertText: isUsingStaticLine ? `${t.name};` : t.name,
+                detail: `class System.${t.name}`,
+                documentation: t.doc,
+                range,
+              })),
+            ),
           };
         }
         if (target === "console") {
-          return { suggestions: toCompletionItems(CONSOLE_MEMBERS, range) };
+          return {
+            suggestions: deduplicateSuggestions(toCompletionItems(CONSOLE_MEMBERS, range)),
+          };
         }
         if (target === "math") {
-          return { suggestions: toCompletionItems(MATH_MEMBERS, range) };
+          return {
+            suggestions: deduplicateSuggestions(toCompletionItems(MATH_MEMBERS, range)),
+          };
         }
         if (target === "convert") {
-          return { suggestions: toCompletionItems(CONVERT_MEMBERS, range) };
+          return {
+            suggestions: deduplicateSuggestions(toCompletionItems(CONVERT_MEMBERS, range)),
+          };
         }
         if (target === "string") {
           const allString = [...STRING_STATIC_MEMBERS, ...COMMON_INSTANCE_MEMBERS];
-          return { suggestions: toCompletionItems(allString, range) };
+          return {
+            suggestions: deduplicateSuggestions(toCompletionItems(allString, range)),
+          };
         }
         if (target === "array") {
           const allArray = [...ARRAY_STATIC_MEMBERS, ...COMMON_INSTANCE_MEMBERS];
-          return { suggestions: toCompletionItems(allArray, range) };
+          return {
+            suggestions: deduplicateSuggestions(toCompletionItems(allArray, range)),
+          };
         }
 
         // Default member access for any object / instance expression:
-        return { suggestions: toCompletionItems(COMMON_INSTANCE_MEMBERS, range) };
+        return {
+          suggestions: deduplicateSuggestions(toCompletionItems(COMMON_INSTANCE_MEMBERS, range)),
+        };
       }
 
-      // Check if user is typing a `using` statement (e.g. "using ")
-      if (textBeforeWord.startsWith("using")) {
-        return {
-          suggestions: COMMON_NAMESPACES.map((ns) => ({
-            label: ns,
-            kind: m.languages.CompletionItemKind.Module,
-            insertText: `${ns};`,
-            detail: `namespace ${ns}`,
-            range,
-          })),
-        };
+      // Check if user is typing a `using static` directive (e.g. "using static " or "using static Ma")
+      const textBeforeCursor = lineContent.slice(0, position.column - 1);
+      const isUsingStaticDirective = /^\s*(?:global\s+)?using\s+static\s+([a-zA-Z_][\w.]*)?$/i.test(
+        textBeforeCursor,
+      );
+
+      const textBeforeCursorFull = model.getValueInRange({
+        startLineNumber: 1,
+        startColumn: 1,
+        endLineNumber: position.lineNumber,
+        endColumn: 1,
+      });
+      const cleanedTopLevel = textBeforeCursorFull
+        .replace(/\/\*[\s\S]*?\*\//g, " ") // strip block comments
+        .replace(/\/\/.*/g, " ") // strip line comments
+        .replace(/"(?:\\.|[^"\\])*"/g, " ") // strip strings
+        .replace(/@"(?:[^"]|"")*"/g, " "); // strip verbatim strings
+      const hasClassBefore = /\b(?:class|struct|interface|record|enum|namespace)\b/.test(
+        cleanedTopLevel,
+      );
+
+      if (isUsingStaticDirective) {
+        if (!hasClassBefore) {
+          const staticSuggestions: monacoDefault.languages.CompletionItem[] = [];
+          for (const st of STATIC_TYPES) {
+            // Suggest both unqualified name (e.g. Math) and fully-qualified name (e.g. System.Math)
+            staticSuggestions.push({
+              label: st.name,
+              kind: m.languages.CompletionItemKind.Class,
+              insertText: `${st.name};`,
+              detail: `class ${st.fullName}`,
+              documentation: st.doc,
+              range,
+            });
+            staticSuggestions.push({
+              label: st.fullName,
+              kind: m.languages.CompletionItemKind.Class,
+              insertText: `${st.fullName};`,
+              detail: `class ${st.fullName}`,
+              documentation: st.doc,
+              range,
+            });
+          }
+          return {
+            suggestions: deduplicateSuggestions(staticSuggestions),
+          };
+        }
+      }
+
+      // Check if user is typing a standard `using` namespace directive (e.g. "using System")
+      // Directives can only appear before class/type definitions and must not match `using var` or `using (...)`
+      const isUsingNamespaceDirective =
+        /^\s*(?:global\s+)?using\s+(?!static\b|var\b|\()([a-zA-Z_][\w.]*)?$/i.test(
+          textBeforeCursor,
+        );
+
+      let usingNamespaces: monacoDefault.languages.CompletionItem[] = [];
+      if (isUsingNamespaceDirective && !hasClassBefore) {
+        usingNamespaces = COMMON_NAMESPACES.map((ns) => ({
+          label: ns,
+          kind: m.languages.CompletionItemKind.Module,
+          insertText: `${ns};`,
+          detail: `namespace ${ns}`,
+          range,
+        }));
       }
 
       // Otherwise: suggest Keywords, Types, and Snippets (Monaco handles document word completions natively)
@@ -1051,8 +1339,16 @@ export function registerCSharpCompletions(mInstance?: Monaco) {
         };
       });
 
+      const localSymbols = extractCSharpDocumentSymbols(model, position, range, m);
+
       return {
-        suggestions: [...snippetItems, ...typeItems, ...keywordItems],
+        suggestions: deduplicateSuggestions([
+          ...localSymbols,
+          ...usingNamespaces,
+          ...snippetItems,
+          ...typeItems,
+          ...keywordItems,
+        ]),
       };
     },
   });
@@ -1067,8 +1363,8 @@ export function registerCSharpCompletions(mInstance?: Monaco) {
       const textBefore = lineContent.slice(0, word.startColumn - 1).trimEnd();
       const name = word.word;
 
-      // Only show Console member docs when preceded by "Console."
-      if (textBefore.endsWith("Console.")) {
+      // Only show Console member docs when preceded by "Console." or "System.Console."
+      if (/(?:^|[^\w.])(?:System\.)?Console\.$/.test(textBefore)) {
         const consoleMatch = CONSOLE_MEMBERS.find((item) => item.label === name);
         if (consoleMatch) {
           return {
@@ -1086,8 +1382,8 @@ export function registerCSharpCompletions(mInstance?: Monaco) {
         }
       }
 
-      // Only show Math member docs when preceded by "Math."
-      if (textBefore.endsWith("Math.")) {
+      // Only show Math member docs when preceded by "Math." or "System.Math."
+      if (/(?:^|[^\w.])(?:System\.)?Math\.$/.test(textBefore)) {
         const mathMatch = MATH_MEMBERS.find((item) => item.label === name);
         if (mathMatch) {
           return {
@@ -1105,8 +1401,8 @@ export function registerCSharpCompletions(mInstance?: Monaco) {
         }
       }
 
-      // Only show Convert member docs when preceded by "Convert."
-      if (textBefore.endsWith("Convert.")) {
+      // Only show Convert member docs when preceded by "Convert." or "System.Convert."
+      if (/(?:^|[^\w.])(?:System\.)?Convert\.$/.test(textBefore)) {
         const convertMatch = CONVERT_MEMBERS.find((item) => item.label === name);
         if (convertMatch) {
           return {
@@ -1125,7 +1421,7 @@ export function registerCSharpCompletions(mInstance?: Monaco) {
       }
 
       // Only show Class docs when hovering directly on the type name or preceded by System.
-      if (!textBefore.endsWith(".") || textBefore.endsWith("System.")) {
+      if (!textBefore.endsWith(".") || /(?:^|[^\w.])System\.$/.test(textBefore)) {
         const typeMatch = CSHARP_TYPES.find((t) => t.name === name);
         if (typeMatch) {
           return {
@@ -1151,31 +1447,120 @@ export function registerCSharpCompletions(mInstance?: Monaco) {
   m.languages.registerSignatureHelpProvider("csharp", {
     signatureHelpTriggerCharacters: ["(", ","],
     provideSignatureHelp(model, position) {
-      const lineContent = model.getLineContent(position.lineNumber);
-      const textBefore = lineContent.slice(0, position.column - 1);
+      // Scan up to 50 lines backwards to support multiline method calls
+      const startLine = Math.max(1, position.lineNumber - 50);
+      const textBefore = model.getValueInRange({
+        startLineNumber: startLine,
+        startColumn: 1,
+        endLineNumber: position.lineNumber,
+        endColumn: position.column,
+      });
 
-      // Parse nested parentheses backwards to find the enclosing call and active parameter
-      let parenDepth = 0;
-      let activeParameter = 0;
-      let callEnd = -1;
+      // Parse tracking strings, generics (<...>), brackets ([...]), braces ({...}), and nested parenthesis depth
+      const blockStack: { char: string; openIdx: number; argCount: number }[] = [];
+      let inQuote: string | null = null;
+      let isVerbatim = false;
+      let isEscaped = false;
 
-      for (let i = textBefore.length - 1; i >= 0; i--) {
+      for (let i = 0; i < textBefore.length; i++) {
         const ch = textBefore[i];
-        if (ch === ")") {
-          parenDepth++;
-        } else if (ch === "(") {
-          if (parenDepth > 0) {
-            parenDepth--;
-          } else {
-            callEnd = i;
-            break;
+
+        if (inQuote !== null) {
+          if (ch === inQuote) {
+            if (
+              isVerbatim &&
+              ch === '"' &&
+              i + 1 < textBefore.length &&
+              textBefore[i + 1] === '"'
+            ) {
+              i++; // skip escaped quote in verbatim string
+            } else {
+              inQuote = null;
+              isVerbatim = false;
+            }
+          } else if (ch === "\\" && !isVerbatim) {
+            isEscaped = true;
+          } else if (isEscaped) {
+            isEscaped = false;
           }
-        } else if (ch === "," && parenDepth === 0) {
-          activeParameter++;
+          continue;
+        }
+
+        if (ch === '"' || ch === "'") {
+          inQuote = ch;
+          isVerbatim = ch === '"' && i > 0 && textBefore[i - 1] === "@";
+          continue;
+        }
+
+        if (ch === "(") {
+          blockStack.push({ char: "(", openIdx: i, argCount: 0 });
+        } else if (ch === ")") {
+          if (blockStack.length > 0 && blockStack[blockStack.length - 1].char === "(")
+            blockStack.pop();
+        } else if (ch === "[") {
+          blockStack.push({ char: "[", openIdx: i, argCount: 0 });
+        } else if (ch === "]") {
+          if (blockStack.length > 0 && blockStack[blockStack.length - 1].char === "[")
+            blockStack.pop();
+        } else if (ch === "{") {
+          blockStack.push({ char: "{", openIdx: i, argCount: 0 });
+        } else if (ch === "}") {
+          if (blockStack.length > 0 && blockStack[blockStack.length - 1].char === "{")
+            blockStack.pop();
+        } else if (ch === "<") {
+          // Check if this '<' starts a generic type argument list (e.g. Dictionary<string, int> or List<int>)
+          // rather than a comparison operator (e.g. 5 < 10 or a < b).
+          const textPrior = textBefore.slice(0, i).trimEnd();
+          const isPrecededByIdentifier = /[a-zA-Z_]\w*$/.test(textPrior);
+          if (isPrecededByIdentifier) {
+            let tempDepth = 1;
+            let isValidGeneric = true;
+            let closeIdx = -1;
+            for (let j = i + 1; j < textBefore.length; j++) {
+              const cj = textBefore[j];
+              if (cj === "<") {
+                tempDepth++;
+              } else if (cj === ">") {
+                tempDepth--;
+                if (tempDepth === 0) {
+                  closeIdx = j;
+                  break;
+                }
+              } else if (/[a-zA-Z0-9_.,\s?\[\]]/.test(cj)) {
+                continue;
+              } else {
+                isValidGeneric = false;
+                break;
+              }
+            }
+            if (isValidGeneric && closeIdx !== -1) {
+              // Valid generic argument list found; skip to matching '>' so commas inside are ignored
+              i = closeIdx;
+              continue;
+            }
+          }
+          // Otherwise: treated as comparison operator '<'; outer commas will not be skipped
+        } else if (ch === ",") {
+          if (blockStack.length > 0 && blockStack[blockStack.length - 1].char === "(") {
+            blockStack[blockStack.length - 1].argCount++;
+          }
         }
       }
 
-      if (callEnd === -1) return null;
+      if (blockStack.length === 0) return null;
+
+      let activeCall = null;
+      for (let i = blockStack.length - 1; i >= 0; i--) {
+        if (blockStack[i].char === "(") {
+          activeCall = blockStack[i];
+          break;
+        }
+      }
+
+      if (!activeCall) return null;
+
+      const callEnd = activeCall.openIdx;
+      const activeParameter = activeCall.argCount;
 
       const textBeforeCall = textBefore.slice(0, callEnd).trimEnd();
       const match = textBeforeCall.match(/([A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)?)$/);
@@ -1187,7 +1572,7 @@ export function registerCSharpCompletions(mInstance?: Monaco) {
         "Console.WriteLine": {
           label: "void Console.WriteLine(object? value)",
           doc: "Writes the specified value to standard output followed by a line terminator.",
-          params: ["value: The value to write."],
+          params: ["value: The value to write.", "arg0: Additional argument or format parameter."],
         },
         "Console.Write": {
           label: "void Console.Write(object? value)",
@@ -1256,8 +1641,20 @@ export function registerCSharpCompletions(mInstance?: Monaco) {
         },
       };
 
-      const sigInfo = signaturesMap[callTarget];
-      if (!sigInfo) return null;
+      let sigInfo = signaturesMap[callTarget];
+      if (!sigInfo) {
+        // Fallback for user-defined / unmapped calls (e.g. SomeMethod):
+        const paramCount = Math.max(activeParameter + 1, 2);
+        const paramList: string[] = [];
+        for (let p = 0; p < paramCount; p++) {
+          paramList.push(`arg${p}`);
+        }
+        sigInfo = {
+          label: `${callTarget}(${paramList.join(", ")})`,
+          doc: `Method ${callTarget}`,
+          params: paramList.map((p) => `${p}: Parameter ${p}`),
+        };
+      }
 
       return {
         value: {
