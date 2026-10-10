@@ -1234,17 +1234,22 @@ export function registerCSharpCompletions(mInstance?: Monaco) {
         textBeforeCursor,
       );
 
-      if (isUsingStaticDirective) {
-        let hasClassBefore = false;
-        for (let ln = 1; ln < position.lineNumber; ln++) {
-          const rawLine = model.getLineContent(ln);
-          const l = rawLine.split("//")[0].trim();
-          if (/\b(?:class|struct|interface|record|enum)\b/.test(l)) {
-            hasClassBefore = true;
-            break;
-          }
-        }
+      const textBeforeCursorFull = model.getValueInRange({
+        startLineNumber: 1,
+        startColumn: 1,
+        endLineNumber: position.lineNumber,
+        endColumn: 1,
+      });
+      const cleanedTopLevel = textBeforeCursorFull
+        .replace(/\/\*[\s\S]*?\*\//g, " ") // strip block comments
+        .replace(/\/\/.*/g, " ") // strip line comments
+        .replace(/"(?:\\.|[^"\\])*"/g, " ") // strip strings
+        .replace(/@"(?:[^"]|"")*"/g, " "); // strip verbatim strings
+      const hasClassBefore = /\b(?:class|struct|interface|record|enum|namespace)\b/.test(
+        cleanedTopLevel,
+      );
 
+      if (isUsingStaticDirective) {
         if (!hasClassBefore) {
           const staticSuggestions: monacoDefault.languages.CompletionItem[] = [];
           for (const st of STATIC_TYPES) {
@@ -1279,31 +1284,15 @@ export function registerCSharpCompletions(mInstance?: Monaco) {
           textBeforeCursor,
         );
 
-      if (isUsingNamespaceDirective) {
-        // Ensure we are not inside a class / method body
-        let hasClassBefore = false;
-        for (let ln = 1; ln < position.lineNumber; ln++) {
-          const rawLine = model.getLineContent(ln);
-          const l = rawLine.split("//")[0].trim();
-          if (/\b(?:class|struct|interface|record|enum)\b/.test(l)) {
-            hasClassBefore = true;
-            break;
-          }
-        }
-
-        if (!hasClassBefore) {
-          return {
-            suggestions: deduplicateSuggestions(
-              COMMON_NAMESPACES.map((ns) => ({
-                label: ns,
-                kind: m.languages.CompletionItemKind.Module,
-                insertText: `${ns};`,
-                detail: `namespace ${ns}`,
-                range,
-              })),
-            ),
-          };
-        }
+      let usingNamespaces: monacoDefault.languages.CompletionItem[] = [];
+      if (isUsingNamespaceDirective && !hasClassBefore) {
+        usingNamespaces = COMMON_NAMESPACES.map((ns) => ({
+          label: ns,
+          kind: m.languages.CompletionItemKind.Module,
+          insertText: `${ns};`,
+          detail: `namespace ${ns}`,
+          range,
+        }));
       }
 
       // Otherwise: suggest Keywords, Types, and Snippets (Monaco handles document word completions natively)
@@ -1355,6 +1344,7 @@ export function registerCSharpCompletions(mInstance?: Monaco) {
       return {
         suggestions: deduplicateSuggestions([
           ...localSymbols,
+          ...usingNamespaces,
           ...snippetItems,
           ...typeItems,
           ...keywordItems,
@@ -1467,37 +1457,56 @@ export function registerCSharpCompletions(mInstance?: Monaco) {
       });
 
       // Parse tracking strings, generics (<...>), brackets ([...]), braces ({...}), and nested parenthesis depth
-      const parenStack: { openIdx: number; argCount: number }[] = [];
+      const blockStack: { char: string; openIdx: number; argCount: number }[] = [];
       let inQuote: string | null = null;
+      let isVerbatim = false;
       let isEscaped = false;
-      let bracketDepth = 0;
-      let braceDepth = 0;
 
       for (let i = 0; i < textBefore.length; i++) {
         const ch = textBefore[i];
-        if (isEscaped) {
-          isEscaped = false;
-          continue;
-        }
-        if (ch === "\\") {
-          isEscaped = true;
-          continue;
-        }
+
         if (inQuote !== null) {
           if (ch === inQuote) {
-            inQuote = null;
+            if (
+              isVerbatim &&
+              ch === '"' &&
+              i + 1 < textBefore.length &&
+              textBefore[i + 1] === '"'
+            ) {
+              i++; // skip escaped quote in verbatim string
+            } else {
+              inQuote = null;
+              isVerbatim = false;
+            }
+          } else if (ch === "\\" && !isVerbatim) {
+            isEscaped = true;
+          } else if (isEscaped) {
+            isEscaped = false;
           }
           continue;
         }
+
         if (ch === '"' || ch === "'") {
           inQuote = ch;
+          isVerbatim = ch === '"' && i > 0 && textBefore[i - 1] === "@";
           continue;
         }
 
         if (ch === "(") {
-          parenStack.push({ openIdx: i, argCount: 0 });
+          blockStack.push({ char: "(", openIdx: i, argCount: 0 });
         } else if (ch === ")") {
-          parenStack.pop();
+          if (blockStack.length > 0 && blockStack[blockStack.length - 1].char === "(")
+            blockStack.pop();
+        } else if (ch === "[") {
+          blockStack.push({ char: "[", openIdx: i, argCount: 0 });
+        } else if (ch === "]") {
+          if (blockStack.length > 0 && blockStack[blockStack.length - 1].char === "[")
+            blockStack.pop();
+        } else if (ch === "{") {
+          blockStack.push({ char: "{", openIdx: i, argCount: 0 });
+        } else if (ch === "}") {
+          if (blockStack.length > 0 && blockStack[blockStack.length - 1].char === "{")
+            blockStack.pop();
         } else if (ch === "<") {
           // Check if this '<' starts a generic type argument list (e.g. Dictionary<string, int> or List<int>)
           // rather than a comparison operator (e.g. 5 < 10 or a < b).
@@ -1531,24 +1540,25 @@ export function registerCSharpCompletions(mInstance?: Monaco) {
             }
           }
           // Otherwise: treated as comparison operator '<'; outer commas will not be skipped
-        } else if (ch === "[") {
-          bracketDepth++;
-        } else if (ch === "]") {
-          if (bracketDepth > 0) bracketDepth--;
-        } else if (ch === "{") {
-          braceDepth++;
-        } else if (ch === "}") {
-          if (braceDepth > 0) braceDepth--;
         } else if (ch === ",") {
-          if (parenStack.length > 0 && bracketDepth === 0 && braceDepth === 0) {
-            parenStack[parenStack.length - 1].argCount++;
+          if (blockStack.length > 0 && blockStack[blockStack.length - 1].char === "(") {
+            blockStack[blockStack.length - 1].argCount++;
           }
         }
       }
 
-      if (parenStack.length === 0) return null;
+      if (blockStack.length === 0) return null;
 
-      const activeCall = parenStack[parenStack.length - 1];
+      let activeCall = null;
+      for (let i = blockStack.length - 1; i >= 0; i--) {
+        if (blockStack[i].char === "(") {
+          activeCall = blockStack[i];
+          break;
+        }
+      }
+
+      if (!activeCall) return null;
+
       const callEnd = activeCall.openIdx;
       const activeParameter = activeCall.argCount;
 

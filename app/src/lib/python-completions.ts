@@ -1303,7 +1303,11 @@ function inferPythonType(
             }
           }
           const cleanKey = keyPart.replace(/['"]/g, "");
-          const keyRegex = new RegExp(`["']?${cleanKey}["']?\\s*:\\s*(.+)`);
+          // Escape regex special characters in the key to prevent crashes
+          const escapedKey = cleanKey.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+          // Use exact key match with word boundaries to avoid substring matching
+          // e.g. "name" must not match inside "username"
+          const keyRegex = new RegExp(`["']${escapedKey}["']\\s*:\\s*(.+)`);
           const valMatch = dictContent.match(keyRegex);
           if (valMatch) {
             const valRhs = valMatch[1].trim();
@@ -1362,19 +1366,35 @@ function inferPythonType(
       const rhs = assignMatch[1].trim();
 
       // List detection (placed before string detection to correctly handle "hello world".split())
-      if (/\.split(?:lines)?\s*\(/.test(rhs) || rhs.startsWith("[") || /^list\s*\(/.test(rhs)) {
+      // Only match .split()/.splitlines() when it's the outermost call, not wrapped inside
+      // another function like len(text.strip())
+      if (
+        (/^\.split(?:lines)?\s*\(/.test(rhs.slice(rhs.search(/\.split/))) &&
+          !(/^[a-zA-Z_]\w*\s*\(/.test(rhs) && !/\.split/.test(rhs.slice(0, rhs.indexOf("("))))) ||
+        /^"[^"]*"\.split(?:lines)?\s*\(/.test(rhs) ||
+        /^'[^']*'\.split(?:lines)?\s*\(/.test(rhs) ||
+        /^[a-zA-Z_]\w*\.split(?:lines)?\s*\(/.test(rhs) ||
+        rhs.startsWith("[") ||
+        /^list\s*\(/.test(rhs)
+      ) {
         return "list";
       }
 
-      // String detection
+      // String detection — only match patterns that clearly produce a string.
+      // Do NOT match .strip()/.lower() etc. when they appear inside wrapping calls
+      // like len(text.strip()), since the outer call determines the type.
+      const isOutermostStringMethod =
+        /^[a-zA-Z_]\w*\.(strip|lower|upper|replace|format|title|capitalize)\s*\(/.test(rhs) ||
+        /^"[^"]*"\.(strip|lower|upper|replace|format|title|capitalize)\s*\(/.test(rhs) ||
+        /^'[^']*'\.(strip|lower|upper|replace|format|title|capitalize)\s*\(/.test(rhs);
       if (
-        (rhs.startsWith('"') && rhs.endsWith('"')) ||
-        (rhs.startsWith("'") && rhs.endsWith("'")) ||
+        (rhs.startsWith('"') && rhs.endsWith('"') && !rhs.includes(".split")) ||
+        (rhs.startsWith("'") && rhs.endsWith("'") && !rhs.includes(".split")) ||
         (/^f["']/.test(rhs) && (rhs.endsWith('"') || rhs.endsWith("'"))) ||
         (/^r["']/.test(rhs) && (rhs.endsWith('"') || rhs.endsWith("'"))) ||
         /^str\s*\(/.test(rhs) ||
         /^input\s*\(/.test(rhs) ||
-        /\.(strip|lower|upper|replace|format|title|capitalize)\s*\(/.test(rhs) ||
+        isOutermostStringMethod ||
         /["']\.join\s*\(/.test(rhs)
       ) {
         return "str";
@@ -1401,10 +1421,12 @@ function inferPythonType(
     // For loop: for varName in ...
     const forMatch = line.match(new RegExp(`^for\\s+${varName}\\s+in\\s+(.+):?`));
     if (forMatch) {
-      const iterable = forMatch[1].trim();
+      const iterable = forMatch[1].trim().replace(/:$/, "").trim();
       if (iterable.startsWith('"') || iterable.startsWith("'") || iterable.includes(".split(")) {
         return "str";
       }
+      // The for-loop is the most recent binding for this variable; stop searching.
+      break;
     }
   }
 
@@ -1459,6 +1481,36 @@ function extractPythonDocumentSymbols(
     }
   }
 
+  // Determine the enclosing module-level block for the cursor, if any.
+  // Variables inside if/for/while/with/try/else/elif/except/finally blocks at
+  // module level are still accessible at module level, so we need to know
+  // which lines belong to such a block that contains the cursor.
+  let moduleBlockStart = -1;
+  let moduleBlockIndent = -1;
+  if (!inFunc) {
+    for (let ln = currentLine; ln >= 1; ln--) {
+      const raw = model.getLineContent(ln);
+      // A module-level block header (unindented if/for/while/with/try/else/elif/except/finally)
+      const blockMatch = raw.match(/^(if|for|while|with|try|else|elif|except|finally)\b/);
+      if (blockMatch) {
+        moduleBlockStart = ln;
+        moduleBlockIndent = 0;
+        break;
+      }
+      // If we hit an unindented non-empty, non-comment line that's not a block header, stop
+      const trimmed = raw.trim();
+      if (
+        trimmed &&
+        !trimmed.startsWith("#") &&
+        /^\S/.test(raw) &&
+        !raw.startsWith("def ") &&
+        !raw.startsWith("class ")
+      ) {
+        break;
+      }
+    }
+  }
+
   const seen = new Set<string>();
   const items: monacoDefault.languages.CompletionItem[] = [];
 
@@ -1488,9 +1540,39 @@ function extractPythonDocumentSymbols(
       if (inFunc && ln === activeFuncStart) {
         const paramMatch = line.match(/def\s+[a-zA-Z_]\w*\s*\(([^)]*)\)/);
         if (paramMatch) {
-          const params = paramMatch[1].split(",");
+          const params: string[] = [];
+          let currentParam = "";
+          let pBracketDepth = 0;
+          for (let i = 0; i < paramMatch[1].length; i++) {
+            const ch = paramMatch[1][i];
+            if (ch === "[" || ch === "(") pBracketDepth++;
+            else if (ch === "]" || ch === ")") pBracketDepth--;
+
+            if (ch === "," && pBracketDepth === 0) {
+              params.push(currentParam);
+              currentParam = "";
+            } else {
+              currentParam += ch;
+            }
+          }
+          if (currentParam) params.push(currentParam);
+
           for (const p of params) {
-            const pName = p.trim().split(/[:=]/)[0].trim();
+            // Strip leading * or ** from parameter names (*args -> args, **kwargs -> kwargs)
+            let pRaw = p.trim().replace(/^\*{1,2}/, "");
+            // Split on first : or = that's not inside brackets (for type annotations like Dict[str, int])
+            let bracketD = 0;
+            let splitIdx = -1;
+            for (let ci = 0; ci < pRaw.length; ci++) {
+              const cc = pRaw[ci];
+              if (cc === "[" || cc === "(") bracketD++;
+              else if (cc === "]" || cc === ")") bracketD--;
+              else if ((cc === ":" || cc === "=") && bracketD === 0) {
+                splitIdx = ci;
+                break;
+              }
+            }
+            const pName = splitIdx === -1 ? pRaw.trim() : pRaw.slice(0, splitIdx).trim();
             if (
               pName &&
               pName !== "self" &&
@@ -1533,10 +1615,23 @@ function extractPythonDocumentSymbols(
 
     // Check scope for local variables and loop variables:
     // Module-level variables (unindented) are always in scope.
-    // Indented variables are only in scope if defined within the current active function.
+    // Indented variables are only in scope if defined within the current active function,
+    // or within a module-level block (if/for/while/with) that contains the cursor.
     const isIndented = /^\s+/.test(rawLine);
-    if (isIndented && (!inFunc || ln < activeFuncStart || ln > activeFuncEnd)) {
-      continue;
+    if (isIndented) {
+      if (inFunc) {
+        // Inside a function: only variables within the active function's range
+        if (ln < activeFuncStart || ln > activeFuncEnd) continue;
+      } else {
+        // At module level: allow variables from module-level blocks
+        // (if/for/while/with) that enclose the cursor
+        const lineIndent = rawLine.match(/^\s*/)?.[0].length ?? 0;
+        if (moduleBlockStart !== -1 && ln >= moduleBlockStart && lineIndent > moduleBlockIndent) {
+          // Inside the enclosing module-level block — allow
+        } else {
+          continue;
+        }
+      }
     }
 
     // Variable assignment: username = ... or username: str = ...
@@ -1575,6 +1670,8 @@ function extractPythonDocumentSymbols(
   }
 
   // Also collect general identifier words from code only (excluding multiline strings, strings, and comments)
+  // But skip method/attribute names (words that appear immediately after a dot) to avoid
+  // polluting suggestions with things like 'append', 'strip', 'lower', etc.
   const fullText = model.getValue();
   const codeOnly = fullText
     .replace(/"""[\s\S]*?"""/g, " ")
@@ -1587,12 +1684,21 @@ function extractPythonDocumentSymbols(
   for (let ln = 1; ln <= codeLines.length; ln++) {
     const rawLine = model.getLineContent(ln);
     const isIndented = /^\s+/.test(rawLine);
-    if (isIndented && (!inFunc || ln < activeFuncStart || ln > activeFuncEnd)) {
-      continue;
+    if (isIndented) {
+      if (inFunc) {
+        if (ln < activeFuncStart || ln > activeFuncEnd) continue;
+      } else {
+        if (moduleBlockStart !== -1 && ln >= moduleBlockStart) {
+          // allow — inside module block
+        } else {
+          continue;
+        }
+      }
     }
     const cleanLine = codeLines[ln - 1];
     let wMatch: RegExpExecArray | null;
-    const lineWordRegex = /\b([a-zA-Z_]\w{1,})\b/g;
+    // Match identifiers but skip those preceded by a dot (method/attribute names)
+    const lineWordRegex = /(?:^|[^.])\b([a-zA-Z_]\w{1,})\b/g;
     while ((wMatch = lineWordRegex.exec(cleanLine)) !== null) {
       const word = wMatch[1];
       if (
@@ -1976,6 +2082,12 @@ export function registerPythonCompletions(mInstance?: Monaco) {
         endColumn: position.column,
       });
 
+      // Strip Python comments from each line before parsing, so that
+      // apostrophes inside comments (like # don't forget) do not
+      // corrupt the string-tracking state.
+      const strippedLines = textBefore.split("\n").map((l) => stripPythonComment(l));
+      const cleanedText = strippedLines.join("\n");
+
       // Parse from left to right tracking quotes ("...", '...') and nested parenthesis depth
       const parenStack: { openIdx: number; argCount: number; lastCommaIdx: number }[] = [];
       let inQuote: string | null = null;
@@ -1983,8 +2095,8 @@ export function registerPythonCompletions(mInstance?: Monaco) {
       let bracketDepth = 0;
       let braceDepth = 0;
 
-      for (let i = 0; i < textBefore.length; i++) {
-        const ch = textBefore[i];
+      for (let i = 0; i < cleanedText.length; i++) {
+        const ch = cleanedText[i];
         if (isEscaped) {
           isEscaped = false;
           continue;
@@ -2030,7 +2142,7 @@ export function registerPythonCompletions(mInstance?: Monaco) {
       const callEnd = activeCall.openIdx;
       let activeParameter = activeCall.argCount;
 
-      const textBeforeCall = textBefore.slice(0, callEnd).trimEnd();
+      const textBeforeCall = cleanedText.slice(0, callEnd).trimEnd();
       // Match full qualified target chain (e.g. "os.path.join" or "math.sqrt" or "print")
       const match = textBeforeCall.match(/(?:^|[^\w.])([a-zA-Z_]\w*(?:\.[a-zA-Z_]\w*)*)$/);
       if (!match) return null;
@@ -2286,7 +2398,7 @@ export function registerPythonCompletions(mInstance?: Monaco) {
       if (!sigInfo) return null;
 
       // Handle varargs highlighting (e.g. print(a, b, c) keeps *values active for all positional args)
-      const currentArgText = textBefore.slice(activeCall.lastCommaIdx + 1).trim();
+      const currentArgText = cleanedText.slice(activeCall.lastCommaIdx + 1).trim();
       if (sigInfo.varargPositionalIdx !== undefined) {
         const isKeywordArg = currentArgText.includes("=");
         if (!isKeywordArg && activeParameter >= sigInfo.varargPositionalIdx) {

@@ -192,9 +192,9 @@ test("C# Issue 2: Deduplication removes identical duplicate items", () => {
   const model = createMockModel("using ");
   const result = provider.provideCompletionItems(model, { lineNumber: 1, column: 7 });
 
-  const labels = result.suggestions.map((s: any) => s.label);
-  const duplicates = labels.filter((item: string, index: number) => labels.indexOf(item) !== index);
-  assert.deepEqual(duplicates, [], "Completion items must not contain duplicate labels");
+  const keys = result.suggestions.map((s: any) => `${s.label}|${s.kind}|${s.detail || ""}`);
+  const duplicates = keys.filter((item: string, index: number) => keys.indexOf(item) !== index);
+  assert.deepEqual(duplicates, [], "Completion items must not contain identical duplicate items");
 });
 
 test("C# Issue 3: using var inside a method is not mistaken for a namespace directive", () => {
