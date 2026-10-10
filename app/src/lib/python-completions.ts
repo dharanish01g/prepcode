@@ -1102,11 +1102,59 @@ function inferPythonType(
   const expr = textBeforeWord.slice(0, -1).trim();
   if (!expr) return "unknown";
 
-  // Check literal suffixes
-  if (expr.endsWith('"') || expr.endsWith("'")) return "str";
-  if (expr.endsWith("]")) return "list";
-  if (expr.endsWith("}")) {
+  // Check literal expressions:
+  if (
+    (expr.startsWith('"') && expr.endsWith('"')) ||
+    (expr.startsWith("'") && expr.endsWith("'")) ||
+    (/^f["']/.test(expr) && (expr.endsWith('"') || expr.endsWith("'")))
+  ) {
+    return "str";
+  }
+
+  // List literal: must start with [ and end with ] (not subscript indexing like student["name"])
+  if (expr.startsWith("[") && expr.endsWith("]")) {
+    return "list";
+  }
+
+  // Dict / Set literal: must start with { and end with }
+  if (expr.startsWith("{") && expr.endsWith("}")) {
     return expr.includes(":") ? "dict" : "set";
+  }
+
+  // Subscript / index access: e.g. student["name"] or arr[0]
+  const subscriptMatch = expr.match(/^([a-zA-Z_]\w*)\[(.*)\]$/);
+  if (subscriptMatch) {
+    const baseVar = subscriptMatch[1];
+    const keyPart = subscriptMatch[2].trim();
+    // Scan backwards to find the base variable's declaration
+    for (let ln = position.lineNumber; ln >= 1; ln--) {
+      const rawLine = model.getLineContent(ln);
+      const line = rawLine.split("#")[0].trim();
+      if (!line) continue;
+      const assignMatch = line.match(new RegExp(`^${baseVar}\\s*(?::[^=]+)?\\s*=\\s*(.+)`));
+      if (assignMatch) {
+        const rhs = assignMatch[1].trim();
+        // If assigned from a dict literal, inspect the specific key's value if possible
+        if (rhs.startsWith("{") && rhs.endsWith("}")) {
+          const cleanKey = keyPart.replace(/['"]/g, "");
+          const keyRegex = new RegExp(`["']?${cleanKey}["']?\\s*:\\s*(.+)`);
+          const valMatch = rhs.match(keyRegex);
+          if (valMatch) {
+            const valRhs = valMatch[1].trim();
+            if (valRhs.startsWith('"') || valRhs.startsWith("'")) return "str";
+            if (valRhs.startsWith("[")) return "list";
+            if (valRhs.startsWith("{")) return "dict";
+          }
+        }
+        // If assigned a list of string literals or .split()
+        if (rhs.startsWith('["') || rhs.startsWith("['") || /\.split\s*\(/.test(rhs)) {
+          return "str";
+        }
+        break;
+      }
+    }
+    // Subscript result is not guaranteed to be a list; return unknown
+    return "unknown";
   }
 
   // Extract the variable or identifier immediately before the dot
@@ -1290,11 +1338,17 @@ function extractPythonDocumentSymbols(
     }
   }
 
-  // Also collect any other identifiers across the document
+  // Strip comments and string literals so words in docstrings, comments, or strings
+  // (e.g. "# calculate customer revenue" or "Welcome customer") are not suggested as identifiers.
   const fullText = model.getValue();
+  const codeWithoutCommentsAndStrings = fullText
+    .replace(/"""[\s\S]*?"""|'''[\s\S]*?'''/g, " ")
+    .replace(/#.*$/gm, " ")
+    .replace(/"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g, " ");
+
   const wordRegex = /\b([a-zA-Z_]\w{1,})\b/g;
   let wMatch: RegExpExecArray | null;
-  while ((wMatch = wordRegex.exec(fullText)) !== null) {
+  while ((wMatch = wordRegex.exec(codeWithoutCommentsAndStrings)) !== null) {
     const word = wMatch[1];
     if (
       !seen.has(word) &&
@@ -1674,6 +1728,8 @@ export function registerPythonCompletions(mInstance?: Monaco) {
       const parenStack: { openIdx: number; argCount: number; lastCommaIdx: number }[] = [];
       let inQuote: string | null = null;
       let isEscaped = false;
+      let bracketDepth = 0;
+      let braceDepth = 0;
 
       for (let i = 0; i < textBefore.length; i++) {
         const ch = textBefore[i];
@@ -1700,8 +1756,16 @@ export function registerPythonCompletions(mInstance?: Monaco) {
           parenStack.push({ openIdx: i, argCount: 0, lastCommaIdx: i });
         } else if (ch === ")") {
           parenStack.pop();
+        } else if (ch === "[") {
+          bracketDepth++;
+        } else if (ch === "]") {
+          if (bracketDepth > 0) bracketDepth--;
+        } else if (ch === "{") {
+          braceDepth++;
+        } else if (ch === "}") {
+          if (braceDepth > 0) braceDepth--;
         } else if (ch === ",") {
-          if (parenStack.length > 0) {
+          if (parenStack.length > 0 && bracketDepth === 0 && braceDepth === 0) {
             parenStack[parenStack.length - 1].argCount++;
             parenStack[parenStack.length - 1].lastCommaIdx = i;
           }

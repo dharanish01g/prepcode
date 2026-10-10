@@ -1008,11 +1008,18 @@ function extractCSharpDocumentSymbols(
     }
   }
 
-  // Also collect general identifier words in the document
+  // Strip comments and string literals so words in comments or strings
+  // are not suggested as identifiers.
   const fullText = model.getValue();
+  const codeWithoutCommentsAndStrings = fullText
+    .replace(/\/\*[\s\S]*?\*\//g, " ")
+    .replace(/\/\/.*$/gm, " ")
+    .replace(/@"(?:""|[^"])*"/g, " ")
+    .replace(/"(?:\\.|[^"\\])*"/g, " ");
+
   const wordRegex = /\b([a-zA-Z_]\w{1,})\b/g;
   let wMatch: RegExpExecArray | null;
-  while ((wMatch = wordRegex.exec(fullText)) !== null) {
+  while ((wMatch = wordRegex.exec(codeWithoutCommentsAndStrings)) !== null) {
     const word = wMatch[1];
     if (
       !seen.has(word) &&
@@ -1273,28 +1280,58 @@ export function registerCSharpCompletions(mInstance?: Monaco) {
       const lineContent = model.getLineContent(position.lineNumber);
       const textBefore = lineContent.slice(0, position.column - 1);
 
-      // Parse nested parentheses backwards to find the enclosing call and active parameter
-      let parenDepth = 0;
-      let activeParameter = 0;
-      let callEnd = -1;
+      // Parse tracking strings, generics (<...>), brackets ([...]), and nested parenthesis depth
+      const parenStack: { openIdx: number; argCount: number }[] = [];
+      let inQuote: string | null = null;
+      let isEscaped = false;
+      let angleDepth = 0;
+      let bracketDepth = 0;
 
-      for (let i = textBefore.length - 1; i >= 0; i--) {
+      for (let i = 0; i < textBefore.length; i++) {
         const ch = textBefore[i];
-        if (ch === ")") {
-          parenDepth++;
-        } else if (ch === "(") {
-          if (parenDepth > 0) {
-            parenDepth--;
-          } else {
-            callEnd = i;
-            break;
+        if (isEscaped) {
+          isEscaped = false;
+          continue;
+        }
+        if (ch === "\\") {
+          isEscaped = true;
+          continue;
+        }
+        if (inQuote !== null) {
+          if (ch === inQuote) {
+            inQuote = null;
           }
-        } else if (ch === "," && parenDepth === 0) {
-          activeParameter++;
+          continue;
+        }
+        if (ch === '"' || ch === "'") {
+          inQuote = ch;
+          continue;
+        }
+
+        if (ch === "(") {
+          parenStack.push({ openIdx: i, argCount: 0 });
+        } else if (ch === ")") {
+          parenStack.pop();
+        } else if (ch === "<") {
+          angleDepth++;
+        } else if (ch === ">") {
+          if (angleDepth > 0) angleDepth--;
+        } else if (ch === "[") {
+          bracketDepth++;
+        } else if (ch === "]") {
+          if (bracketDepth > 0) bracketDepth--;
+        } else if (ch === ",") {
+          if (parenStack.length > 0 && angleDepth === 0 && bracketDepth === 0) {
+            parenStack[parenStack.length - 1].argCount++;
+          }
         }
       }
 
-      if (callEnd === -1) return null;
+      if (parenStack.length === 0) return null;
+
+      const activeCall = parenStack[parenStack.length - 1];
+      const callEnd = activeCall.openIdx;
+      const activeParameter = activeCall.argCount;
 
       const textBeforeCall = textBefore.slice(0, callEnd).trimEnd();
       const match = textBeforeCall.match(/([A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)?)$/);
