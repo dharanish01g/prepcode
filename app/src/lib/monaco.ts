@@ -6,6 +6,7 @@ import EditorWorker from "monaco-editor/editor/editor.worker?worker";
 import TypeScriptWorker from "monaco-editor/languages/features/typescript/ts.worker?worker";
 import { onZoomApplied } from "@/hooks/use-zoom";
 import { registerCSharpCompletions } from "@/lib/csharp-completions";
+import { registerPythonCompletions } from "@/lib/python-completions";
 
 self.MonacoEnvironment = {
   // Once getWorker is set, Monaco asks it for every worker and never falls
@@ -21,6 +22,7 @@ self.MonacoEnvironment = {
 
 loader.config({ monaco });
 registerCSharpCompletions(monaco);
+registerPythonCompletions(monaco);
 
 /** Code text size in both editors. */
 export const EDITOR_FONT_SIZE = 13;
