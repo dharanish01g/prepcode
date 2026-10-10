@@ -879,10 +879,67 @@ const SET_MEMBERS: CompletionItemDef[] = [
 ];
 
 const COMMON_INSTANCE_MEMBERS: CompletionItemDef[] = [
-  ...STRING_MEMBERS,
-  ...LIST_MEMBERS,
-  ...DICT_MEMBERS,
-  ...SET_MEMBERS,
+  {
+    label: "__class__",
+    snippet: "__class__",
+    detail: "type(self)",
+    documentation: "The type/class of the instance.",
+  },
+  {
+    label: "__doc__",
+    snippet: "__doc__",
+    detail: "Documentation string",
+    documentation: "The documentation string of the object.",
+  },
+  {
+    label: "__init__",
+    snippet: "__init__(${1:self})",
+    detail: "Constructor method",
+    documentation: "Called when the instance is created.",
+  },
+  {
+    label: "__str__",
+    snippet: "__str__()",
+    detail: "str(self) string representation",
+    documentation: "Called by str(object) and the built-in format() and print().",
+  },
+  {
+    label: "__repr__",
+    snippet: "__repr__()",
+    detail: "repr(self) formal representation",
+    documentation: "Called by the repr() built-in function to compute the string representation.",
+  },
+  {
+    label: "__eq__",
+    snippet: "__eq__(${1:other})",
+    detail: "bool self.__eq__(other)",
+    documentation: "Equality comparison operator (==).",
+  },
+  {
+    label: "__ne__",
+    snippet: "__ne__(${1:other})",
+    detail: "bool self.__ne__(other)",
+    documentation: "Inequality comparison operator (!=).",
+  },
+  {
+    label: "__hash__",
+    snippet: "__hash__()",
+    detail: "int self.__hash__()",
+    documentation:
+      "Called by built-in function hash() and for operations on members of hashed collections.",
+  },
+  {
+    label: "__sizeof__",
+    snippet: "__sizeof__()",
+    detail: "int self.__sizeof__()",
+    documentation: "Returns the size of the object in bytes.",
+  },
+  {
+    label: "__dir__",
+    snippet: "__dir__()",
+    detail: "list[str] self.__dir__()",
+    documentation: "Returns list of valid attributes for the object.",
+  },
 ];
 
 const PYTHON_KEYWORDS = [
@@ -1090,6 +1147,62 @@ const PYTHON_BUILTIN_SET = new Set(BUILTIN_FUNCTIONS.map((f) => f.label));
 const PYTHON_MODULE_SET = new Set(PYTHON_MODULES.map((m) => m.name));
 
 /**
+ * Deduplicates completion items keyed by label, kind, insertText, and detail.
+ * Preserves legitimate overloads while removing identical duplicate items.
+ */
+function deduplicateSuggestions(
+  items: monacoDefault.languages.CompletionItem[],
+): monacoDefault.languages.CompletionItem[] {
+  const seen = new Set<string>();
+  const unique: monacoDefault.languages.CompletionItem[] = [];
+  for (const item of items) {
+    const insertKey =
+      typeof item.insertText === "string" ? item.insertText : JSON.stringify(item.insertText);
+    const key = `${item.label}|${item.kind ?? ""}|${insertKey}|${item.detail ?? ""}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      unique.push(item);
+    }
+  }
+  return unique;
+}
+
+/**
+ * Strips Python '#' comments from a single line while respecting string literals.
+ * Preserves '#' characters occurring inside single or double quoted strings.
+ */
+function stripPythonComment(line: string): string {
+  let inQuote: string | null = null;
+  let isEscaped = false;
+
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (isEscaped) {
+      isEscaped = false;
+      continue;
+    }
+    if (ch === "\\") {
+      isEscaped = true;
+      continue;
+    }
+    if (inQuote !== null) {
+      if (ch === inQuote) {
+        inQuote = null;
+      }
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      inQuote = ch;
+      continue;
+    }
+    if (ch === "#") {
+      return line.slice(0, i);
+    }
+  }
+  return line;
+}
+
+/**
  * Lightweight type inference for Python expressions preceding a dot.
  * Scans the preceding code backwards to find assignments, type annotations,
  * or literal values to determine if the target is a str, list, dict, set, etc.
@@ -1129,7 +1242,7 @@ function inferPythonType(
     // Scan backwards to find the base variable's declaration
     for (let ln = position.lineNumber; ln >= 1; ln--) {
       const rawLine = model.getLineContent(ln);
-      const line = rawLine.split("#")[0].trim();
+      const line = stripPythonComment(rawLine).trim();
       if (!line) continue;
 
       // Type annotations: baseVar: list[str], baseVar: list[list[int]], baseVar: str
@@ -1165,31 +1278,47 @@ function inferPythonType(
         }
 
         // 2. Indexing a nested list produces a list (e.g. matrix = [[1, 2]]; matrix[0].)
-        if (rhs.startsWith("[[")) {
+        if (/^\[\s*\[/.test(rhs)) {
           return "list";
         }
 
-        // 3. Indexing a list of strings produces a str (e.g. words = text.split(); words[0].)
-        if (rhs.startsWith('["') || rhs.startsWith("['") || /\.split(?:lines)?\s*\(/.test(rhs)) {
+        // 3. Indexing a list of dicts produces a dict (e.g. records = [{"a": 1}]; records[0].)
+        if (/^\[\s*\{/.test(rhs)) {
+          return "dict";
+        }
+
+        // 4. Indexing a list of strings produces a str (e.g. words = ["hello", "world"] or words = text.split(); words[0].)
+        if (/\.split(?:lines)?\s*\(/.test(rhs) || /^\[\s*["']/.test(rhs)) {
           return "str";
         }
 
-        // 4. Indexing a dict literal: inspect the specific key's value if possible
-        if (rhs.startsWith("{") && rhs.endsWith("}")) {
+        // 5. Indexing a dict literal: inspect the specific key's value if possible
+        if (rhs.startsWith("{")) {
+          let dictContent = rhs;
+          if (!dictContent.includes("}")) {
+            for (let fwd = ln + 1; fwd <= Math.min(model.getLineCount(), ln + 25); fwd++) {
+              const nextL = stripPythonComment(model.getLineContent(fwd)).trim();
+              dictContent += " " + nextL;
+              if (nextL.includes("}")) break;
+            }
+          }
           const cleanKey = keyPart.replace(/['"]/g, "");
           const keyRegex = new RegExp(`["']?${cleanKey}["']?\\s*:\\s*(.+)`);
-          const valMatch = rhs.match(keyRegex);
+          const valMatch = dictContent.match(keyRegex);
           if (valMatch) {
             const valRhs = valMatch[1].trim();
-            if (valRhs.startsWith('"') || valRhs.startsWith("'")) return "str";
+            if (valRhs.startsWith('"') || valRhs.startsWith("'") || /^f["']/.test(valRhs)) {
+              return "str";
+            }
             if (valRhs.startsWith("[")) return "list";
             if (valRhs.startsWith("{")) return "dict";
           }
+          return "unknown";
         }
         break;
       }
     }
-    // Subscript result is not guaranteed to be a list; return unknown
+    // Subscript result is not guaranteed to be a list or str; return unknown
     return "unknown";
   }
 
@@ -1202,7 +1331,7 @@ function inferPythonType(
   const startLine = position.lineNumber;
   for (let ln = startLine; ln >= 1; ln--) {
     const rawLine = model.getLineContent(ln);
-    const line = rawLine.split("#")[0].trim();
+    const line = stripPythonComment(rawLine).trim();
     if (!line) continue;
 
     // Type annotation: varName: str or varName: list[...]
@@ -1305,8 +1434,16 @@ function extractPythonDocumentSymbols(
     const raw = model.getLineContent(ln);
     const m = raw.match(/^(\s*)def\s+([a-zA-Z_]\w*)/);
     if (m) {
-      activeFuncStart = ln;
       const baseIndent = m[1].length;
+      // If the current cursor line is non-empty and unindented / indented <= baseIndent,
+      // the cursor has exited the function back to module or outer scope.
+      const currentRaw = model.getLineContent(currentLine);
+      const currentIndentMatch = currentRaw.match(/^(\s*)\S/);
+      if (currentIndentMatch && currentIndentMatch[1].length <= baseIndent && currentLine > ln) {
+        break;
+      }
+
+      activeFuncStart = ln;
       inFunc = true;
       for (let eln = ln + 1; eln <= lineCount; eln++) {
         const eline = model.getLineContent(eln);
@@ -1327,7 +1464,7 @@ function extractPythonDocumentSymbols(
 
   for (let ln = 1; ln <= lineCount; ln++) {
     const rawLine = model.getLineContent(ln);
-    const line = rawLine.split("#")[0];
+    const line = stripPythonComment(rawLine);
     if (!line.trim()) continue;
 
     // Function definition (always visible module-wide)
@@ -1437,20 +1574,26 @@ function extractPythonDocumentSymbols(
     }
   }
 
-  // Also collect general identifier words, filtering out lines belonging to other functions
-  const wordRegex = /\b([a-zA-Z_]\w{1,})\b/g;
-  for (let ln = 1; ln <= lineCount; ln++) {
+  // Also collect general identifier words from code only (excluding multiline strings, strings, and comments)
+  const fullText = model.getValue();
+  const codeOnly = fullText
+    .replace(/"""[\s\S]*?"""/g, " ")
+    .replace(/'''[\s\S]*?'''/g, " ")
+    .replace(/"(?:\\.|[^"\\])*"/g, " ")
+    .replace(/'(?:\\.|[^'\\])*'/g, " ")
+    .replace(/#.*$/gm, " ");
+
+  const codeLines = codeOnly.split("\n");
+  for (let ln = 1; ln <= codeLines.length; ln++) {
     const rawLine = model.getLineContent(ln);
     const isIndented = /^\s+/.test(rawLine);
     if (isIndented && (!inFunc || ln < activeFuncStart || ln > activeFuncEnd)) {
       continue;
     }
-    const lineWithoutCommentsOrStrings = rawLine
-      .split("#")[0]
-      .replace(/"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g, " ");
-
+    const cleanLine = codeLines[ln - 1];
     let wMatch: RegExpExecArray | null;
-    while ((wMatch = wordRegex.exec(lineWithoutCommentsOrStrings)) !== null) {
+    const lineWordRegex = /\b([a-zA-Z_]\w{1,})\b/g;
+    while ((wMatch = lineWordRegex.exec(cleanLine)) !== null) {
       const word = wMatch[1];
       if (
         !seen.has(word) &&
@@ -1475,7 +1618,7 @@ function extractPythonDocumentSymbols(
   return items;
 }
 
-let isRegistered = false;
+const registeredMonacoInstances = new WeakSet<object>();
 
 /**
  * Registers offline autocomplete suggestions, standard library completions,
@@ -1483,8 +1626,8 @@ let isRegistered = false;
  */
 export function registerPythonCompletions(mInstance?: Monaco) {
   const m = mInstance ?? monacoDefault;
-  if (isRegistered) return;
-  isRegistered = true;
+  if (registeredMonacoInstances.has(m)) return;
+  registeredMonacoInstances.add(m);
 
   // 1. Autocomplete & Suggestions Provider
   m.languages.registerCompletionItemProvider("python", {
@@ -1639,13 +1782,13 @@ export function registerPythonCompletions(mInstance?: Monaco) {
       const localSymbols = extractPythonDocumentSymbols(model, position, range, m);
 
       return {
-        suggestions: [
+        suggestions: deduplicateSuggestions([
           ...localSymbols,
           ...snippetItems,
           ...builtinItems,
           ...keywordItems,
           ...moduleItems,
-        ],
+        ]),
       };
     },
   });
@@ -1824,8 +1967,14 @@ export function registerPythonCompletions(mInstance?: Monaco) {
   m.languages.registerSignatureHelpProvider("python", {
     signatureHelpTriggerCharacters: ["(", ","],
     provideSignatureHelp(model, position) {
-      const lineContent = model.getLineContent(position.lineNumber);
-      const textBefore = lineContent.slice(0, position.column - 1);
+      // Scan up to 50 lines backwards to support multiline function calls
+      const startLine = Math.max(1, position.lineNumber - 50);
+      const textBefore = model.getValueInRange({
+        startLineNumber: startLine,
+        startColumn: 1,
+        endLineNumber: position.lineNumber,
+        endColumn: position.column,
+      });
 
       // Parse from left to right tracking quotes ("...", '...') and nested parenthesis depth
       const parenStack: { openIdx: number; argCount: number; lastCommaIdx: number }[] = [];
