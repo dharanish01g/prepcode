@@ -1196,23 +1196,23 @@ function inferPythonType(
     if (assignMatch) {
       const rhs = assignMatch[1].trim();
 
+      // List detection (placed before string detection to correctly handle "hello world".split())
+      if (/\.split(?:lines)?\s*\(/.test(rhs) || rhs.startsWith("[") || /^list\s*\(/.test(rhs)) {
+        return "list";
+      }
+
       // String detection
       if (
-        rhs.startsWith('"') ||
-        rhs.startsWith("'") ||
-        /^f["']/.test(rhs) ||
-        /^r["']/.test(rhs) ||
+        (rhs.startsWith('"') && rhs.endsWith('"')) ||
+        (rhs.startsWith("'") && rhs.endsWith("'")) ||
+        (/^f["']/.test(rhs) && (rhs.endsWith('"') || rhs.endsWith("'"))) ||
+        (/^r["']/.test(rhs) && (rhs.endsWith('"') || rhs.endsWith("'"))) ||
         /^str\s*\(/.test(rhs) ||
         /^input\s*\(/.test(rhs) ||
         /\.(strip|lower|upper|replace|format|title|capitalize)\s*\(/.test(rhs) ||
         /["']\.join\s*\(/.test(rhs)
       ) {
         return "str";
-      }
-
-      // List detection
-      if (rhs.startsWith("[") || /^list\s*\(/.test(rhs) || /\.split(?:lines)?\s*\(/.test(rhs)) {
-        return "list";
       }
 
       // Dict detection
