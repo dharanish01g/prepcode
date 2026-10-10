@@ -918,6 +918,123 @@ function toCompletionItems(
   }));
 }
 
+const CSHARP_KEYWORD_SET = new Set(CSHARP_KEYWORDS);
+const CSHARP_TYPE_SET = new Set(CSHARP_TYPES.map((t) => t.name));
+
+/**
+ * Scans the current C# document for user-defined variables, methods,
+ * classes, and identifiers so they appear instantly in autocomplete.
+ */
+function extractCSharpDocumentSymbols(
+  model: monacoDefault.editor.ITextModel,
+  position: monacoDefault.Position,
+  range: monacoDefault.IRange,
+  monaco: Monaco,
+): monacoDefault.languages.CompletionItem[] {
+  const lineCount = model.getLineCount();
+  const currentWord = model.getWordUntilPosition(position).word;
+
+  const seen = new Set<string>();
+  const items: monacoDefault.languages.CompletionItem[] = [];
+
+  for (let ln = 1; ln <= lineCount; ln++) {
+    const rawLine = model.getLineContent(ln);
+    const line = rawLine.split("//")[0].trim();
+    if (!line) continue;
+
+    // Variable declaration: `string username = ...` or `var username = ...` or `int count = 0;`
+    const varMatch = line.match(
+      /\b(?:var|[a-zA-Z_]\w*(?:<[^>]+>)?(?:\[\])?)\s+([a-zA-Z_]\w*)\s*(?:=|;|,)/,
+    );
+    if (varMatch) {
+      const name = varMatch[1];
+      if (
+        !seen.has(name) &&
+        name !== currentWord &&
+        !CSHARP_KEYWORD_SET.has(name) &&
+        !CSHARP_TYPE_SET.has(name)
+      ) {
+        seen.add(name);
+        items.push({
+          label: name,
+          kind: monaco.languages.CompletionItemKind.Variable,
+          insertText: name,
+          detail: `variable ${name} (local)`,
+          range,
+          sortText: `0_${name}`,
+        });
+      }
+    }
+
+    // Foreach variable: `foreach (var user in users)` or `foreach (string user in users)`
+    const foreachMatch = line.match(
+      /\bforeach\s*\(\s*(?:var|[a-zA-Z_]\w*)\s+([a-zA-Z_]\w*)\s+in\b/,
+    );
+    if (foreachMatch) {
+      const name = foreachMatch[1];
+      if (
+        !seen.has(name) &&
+        name !== currentWord &&
+        !CSHARP_KEYWORD_SET.has(name) &&
+        !CSHARP_TYPE_SET.has(name)
+      ) {
+        seen.add(name);
+        items.push({
+          label: name,
+          kind: monaco.languages.CompletionItemKind.Variable,
+          insertText: name,
+          detail: `variable ${name} (foreach)`,
+          range,
+          sortText: `0_${name}`,
+        });
+      }
+    }
+
+    // Class definition: `class MyClass`
+    const classMatch = line.match(/\bclass\s+([a-zA-Z_]\w*)/);
+    if (classMatch) {
+      const name = classMatch[1];
+      if (!seen.has(name) && name !== currentWord && !CSHARP_KEYWORD_SET.has(name)) {
+        seen.add(name);
+        items.push({
+          label: name,
+          kind: monaco.languages.CompletionItemKind.Class,
+          insertText: name,
+          detail: `class ${name} (local)`,
+          range,
+          sortText: `0_${name}`,
+        });
+      }
+    }
+  }
+
+  // Also collect general identifier words in the document
+  const fullText = model.getValue();
+  const wordRegex = /\b([a-zA-Z_]\w{1,})\b/g;
+  let wMatch: RegExpExecArray | null;
+  while ((wMatch = wordRegex.exec(fullText)) !== null) {
+    const word = wMatch[1];
+    if (
+      !seen.has(word) &&
+      word !== currentWord &&
+      !CSHARP_KEYWORD_SET.has(word) &&
+      !CSHARP_TYPE_SET.has(word)
+    ) {
+      seen.add(word);
+      items.push({
+        label: word,
+        kind: monaco.languages.CompletionItemKind.Variable,
+        insertText: word,
+        detail: `identifier (document)`,
+        range,
+        sortText: `1_${word}`,
+      });
+    }
+  }
+
+  return items;
+}
+
 let isRegistered = false;
 
 /**
@@ -1051,8 +1168,10 @@ export function registerCSharpCompletions(mInstance?: Monaco) {
         };
       });
 
+      const localSymbols = extractCSharpDocumentSymbols(model, position, range, m);
+
       return {
-        suggestions: [...snippetItems, ...typeItems, ...keywordItems],
+        suggestions: [...localSymbols, ...snippetItems, ...typeItems, ...keywordItems],
       };
     },
   });

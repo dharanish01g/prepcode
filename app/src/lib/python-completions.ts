@@ -643,8 +643,7 @@ const JSON_MEMBERS: CompletionItemDef[] = [
   },
 ];
 
-const COMMON_INSTANCE_MEMBERS: CompletionItemDef[] = [
-  // String methods
+const STRING_MEMBERS: CompletionItemDef[] = [
   {
     label: "split",
     snippet: 'split("${1: }")',
@@ -742,8 +741,9 @@ const COMMON_INSTANCE_MEMBERS: CompletionItemDef[] = [
     detail: "str.isalnum() -> bool",
     documentation: "Return True if all characters in S are alphanumeric.",
   },
+];
 
-  // List methods
+const LIST_MEMBERS: CompletionItemDef[] = [
   {
     label: "append",
     snippet: "append(${1:item})",
@@ -804,8 +804,9 @@ const COMMON_INSTANCE_MEMBERS: CompletionItemDef[] = [
     detail: "copy() -> shallow copy",
     documentation: "Return a shallow copy.",
   },
+];
 
-  // Dict methods
+const DICT_MEMBERS: CompletionItemDef[] = [
   {
     label: "keys",
     snippet: "keys()",
@@ -842,8 +843,9 @@ const COMMON_INSTANCE_MEMBERS: CompletionItemDef[] = [
     detail: "dict.setdefault(key, default=None, /) -> value",
     documentation: "Insert key with a value of default if key is not in the dictionary.",
   },
+];
 
-  // Set methods
+const SET_MEMBERS: CompletionItemDef[] = [
   {
     label: "add",
     snippet: "add(${1:element})",
@@ -874,6 +876,13 @@ const COMMON_INSTANCE_MEMBERS: CompletionItemDef[] = [
     detail: "set.difference(*others) -> set",
     documentation: "Return the difference of two or more sets as a new set.",
   },
+];
+
+const COMMON_INSTANCE_MEMBERS: CompletionItemDef[] = [
+  ...STRING_MEMBERS,
+  ...LIST_MEMBERS,
+  ...DICT_MEMBERS,
+  ...SET_MEMBERS,
 ];
 
 const PYTHON_KEYWORDS = [
@@ -1076,6 +1085,239 @@ function toCompletionItems(
   }));
 }
 
+const PYTHON_KEYWORD_SET = new Set(PYTHON_KEYWORDS);
+const PYTHON_BUILTIN_SET = new Set(BUILTIN_FUNCTIONS.map((f) => f.label));
+const PYTHON_MODULE_SET = new Set(PYTHON_MODULES.map((m) => m.name));
+
+/**
+ * Lightweight type inference for Python expressions preceding a dot.
+ * Scans the preceding code backwards to find assignments, type annotations,
+ * or literal values to determine if the target is a str, list, dict, set, etc.
+ */
+function inferPythonType(
+  model: monacoDefault.editor.ITextModel,
+  position: monacoDefault.Position,
+  textBeforeWord: string,
+): "str" | "list" | "dict" | "set" | "unknown" {
+  const expr = textBeforeWord.slice(0, -1).trim();
+  if (!expr) return "unknown";
+
+  // Check literal suffixes
+  if (expr.endsWith('"') || expr.endsWith("'")) return "str";
+  if (expr.endsWith("]")) return "list";
+  if (expr.endsWith("}")) {
+    return expr.includes(":") ? "dict" : "set";
+  }
+
+  // Extract the variable or identifier immediately before the dot
+  const match = expr.match(/([a-zA-Z_]\w*)$/);
+  if (!match) return "unknown";
+  const varName = match[1];
+
+  // Scan backwards from the current line to line 1
+  const startLine = position.lineNumber;
+  for (let ln = startLine; ln >= 1; ln--) {
+    const rawLine = model.getLineContent(ln);
+    const line = rawLine.split("#")[0].trim();
+    if (!line) continue;
+
+    // Type annotation: varName: str or varName: list[...]
+    const annotMatch = line.match(new RegExp(`^${varName}\\s*:\\s*([a-zA-Z_]\\w*)`));
+    if (annotMatch) {
+      const typeHint = annotMatch[1].toLowerCase();
+      if (typeHint === "str") return "str";
+      if (typeHint === "list") return "list";
+      if (typeHint === "dict") return "dict";
+      if (typeHint === "set") return "set";
+    }
+
+    // Function parameter type annotation: def ...(varName: str, ...)
+    if (line.startsWith("def ")) {
+      const paramMatch = line.match(new RegExp(`\\b${varName}\\s*:\\s*([a-zA-Z_]\\w*)`));
+      if (paramMatch) {
+        const typeHint = paramMatch[1].toLowerCase();
+        if (typeHint === "str") return "str";
+        if (typeHint === "list") return "list";
+        if (typeHint === "dict") return "dict";
+        if (typeHint === "set") return "set";
+      }
+    }
+
+    // Variable assignment: varName = ...
+    const assignMatch = line.match(new RegExp(`^${varName}\\s*(?::[^=]+)?\\s*=\\s*(.+)`));
+    if (assignMatch) {
+      const rhs = assignMatch[1].trim();
+
+      // String detection
+      if (
+        rhs.startsWith('"') ||
+        rhs.startsWith("'") ||
+        /^f["']/.test(rhs) ||
+        /^r["']/.test(rhs) ||
+        /^str\s*\(/.test(rhs) ||
+        /^input\s*\(/.test(rhs) ||
+        /\.(strip|lower|upper|replace|format|title|capitalize)\s*\(/.test(rhs) ||
+        /["']\.join\s*\(/.test(rhs)
+      ) {
+        return "str";
+      }
+
+      // List detection
+      if (rhs.startsWith("[") || /^list\s*\(/.test(rhs) || /\.split\s*\(/.test(rhs)) {
+        return "list";
+      }
+
+      // Dict detection
+      if (
+        (rhs.startsWith("{") && (rhs.includes(":") || rhs === "{}")) ||
+        /^dict\s*\(/.test(rhs) ||
+        /json\.loads\s*\(/.test(rhs)
+      ) {
+        return "dict";
+      }
+
+      // Set detection
+      if ((rhs.startsWith("{") && !rhs.includes(":")) || /^set\s*\(/.test(rhs)) {
+        return "set";
+      }
+
+      // If assigned to something else, stop tracing further
+      break;
+    }
+
+    // For loop: for varName in ...
+    const forMatch = line.match(new RegExp(`^for\\s+${varName}\\s+in\\s+(.+):?`));
+    if (forMatch) {
+      const iterable = forMatch[1].trim();
+      if (iterable.startsWith('"') || iterable.startsWith("'") || iterable.includes(".split(")) {
+        return "str";
+      }
+    }
+  }
+
+  return "unknown";
+}
+
+/**
+ * Scans the current document for user-defined variables, functions,
+ * classes, and identifiers so they appear instantly in autocomplete.
+ */
+function extractPythonDocumentSymbols(
+  model: monacoDefault.editor.ITextModel,
+  position: monacoDefault.Position,
+  range: monacoDefault.IRange,
+  monaco: Monaco,
+): monacoDefault.languages.CompletionItem[] {
+  const lineCount = model.getLineCount();
+  const currentWord = model.getWordUntilPosition(position).word;
+  const currentLine = position.lineNumber;
+
+  const seen = new Set<string>();
+  const items: monacoDefault.languages.CompletionItem[] = [];
+
+  for (let ln = 1; ln <= lineCount; ln++) {
+    const rawLine = model.getLineContent(ln);
+    const line = rawLine.split("#")[0];
+    if (!line.trim()) continue;
+
+    // Function definition
+    const funcMatch = line.match(/^\s*def\s+([a-zA-Z_]\w*)/);
+    if (funcMatch) {
+      const name = funcMatch[1];
+      if (!seen.has(name) && name !== currentWord && !PYTHON_KEYWORD_SET.has(name)) {
+        seen.add(name);
+        items.push({
+          label: name,
+          kind: monaco.languages.CompletionItemKind.Function,
+          insertText: `${name}(${ln === currentLine ? "" : "$0"})`,
+          insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+          detail: `def ${name}() (local function)`,
+          range,
+          sortText: `0_${name}`,
+        });
+      }
+    }
+
+    // Class definition
+    const classMatch = line.match(/^\s*class\s+([a-zA-Z_]\w*)/);
+    if (classMatch) {
+      const name = classMatch[1];
+      if (!seen.has(name) && name !== currentWord && !PYTHON_KEYWORD_SET.has(name)) {
+        seen.add(name);
+        items.push({
+          label: name,
+          kind: monaco.languages.CompletionItemKind.Class,
+          insertText: name,
+          detail: `class ${name} (local class)`,
+          range,
+          sortText: `0_${name}`,
+        });
+      }
+    }
+
+    // Variable assignment: username = ... or username: str = ...
+    const varMatch = line.match(/^\s*([a-zA-Z_]\w*)\s*(?::\s*[^=]+)?\s*=/);
+    if (varMatch) {
+      const name = varMatch[1];
+      if (!seen.has(name) && name !== currentWord && !PYTHON_KEYWORD_SET.has(name)) {
+        seen.add(name);
+        items.push({
+          label: name,
+          kind: monaco.languages.CompletionItemKind.Variable,
+          insertText: name,
+          detail: `variable ${name} (local)`,
+          range,
+          sortText: `0_${name}`,
+        });
+      }
+    }
+
+    // For loop variable: for user in users:
+    const forMatch = line.match(/^\s*for\s+([a-zA-Z_]\w*)\s+in\b/);
+    if (forMatch) {
+      const name = forMatch[1];
+      if (!seen.has(name) && name !== currentWord && !PYTHON_KEYWORD_SET.has(name)) {
+        seen.add(name);
+        items.push({
+          label: name,
+          kind: monaco.languages.CompletionItemKind.Variable,
+          insertText: name,
+          detail: `variable ${name} (loop)`,
+          range,
+          sortText: `0_${name}`,
+        });
+      }
+    }
+  }
+
+  // Also collect any other identifiers across the document
+  const fullText = model.getValue();
+  const wordRegex = /\b([a-zA-Z_]\w{1,})\b/g;
+  let wMatch: RegExpExecArray | null;
+  while ((wMatch = wordRegex.exec(fullText)) !== null) {
+    const word = wMatch[1];
+    if (
+      !seen.has(word) &&
+      word !== currentWord &&
+      !PYTHON_KEYWORD_SET.has(word) &&
+      !PYTHON_BUILTIN_SET.has(word) &&
+      !PYTHON_MODULE_SET.has(word)
+    ) {
+      seen.add(word);
+      items.push({
+        label: word,
+        kind: monaco.languages.CompletionItemKind.Variable,
+        insertText: word,
+        detail: `identifier (document)`,
+        range,
+        sortText: `1_${word}`,
+      });
+    }
+  }
+
+  return items;
+}
+
 let isRegistered = false;
 
 /**
@@ -1127,6 +1369,21 @@ export function registerPythonCompletions(mInstance?: Monaco) {
         }
         if (/(?:^|[^\w.])json\.$/.test(textBeforeWord)) {
           return { suggestions: toCompletionItems(JSON_MEMBERS, range) };
+        }
+
+        // Infer type of the expression immediately before the dot:
+        const inferred = inferPythonType(model, position, textBeforeWord);
+        if (inferred === "str") {
+          return { suggestions: toCompletionItems(STRING_MEMBERS, range) };
+        }
+        if (inferred === "list") {
+          return { suggestions: toCompletionItems(LIST_MEMBERS, range) };
+        }
+        if (inferred === "dict") {
+          return { suggestions: toCompletionItems(DICT_MEMBERS, range) };
+        }
+        if (inferred === "set") {
+          return { suggestions: toCompletionItems(SET_MEMBERS, range) };
         }
 
         // Default member access for any object / instance expression (strings, lists, dicts, sets, etc.):
@@ -1222,8 +1479,16 @@ export function registerPythonCompletions(mInstance?: Monaco) {
         range,
       }));
 
+      const localSymbols = extractPythonDocumentSymbols(model, position, range, m);
+
       return {
-        suggestions: [...snippetItems, ...builtinItems, ...keywordItems, ...moduleItems],
+        suggestions: [
+          ...localSymbols,
+          ...snippetItems,
+          ...builtinItems,
+          ...keywordItems,
+          ...moduleItems,
+        ],
       };
     },
   });
