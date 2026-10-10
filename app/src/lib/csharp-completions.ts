@@ -1183,6 +1183,9 @@ export function registerCSharpCompletions(mInstance?: Monaco) {
       const stack: CallContext[] = [];
       let inQuote: "'" | '"' | null = null;
       let isEscaped = false;
+      let angleDepth = 0;
+      let bracketDepth = 0;
+      let braceDepth = 0;
 
       for (let i = 0; i < textBefore.length; i++) {
         const ch = textBefore[i];
@@ -1212,8 +1215,20 @@ export function registerCSharpCompletions(mInstance?: Monaco) {
           });
         } else if (ch === ")") {
           stack.pop();
+        } else if (ch === "<") {
+          angleDepth++;
+        } else if (ch === ">") {
+          if (angleDepth > 0) angleDepth--;
+        } else if (ch === "[") {
+          bracketDepth++;
+        } else if (ch === "]") {
+          if (bracketDepth > 0) bracketDepth--;
+        } else if (ch === "{") {
+          braceDepth++;
+        } else if (ch === "}") {
+          if (braceDepth > 0) braceDepth--;
         } else if (ch === ",") {
-          if (stack.length > 0) {
+          if (stack.length > 0 && angleDepth === 0 && bracketDepth === 0 && braceDepth === 0) {
             stack[stack.length - 1].paramIndex++;
           }
         }
