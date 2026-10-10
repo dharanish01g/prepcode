@@ -1306,6 +1306,7 @@ export function registerCSharpCompletions(mInstance?: Monaco) {
       let isEscaped = false;
       let angleDepth = 0;
       let bracketDepth = 0;
+      let braceDepth = 0;
 
       for (let i = 0; i < textBefore.length; i++) {
         const ch = textBefore[i];
@@ -1340,8 +1341,12 @@ export function registerCSharpCompletions(mInstance?: Monaco) {
           bracketDepth++;
         } else if (ch === "]") {
           if (bracketDepth > 0) bracketDepth--;
+        } else if (ch === "{") {
+          braceDepth++;
+        } else if (ch === "}") {
+          if (braceDepth > 0) braceDepth--;
         } else if (ch === ",") {
-          if (parenStack.length > 0 && angleDepth === 0 && bracketDepth === 0) {
+          if (parenStack.length > 0 && angleDepth === 0 && bracketDepth === 0 && braceDepth === 0) {
             parenStack[parenStack.length - 1].argCount++;
           }
         }
