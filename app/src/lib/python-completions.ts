@@ -1146,8 +1146,8 @@ function inferPythonType(
             if (valRhs.startsWith("{")) return "dict";
           }
         }
-        // If assigned a list of string literals or .split()
-        if (rhs.startsWith('["') || rhs.startsWith("['") || /\.split\s*\(/.test(rhs)) {
+        // If indexing a list known to contain strings (e.g. words = text.split(); words[0].), the subscript element is a str
+        if (rhs.startsWith('["') || rhs.startsWith("['") || /\.split(?:lines)?\s*\(/.test(rhs)) {
           return "str";
         }
         break;
@@ -1211,7 +1211,7 @@ function inferPythonType(
       }
 
       // List detection
-      if (rhs.startsWith("[") || /^list\s*\(/.test(rhs) || /\.split\s*\(/.test(rhs)) {
+      if (rhs.startsWith("[") || /^list\s*\(/.test(rhs) || /\.split(?:lines)?\s*\(/.test(rhs)) {
         return "list";
       }
 
