@@ -994,8 +994,9 @@ export function registerCSharpCompletions(mInstance?: Monaco) {
         return { suggestions: toCompletionItems(COMMON_INSTANCE_MEMBERS, range) };
       }
 
-      // Check if user is typing a `using` statement (e.g. "using ")
-      if (textBeforeWord.trim().startsWith("using")) {
+      // Check if user is typing a `using` directive at top-level or namespace (e.g. "using System")
+      const textBeforeCursor = lineContent.slice(0, position.column - 1);
+      if (/^\s*(?:global\s+)?using\s+(?:static\s+)?([a-zA-Z_][\w.]*)?$/.test(textBeforeCursor)) {
         return {
           suggestions: COMMON_NAMESPACES.map((ns) => ({
             label: ns,
@@ -1293,8 +1294,7 @@ export function registerCSharpCompletions(mInstance?: Monaco) {
         },
       };
 
-      const sigInfo =
-        signaturesMap[callTarget] || signaturesMap[callTarget.split(".").slice(-2).join(".")];
+      const sigInfo = signaturesMap[callTarget];
       if (!sigInfo) return null;
 
       return {
