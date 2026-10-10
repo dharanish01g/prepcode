@@ -601,3 +601,95 @@ test("Python Issue 14: Unknown expressions fall back safely without crashing or 
     "Unknown expression should not return string-specific methods",
   );
 });
+
+// ==========================================
+// REGRESSION TESTS FOR PR #18 / #22 REVIEW FINDINGS
+// ==========================================
+
+function endOf(src: string) {
+  const l = src.split("\n");
+  return { lineNumber: l.length, column: l[l.length - 1].length + 1 };
+}
+
+function pyLabels(src: string): string[] {
+  const { mockMonaco, completionProviders } = setupMockMonaco();
+  registerPythonCompletions(mockMonaco);
+  const r = completionProviders["python"].provideCompletionItems(createMockModel(src), endOf(src));
+  return r.suggestions.map((s: any) => s.label);
+}
+
+function pySig(src: string): number | null {
+  const { mockMonaco, sigHelpProviders } = setupMockMonaco();
+  registerPythonCompletions(mockMonaco);
+  const r = sigHelpProviders["python"].provideSignatureHelp(createMockModel(src), endOf(src));
+  return r ? r.value.activeParameter : null;
+}
+
+function csSig(src: string): number | null {
+  const { mockMonaco, sigHelpProviders } = setupMockMonaco();
+  registerCSharpCompletions(mockMonaco);
+  const r = sigHelpProviders["csharp"].provideSignatureHelp(createMockModel(src), endOf(src));
+  return r ? r.value.activeParameter : null;
+}
+
+test("Python Issue 15: variables assigned inside a module-level block stay visible after the block", () => {
+  assert.ok(
+    pyLabels("for i in range(3):\n    running_total = i\nprint(running_t").includes(
+      "running_total",
+    ),
+  );
+  assert.ok(pyLabels("if True:\n    flag_value = 1\nprint(flag_v").includes("flag_value"));
+  assert.ok(
+    pyLabels('if __name__ == "__main__":\n    result_value = 1\n    result_v').includes(
+      "result_value",
+    ),
+  );
+});
+
+test("Python Issue 16: another function's locals and annotations do not leak", () => {
+  // Function-local variable must not show up in a different function or at module level
+  assert.ok(!pyLabels("def a():\n    only_in_a = 1\n\ndef b():\n    only_").includes("only_in_a"));
+  // A blank line after a function is module level, not still inside the function
+  assert.ok(!pyLabels("def f():\n    local_only = 1\n\nx = 1\n").includes("local_only"));
+  // `items: list` in function a must not give list methods to unannotated `items` in function b
+  assert.ok(
+    !pyLabels("def a(items: list):\n    pass\n\ndef b(items):\n    items.").includes("append"),
+  );
+  // ...but the enclosing function's own annotation still works
+  assert.ok(pyLabels("def a(items: list):\n    items.").includes("append"));
+  // Locals of the current function are still suggested
+  assert.ok(pyLabels("def f(a):\n    total = 1\n    tot").includes("total"));
+});
+
+test("Python Issue 17: for-loop variable over range(len(x.split())) is not a string", () => {
+  assert.ok(!pyLabels("for i in range(len(text.split())):\n    i.").includes("upper"));
+  assert.ok(pyLabels("for part in line.split(','):\n    part.").includes("upper"));
+  assert.ok(pyLabels('for ch in "abc":\n    ch.').includes("upper"));
+});
+
+test("Python Issue 18: earlier review fixes keep working", () => {
+  // Exact dict key match
+  assert.ok(!pyLabels('d = {"username": "x", "name": 5}\nd["name"].').includes("upper"));
+  assert.ok(pyLabels('d = {"username": "x", "name": "y"}\nd["username"].').includes("upper"));
+  // Malformed key must not throw
+  assert.doesNotThrow(() => pyLabels('d = {"a": 1}\nd[x)].'));
+  // len(text.strip()) is not a str
+  assert.ok(!pyLabels("n = len(text.strip())\nn.").includes("upper"));
+  // *args / **kwargs and generic annotations
+  const params = pyLabels("def f(*args, **kwargs):\n    ar");
+  assert.ok(params.includes("args") && !params.some((l) => l.includes("*")));
+  assert.ok(!pyLabels("def g(a: Dict[str, int], b):\n    a").some((l) => l.includes("]")));
+  // Apostrophe or paren in an earlier comment must not break signature help
+  assert.equal(pySig("# don't forget\nx = range(1, "), 1);
+  assert.equal(pySig("# see foo(\nx = range(1, "), 1);
+});
+
+test("C# Issue 8: signature help depth is tracked per call", () => {
+  assert.equal(csSig("Math.Max(1, "), 1);
+  assert.equal(csSig("Math.Max(a < b ? a : b, "), 1);
+  assert.equal(csSig("Console.WriteLine(a < b); Math.Max(1, "), 1);
+  assert.equal(csSig("Foo(arr[Math.Max(1, "), 1);
+  assert.equal(csSig('Math.Max(@"C:\\dir\\", '), 1);
+  assert.equal(csSig('Math.Max(@"a""b,c", '), 1);
+  assert.equal(csSig("Math.Max(new Foo { A = 1, B = 2 }, "), 1);
+});

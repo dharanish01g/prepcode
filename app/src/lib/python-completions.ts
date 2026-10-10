@@ -1202,6 +1202,77 @@ function stripPythonComment(line: string): string {
   return line;
 }
 
+interface PythonScopes {
+  /** owner[ln] = header line of the innermost def/class that contains line ln (0 = module level). */
+  owner: number[];
+  /** Header lines of the def/class scopes whose names are visible from the cursor line. */
+  visible: Set<number>;
+  /** Whether each header line is a def or a class. */
+  kind: Map<number, "def" | "class">;
+}
+
+/**
+ * Works out which def/class body every line belongs to, and which of those scopes
+ * the cursor can see. Indented lines inside module-level if/for/while/with blocks
+ * still belong to the module, so their variables stay visible after the block ends.
+ */
+function computePythonScopes(
+  model: monacoDefault.editor.ITextModel,
+  cursorLine: number,
+): PythonScopes {
+  const lineCount = model.getLineCount();
+  const owner: number[] = new Array(lineCount + 2).fill(0);
+  const parent = new Map<number, number>();
+  const kind = new Map<number, "def" | "class">();
+  const stack: { line: number; indent: number }[] = [];
+  let cursorOwner = 0;
+
+  for (let ln = 1; ln <= lineCount; ln++) {
+    const raw = model.getLineContent(ln);
+    const code = stripPythonComment(raw);
+    const isCursor = ln === cursorLine;
+    if (!code.trim() && !isCursor) {
+      owner[ln] = stack.length ? stack[stack.length - 1].line : 0;
+      continue;
+    }
+    const indent = raw.match(/^\s*/)?.[0].length ?? 0;
+    // A line starting with a closing bracket continues a multi-line statement
+    if (!isCursor && /^\s*[)\\]}]/.test(code)) {
+      owner[ln] = stack.length ? stack[stack.length - 1].line : 0;
+      continue;
+    }
+    while (stack.length && stack[stack.length - 1].indent >= indent) stack.pop();
+    const top = stack.length ? stack[stack.length - 1].line : 0;
+    owner[ln] = top;
+    if (isCursor) cursorOwner = top;
+
+    const header = code.match(/^\s*(?:async\s+)?(def|class)\s+[a-zA-Z_]\w*/);
+    if (header) {
+      parent.set(ln, top);
+      kind.set(ln, header[1] === "def" ? "def" : "class");
+      stack.push({ line: ln, indent });
+    }
+  }
+
+  // Python rule: a function body can't see the variables of an enclosing class body.
+  const visible = new Set<number>();
+  let sawDef = false;
+  for (let c = cursorOwner; c !== 0; c = parent.get(c) ?? 0) {
+    if (kind.get(c) === "def") {
+      visible.add(c);
+      sawDef = true;
+    } else if (!sawDef) {
+      visible.add(c);
+    }
+  }
+  return { owner, visible, kind };
+}
+
+function isLineVisible(scopes: PythonScopes, ln: number): boolean {
+  const o = scopes.owner[ln] ?? 0;
+  return o === 0 || scopes.visible.has(o);
+}
+
 /**
  * Lightweight type inference for Python expressions preceding a dot.
  * Scans the preceding code backwards to find assignments, type annotations,
@@ -1214,6 +1285,9 @@ function inferPythonType(
 ): "str" | "list" | "dict" | "set" | "unknown" {
   const expr = textBeforeWord.slice(0, -1).trim();
   if (!expr) return "unknown";
+
+  // Only look at declarations the cursor can actually see (not other functions' locals)
+  const scopes = computePythonScopes(model, position.lineNumber);
 
   // Check literal expressions:
   if (
@@ -1244,6 +1318,7 @@ function inferPythonType(
       const rawLine = model.getLineContent(ln);
       const line = stripPythonComment(rawLine).trim();
       if (!line) continue;
+      if (!isLineVisible(scopes, ln)) continue;
 
       // Type annotations: baseVar: list[str], baseVar: list[list[int]], baseVar: str
       const annotMatch = line.match(new RegExp(`^${baseVar}\\s*:\\s*(.+)`));
@@ -1337,6 +1412,7 @@ function inferPythonType(
     const rawLine = model.getLineContent(ln);
     const line = stripPythonComment(rawLine).trim();
     if (!line) continue;
+    if (!isLineVisible(scopes, ln)) continue;
 
     // Type annotation: varName: str or varName: list[...]
     const annotMatch = line.match(new RegExp(`^${varName}\\s*:\\s*([a-zA-Z_]\\w*)`));
@@ -1349,7 +1425,8 @@ function inferPythonType(
     }
 
     // Function parameter type annotation: def ...(varName: str, ...)
-    if (line.startsWith("def ")) {
+    // Only for the def(s) that actually enclose the cursor
+    if (scopes.visible.has(ln) && scopes.kind.get(ln) === "def") {
       const paramMatch = line.match(new RegExp(`\\b${varName}\\s*:\\s*([a-zA-Z_]\\w*)`));
       if (paramMatch) {
         const typeHint = paramMatch[1].toLowerCase();
@@ -1422,7 +1499,13 @@ function inferPythonType(
     const forMatch = line.match(new RegExp(`^for\\s+${varName}\\s+in\\s+(.+):?`));
     if (forMatch) {
       const iterable = forMatch[1].trim().replace(/:$/, "").trim();
-      if (iterable.startsWith('"') || iterable.startsWith("'") || iterable.includes(".split(")) {
+      // Iterating a string, or the list returned by a final .split()/.splitlines() call,
+      // yields strings. Don't match a .split() buried inside range(len(...)) and similar.
+      if (
+        iterable.startsWith('"') ||
+        iterable.startsWith("'") ||
+        /\.(?:split|splitlines)\s*\([^()]*\)$/.test(iterable)
+      ) {
         return "str";
       }
       // The for-loop is the most recent binding for this variable; stop searching.
@@ -1447,69 +1530,9 @@ function extractPythonDocumentSymbols(
   const currentWord = model.getWordUntilPosition(position).word;
   const currentLine = position.lineNumber;
 
-  // Determine active function scope for the current cursor position
-  let activeFuncStart = -1;
-  let activeFuncEnd = lineCount;
-  let inFunc = false;
-
-  for (let ln = currentLine; ln >= 1; ln--) {
-    const raw = model.getLineContent(ln);
-    const m = raw.match(/^(\s*)def\s+([a-zA-Z_]\w*)/);
-    if (m) {
-      const baseIndent = m[1].length;
-      // If the current cursor line is non-empty and unindented / indented <= baseIndent,
-      // the cursor has exited the function back to module or outer scope.
-      const currentRaw = model.getLineContent(currentLine);
-      const currentIndentMatch = currentRaw.match(/^(\s*)\S/);
-      if (currentIndentMatch && currentIndentMatch[1].length <= baseIndent && currentLine > ln) {
-        break;
-      }
-
-      activeFuncStart = ln;
-      inFunc = true;
-      for (let eln = ln + 1; eln <= lineCount; eln++) {
-        const eline = model.getLineContent(eln);
-        const trimmed = eline.trim();
-        if (!trimmed || trimmed.startsWith("#")) continue;
-        const ind = eline.match(/^\s*/)?.[0].length ?? 0;
-        if (ind <= baseIndent) {
-          activeFuncEnd = eln - 1;
-          break;
-        }
-      }
-      break;
-    }
-  }
-
-  // Determine the enclosing module-level block for the cursor, if any.
-  // Variables inside if/for/while/with/try/else/elif/except/finally blocks at
-  // module level are still accessible at module level, so we need to know
-  // which lines belong to such a block that contains the cursor.
-  let moduleBlockStart = -1;
-  let moduleBlockIndent = -1;
-  if (!inFunc) {
-    for (let ln = currentLine; ln >= 1; ln--) {
-      const raw = model.getLineContent(ln);
-      // A module-level block header (unindented if/for/while/with/try/else/elif/except/finally)
-      const blockMatch = raw.match(/^(if|for|while|with|try|else|elif|except|finally)\b/);
-      if (blockMatch) {
-        moduleBlockStart = ln;
-        moduleBlockIndent = 0;
-        break;
-      }
-      // If we hit an unindented non-empty, non-comment line that's not a block header, stop
-      const trimmed = raw.trim();
-      if (
-        trimmed &&
-        !trimmed.startsWith("#") &&
-        /^\S/.test(raw) &&
-        !raw.startsWith("def ") &&
-        !raw.startsWith("class ")
-      ) {
-        break;
-      }
-    }
-  }
+  // Which def/class bodies can the cursor see? Variables inside other functions stay hidden,
+  // while variables inside module-level if/for/while/with blocks remain visible everywhere.
+  const scopes = computePythonScopes(model, currentLine);
 
   const seen = new Set<string>();
   const items: monacoDefault.languages.CompletionItem[] = [];
@@ -1537,7 +1560,7 @@ function extractPythonDocumentSymbols(
       }
 
       // If this is the active enclosing function, also extract its parameters
-      if (inFunc && ln === activeFuncStart) {
+      if (scopes.visible.has(ln) && scopes.kind.get(ln) === "def") {
         const paramMatch = line.match(/def\s+[a-zA-Z_]\w*\s*\(([^)]*)\)/);
         if (paramMatch) {
           const params: string[] = [];
@@ -1618,21 +1641,7 @@ function extractPythonDocumentSymbols(
     // Indented variables are only in scope if defined within the current active function,
     // or within a module-level block (if/for/while/with) that contains the cursor.
     const isIndented = /^\s+/.test(rawLine);
-    if (isIndented) {
-      if (inFunc) {
-        // Inside a function: only variables within the active function's range
-        if (ln < activeFuncStart || ln > activeFuncEnd) continue;
-      } else {
-        // At module level: allow variables from module-level blocks
-        // (if/for/while/with) that enclose the cursor
-        const lineIndent = rawLine.match(/^\s*/)?.[0].length ?? 0;
-        if (moduleBlockStart !== -1 && ln >= moduleBlockStart && lineIndent > moduleBlockIndent) {
-          // Inside the enclosing module-level block — allow
-        } else {
-          continue;
-        }
-      }
-    }
+    if (!isLineVisible(scopes, ln)) continue;
 
     // Variable assignment: username = ... or username: str = ...
     const varMatch = line.match(/^\s*([a-zA-Z_]\w*)\s*(?::\s*[^=]+)?\s*=/);
@@ -1682,19 +1691,7 @@ function extractPythonDocumentSymbols(
 
   const codeLines = codeOnly.split("\n");
   for (let ln = 1; ln <= codeLines.length; ln++) {
-    const rawLine = model.getLineContent(ln);
-    const isIndented = /^\s+/.test(rawLine);
-    if (isIndented) {
-      if (inFunc) {
-        if (ln < activeFuncStart || ln > activeFuncEnd) continue;
-      } else {
-        if (moduleBlockStart !== -1 && ln >= moduleBlockStart) {
-          // allow — inside module block
-        } else {
-          continue;
-        }
-      }
-    }
+    if (!isLineVisible(scopes, ln)) continue;
     const cleanLine = codeLines[ln - 1];
     let wMatch: RegExpExecArray | null;
     // Match identifiers but skip those preceded by a dot (method/attribute names)
