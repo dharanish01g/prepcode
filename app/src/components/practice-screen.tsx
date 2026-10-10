@@ -33,9 +33,10 @@ export function PracticeScreen({
     <>
       <header className="flex h-16 shrink-0 items-center gap-2 border-b bg-background px-4">
         <Breadcrumb>
-          <BreadcrumbList>
+          {/* Same size as the Programs, Database and Sync column headings. */}
+          <BreadcrumbList className="text-base">
             <BreadcrumbItem>
-              <BreadcrumbPage>Practice</BreadcrumbPage>
+              <BreadcrumbPage className="font-medium">Practice</BreadcrumbPage>
             </BreadcrumbItem>
           </BreadcrumbList>
         </Breadcrumb>
