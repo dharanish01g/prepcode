@@ -22,9 +22,10 @@ export function JobsScreen({ guest, onLogin }: { guest: boolean; onLogin: () => 
     <>
       <header className="flex h-16 shrink-0 items-center gap-2 border-b bg-background px-4">
         <Breadcrumb>
-          <BreadcrumbList>
+          {/* Same size as the Programs, Database and Sync column headings. */}
+          <BreadcrumbList className="text-base">
             <BreadcrumbItem>
-              <BreadcrumbPage>Jobs</BreadcrumbPage>
+              <BreadcrumbPage className="font-medium">Jobs</BreadcrumbPage>
             </BreadcrumbItem>
           </BreadcrumbList>
         </Breadcrumb>
