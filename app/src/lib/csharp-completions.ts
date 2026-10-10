@@ -1006,7 +1006,8 @@ export function registerCSharpCompletions(mInstance?: Monaco) {
         // Ensure we are not inside a class / method body
         let hasClassBefore = false;
         for (let ln = 1; ln < position.lineNumber; ln++) {
-          const l = model.getLineContent(ln);
+          const rawLine = model.getLineContent(ln);
+          const l = rawLine.split("//")[0].trim();
           if (/\b(?:class|struct|interface|record|enum)\b/.test(l)) {
             hasClassBefore = true;
             break;
