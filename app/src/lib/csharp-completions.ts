@@ -994,17 +994,37 @@ export function registerCSharpCompletions(mInstance?: Monaco) {
         return { suggestions: toCompletionItems(COMMON_INSTANCE_MEMBERS, range) };
       }
 
-      // Check if user is typing a `using` statement (e.g. "using ")
-      if (textBeforeWord.startsWith("using")) {
-        return {
-          suggestions: COMMON_NAMESPACES.map((ns) => ({
-            label: ns,
-            kind: m.languages.CompletionItemKind.Module,
-            insertText: `${ns};`,
-            detail: `namespace ${ns}`,
-            range,
-          })),
-        };
+      // Check if user is typing a `using` directive (e.g. "using System" or "using static System.")
+      // Directives can only appear before class/type definitions and must not match `using var` or `using (...)`
+      const textBeforeCursor = lineContent.slice(0, position.column - 1);
+      const isUsingDirectivePattern =
+        /^\s*(?:global\s+)?using\s+(?:static\s+)?(?!var\b|\()([a-zA-Z_][\w.]*)?$/.test(
+          textBeforeCursor,
+        );
+
+      if (isUsingDirectivePattern) {
+        // Ensure we are not inside a class / method body
+        let hasClassBefore = false;
+        for (let ln = 1; ln < position.lineNumber; ln++) {
+          const rawLine = model.getLineContent(ln);
+          const l = rawLine.split("//")[0].trim();
+          if (/\b(?:class|struct|interface|record|enum)\b/.test(l)) {
+            hasClassBefore = true;
+            break;
+          }
+        }
+
+        if (!hasClassBefore) {
+          return {
+            suggestions: COMMON_NAMESPACES.map((ns) => ({
+              label: ns,
+              kind: m.languages.CompletionItemKind.Module,
+              insertText: `${ns};`,
+              detail: `namespace ${ns}`,
+              range,
+            })),
+          };
+        }
       }
 
       // Otherwise: suggest Keywords, Types, and Snippets (Monaco handles document word completions natively)
@@ -1067,8 +1087,8 @@ export function registerCSharpCompletions(mInstance?: Monaco) {
       const textBefore = lineContent.slice(0, word.startColumn - 1).trimEnd();
       const name = word.word;
 
-      // Only show Console member docs when preceded by "Console."
-      if (textBefore.endsWith("Console.")) {
+      // Only show Console member docs when preceded by "Console." with a word boundary
+      if (/(?:^|[^\w.])(?:System\.)?Console\.$/.test(textBefore)) {
         const consoleMatch = CONSOLE_MEMBERS.find((item) => item.label === name);
         if (consoleMatch) {
           return {
@@ -1086,8 +1106,8 @@ export function registerCSharpCompletions(mInstance?: Monaco) {
         }
       }
 
-      // Only show Math member docs when preceded by "Math."
-      if (textBefore.endsWith("Math.")) {
+      // Only show Math member docs when preceded by "Math." with a word boundary
+      if (/(?:^|[^\w.])(?:System\.)?Math\.$/.test(textBefore)) {
         const mathMatch = MATH_MEMBERS.find((item) => item.label === name);
         if (mathMatch) {
           return {
@@ -1105,8 +1125,8 @@ export function registerCSharpCompletions(mInstance?: Monaco) {
         }
       }
 
-      // Only show Convert member docs when preceded by "Convert."
-      if (textBefore.endsWith("Convert.")) {
+      // Only show Convert member docs when preceded by "Convert." with a word boundary
+      if (/(?:^|[^\w.])(?:System\.)?Convert\.$/.test(textBefore)) {
         const convertMatch = CONVERT_MEMBERS.find((item) => item.label === name);
         if (convertMatch) {
           return {
@@ -1125,7 +1145,7 @@ export function registerCSharpCompletions(mInstance?: Monaco) {
       }
 
       // Only show Class docs when hovering directly on the type name or preceded by System.
-      if (!textBefore.endsWith(".") || textBefore.endsWith("System.")) {
+      if (!textBefore.endsWith(".") || /(?:^|[^\w.])System\.$/.test(textBefore)) {
         const typeMatch = CSHARP_TYPES.find((t) => t.name === name);
         if (typeMatch) {
           return {
@@ -1147,52 +1167,95 @@ export function registerCSharpCompletions(mInstance?: Monaco) {
     },
   });
 
-  // 3. Signature Help Provider: shows parameter hints for known qualified calls and correctly handles nested parens
+  // 3. Signature Help Provider: shows parameter hints for known qualified calls and correctly handles nested parens & string literals
   m.languages.registerSignatureHelpProvider("csharp", {
     signatureHelpTriggerCharacters: ["(", ","],
     provideSignatureHelp(model, position) {
       const lineContent = model.getLineContent(position.lineNumber);
       const textBefore = lineContent.slice(0, position.column - 1);
 
-      // Parse nested parentheses backwards to find the enclosing call and active parameter
-      let parenDepth = 0;
-      let activeParameter = 0;
-      let callEnd = -1;
+      // Parse parentheses and parameters with string quote awareness
+      interface CallContext {
+        target: string;
+        paramIndex: number;
+      }
 
-      for (let i = textBefore.length - 1; i >= 0; i--) {
+      const stack: CallContext[] = [];
+      let inQuote: "'" | '"' | null = null;
+      let isEscaped = false;
+      let angleDepth = 0;
+      let bracketDepth = 0;
+      let braceDepth = 0;
+
+      for (let i = 0; i < textBefore.length; i++) {
         const ch = textBefore[i];
-        if (ch === ")") {
-          parenDepth++;
-        } else if (ch === "(") {
-          if (parenDepth > 0) {
-            parenDepth--;
-          } else {
-            callEnd = i;
-            break;
+
+        if (inQuote) {
+          if (isEscaped) {
+            isEscaped = false;
+          } else if (ch === "\\") {
+            isEscaped = true;
+          } else if (ch === inQuote) {
+            inQuote = null;
           }
-        } else if (ch === "," && parenDepth === 0) {
-          activeParameter++;
+          continue;
+        }
+
+        if (ch === '"' || ch === "'") {
+          inQuote = ch;
+          continue;
+        }
+
+        if (ch === "(") {
+          const textPrior = textBefore.slice(0, i).trimEnd();
+          const targetMatch = textPrior.match(/([A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)?)$/);
+          stack.push({
+            target: targetMatch ? targetMatch[1] : "",
+            paramIndex: 0,
+          });
+        } else if (ch === ")") {
+          stack.pop();
+        } else if (ch === "<") {
+          angleDepth++;
+        } else if (ch === ">") {
+          if (angleDepth > 0) angleDepth--;
+        } else if (ch === "[") {
+          bracketDepth++;
+        } else if (ch === "]") {
+          if (bracketDepth > 0) bracketDepth--;
+        } else if (ch === "{") {
+          braceDepth++;
+        } else if (ch === "}") {
+          if (braceDepth > 0) braceDepth--;
+        } else if (ch === ",") {
+          if (stack.length > 0 && angleDepth === 0 && bracketDepth === 0 && braceDepth === 0) {
+            stack[stack.length - 1].paramIndex++;
+          }
         }
       }
 
-      if (callEnd === -1) return null;
+      const activeCall = stack[stack.length - 1];
+      if (!activeCall || !activeCall.target) return null;
 
-      const textBeforeCall = textBefore.slice(0, callEnd).trimEnd();
-      const match = textBeforeCall.match(/([A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)?)$/);
-      if (!match) return null;
+      const callTarget = activeCall.target;
+      const activeParameter = activeCall.paramIndex;
 
-      const callTarget = match[1];
+      interface CSharpSig {
+        label: string;
+        doc: string;
+        params: { label: string; doc: string }[];
+      }
 
-      const signaturesMap: Record<string, { label: string; doc: string; params: string[] }> = {
+      const signaturesMap: Record<string, CSharpSig> = {
         "Console.WriteLine": {
           label: "void Console.WriteLine(object? value)",
           doc: "Writes the specified value to standard output followed by a line terminator.",
-          params: ["value: The value to write."],
+          params: [{ label: "value", doc: "The value to write." }],
         },
         "Console.Write": {
           label: "void Console.Write(object? value)",
           doc: "Writes the specified value to standard output.",
-          params: ["value: The value to write."],
+          params: [{ label: "value", doc: "The value to write." }],
         },
         "Console.ReadLine": {
           label: "string? Console.ReadLine()",
@@ -1202,57 +1265,66 @@ export function registerCSharpCompletions(mInstance?: Monaco) {
         "Math.Abs": {
           label: "T Math.Abs(T value)",
           doc: "Returns the absolute value of a number.",
-          params: ["value: A number."],
+          params: [{ label: "value", doc: "A number whose absolute value is to be found." }],
         },
         "Math.Max": {
           label: "T Math.Max(T val1, T val2)",
           doc: "Returns the larger of two numbers.",
-          params: ["val1: The first of two values.", "val2: The second of two values."],
+          params: [
+            { label: "val1", doc: "The first of two values." },
+            { label: "val2", doc: "The second of two values." },
+          ],
         },
         "Math.Min": {
           label: "T Math.Min(T val1, T val2)",
           doc: "Returns the smaller of two numbers.",
-          params: ["val1: The first of two values.", "val2: The second of two values."],
+          params: [
+            { label: "val1", doc: "The first of two values." },
+            { label: "val2", doc: "The second of two values." },
+          ],
         },
         "Math.Pow": {
           label: "double Math.Pow(double x, double y)",
           doc: "Returns a specified number raised to the specified power.",
-          params: ["x: A double to be raised to a power.", "y: A double that specifies a power."],
+          params: [
+            { label: "x", doc: "A double to be raised to a power." },
+            { label: "y", doc: "A double that specifies a power." },
+          ],
         },
         "Math.Sqrt": {
           label: "double Math.Sqrt(double d)",
           doc: "Returns the square root of a specified number.",
-          params: ["d: The number whose square root is to be found."],
+          params: [{ label: "d", doc: "The number whose square root is to be found." }],
         },
         "Math.Round": {
           label: "double Math.Round(double a)",
           doc: "Rounds a value to the nearest integral value.",
-          params: ["a: A double-precision floating-point number to be rounded."],
+          params: [{ label: "a", doc: "A double-precision floating-point number to be rounded." }],
         },
         "Convert.ToInt32": {
           label: "int Convert.ToInt32(object? value)",
           doc: "Converts a value to a 32-bit signed integer.",
-          params: ["value: The value to convert."],
+          params: [{ label: "value", doc: "The value to convert." }],
         },
         "int.Parse": {
           label: "int int.Parse(string s)",
           doc: "Converts the string representation of a number to its 32-bit signed integer equivalent.",
-          params: ["s: A string containing a number to convert."],
+          params: [{ label: "s", doc: "A string containing a number to convert." }],
         },
         "Int32.Parse": {
           label: "int int.Parse(string s)",
           doc: "Converts the string representation of a number to its 32-bit signed integer equivalent.",
-          params: ["s: A string containing a number to convert."],
+          params: [{ label: "s", doc: "A string containing a number to convert." }],
         },
         "double.Parse": {
           label: "double double.Parse(string s)",
           doc: "Converts the string representation of a number to its double-precision floating-point equivalent.",
-          params: ["s: A string containing a number to convert."],
+          params: [{ label: "s", doc: "A string containing a number to convert." }],
         },
         "Double.Parse": {
           label: "double double.Parse(string s)",
           doc: "Converts the string representation of a number to its double-precision floating-point equivalent.",
-          params: ["s: A string containing a number to convert."],
+          params: [{ label: "s", doc: "A string containing a number to convert." }],
         },
       };
 
@@ -1266,8 +1338,8 @@ export function registerCSharpCompletions(mInstance?: Monaco) {
               label: sigInfo.label,
               documentation: sigInfo.doc,
               parameters: sigInfo.params.map((p) => ({
-                label: p,
-                documentation: p,
+                label: p.label,
+                documentation: p.doc,
               })),
             },
           ],
