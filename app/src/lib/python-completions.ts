@@ -1121,7 +1121,7 @@ function inferPythonType(
     return expr.includes(":") ? "dict" : "set";
   }
 
-  // Subscript / index access: e.g. student["name"] or arr[0]
+  // Subscript / index access: e.g. student["name"], arr[0], or text[0]
   const subscriptMatch = expr.match(/^([a-zA-Z_]\w*)\[(.*)\]$/);
   if (subscriptMatch) {
     const baseVar = subscriptMatch[1];
@@ -1131,10 +1131,50 @@ function inferPythonType(
       const rawLine = model.getLineContent(ln);
       const line = rawLine.split("#")[0].trim();
       if (!line) continue;
+
+      // Type annotations: baseVar: list[str], baseVar: list[list[int]], baseVar: str
+      const annotMatch = line.match(new RegExp(`^${baseVar}\\s*:\\s*(.+)`));
+      if (annotMatch) {
+        const hint = annotMatch[1].toLowerCase();
+        if (
+          hint.startsWith("str") ||
+          hint.includes("list[str]") ||
+          hint.includes("list[string]") ||
+          hint.includes("dict[str, str]")
+        ) {
+          return "str";
+        }
+        if (hint.includes("list[list") || hint.includes("list[list[")) {
+          return "list";
+        }
+      }
+
       const assignMatch = line.match(new RegExp(`^${baseVar}\\s*(?::[^=]+)?\\s*=\\s*(.+)`));
       if (assignMatch) {
         const rhs = assignMatch[1].trim();
-        // If assigned from a dict literal, inspect the specific key's value if possible
+
+        // 1. Indexing a string literal or string function produces a str (e.g. text[0])
+        if (
+          (rhs.startsWith('"') && rhs.endsWith('"')) ||
+          (rhs.startsWith("'") && rhs.endsWith("'")) ||
+          /^f["']/.test(rhs) ||
+          /^str\s*\(/.test(rhs) ||
+          /^input\s*\(/.test(rhs)
+        ) {
+          return "str";
+        }
+
+        // 2. Indexing a nested list produces a list (e.g. matrix = [[1, 2]]; matrix[0].)
+        if (rhs.startsWith("[[")) {
+          return "list";
+        }
+
+        // 3. Indexing a list of strings produces a str (e.g. words = text.split(); words[0].)
+        if (rhs.startsWith('["') || rhs.startsWith("['") || /\.split(?:lines)?\s*\(/.test(rhs)) {
+          return "str";
+        }
+
+        // 4. Indexing a dict literal: inspect the specific key's value if possible
         if (rhs.startsWith("{") && rhs.endsWith("}")) {
           const cleanKey = keyPart.replace(/['"]/g, "");
           const keyRegex = new RegExp(`["']?${cleanKey}["']?\\s*:\\s*(.+)`);
@@ -1145,10 +1185,6 @@ function inferPythonType(
             if (valRhs.startsWith("[")) return "list";
             if (valRhs.startsWith("{")) return "dict";
           }
-        }
-        // If indexing a list known to contain strings (e.g. words = text.split(); words[0].), the subscript element is a str
-        if (rhs.startsWith('["') || rhs.startsWith("['") || /\.split(?:lines)?\s*\(/.test(rhs)) {
-          return "str";
         }
         break;
       }
@@ -1260,6 +1296,32 @@ function extractPythonDocumentSymbols(
   const currentWord = model.getWordUntilPosition(position).word;
   const currentLine = position.lineNumber;
 
+  // Determine active function scope for the current cursor position
+  let activeFuncStart = -1;
+  let activeFuncEnd = lineCount;
+  let inFunc = false;
+
+  for (let ln = currentLine; ln >= 1; ln--) {
+    const raw = model.getLineContent(ln);
+    const m = raw.match(/^(\s*)def\s+([a-zA-Z_]\w*)/);
+    if (m) {
+      activeFuncStart = ln;
+      const baseIndent = m[1].length;
+      inFunc = true;
+      for (let eln = ln + 1; eln <= lineCount; eln++) {
+        const eline = model.getLineContent(eln);
+        const trimmed = eline.trim();
+        if (!trimmed || trimmed.startsWith("#")) continue;
+        const ind = eline.match(/^\s*/)?.[0].length ?? 0;
+        if (ind <= baseIndent) {
+          activeFuncEnd = eln - 1;
+          break;
+        }
+      }
+      break;
+    }
+  }
+
   const seen = new Set<string>();
   const items: monacoDefault.languages.CompletionItem[] = [];
 
@@ -1268,7 +1330,7 @@ function extractPythonDocumentSymbols(
     const line = rawLine.split("#")[0];
     if (!line.trim()) continue;
 
-    // Function definition
+    // Function definition (always visible module-wide)
     const funcMatch = line.match(/^\s*def\s+([a-zA-Z_]\w*)/);
     if (funcMatch) {
       const name = funcMatch[1];
@@ -1284,9 +1346,38 @@ function extractPythonDocumentSymbols(
           sortText: `0_${name}`,
         });
       }
+
+      // If this is the active enclosing function, also extract its parameters
+      if (inFunc && ln === activeFuncStart) {
+        const paramMatch = line.match(/def\s+[a-zA-Z_]\w*\s*\(([^)]*)\)/);
+        if (paramMatch) {
+          const params = paramMatch[1].split(",");
+          for (const p of params) {
+            const pName = p.trim().split(/[:=]/)[0].trim();
+            if (
+              pName &&
+              pName !== "self" &&
+              pName !== "cls" &&
+              !seen.has(pName) &&
+              pName !== currentWord &&
+              !PYTHON_KEYWORD_SET.has(pName)
+            ) {
+              seen.add(pName);
+              items.push({
+                label: pName,
+                kind: monaco.languages.CompletionItemKind.Variable,
+                insertText: pName,
+                detail: `parameter ${pName}`,
+                range,
+                sortText: `0_${pName}`,
+              });
+            }
+          }
+        }
+      }
     }
 
-    // Class definition
+    // Class definition (always visible module-wide)
     const classMatch = line.match(/^\s*class\s+([a-zA-Z_]\w*)/);
     if (classMatch) {
       const name = classMatch[1];
@@ -1303,6 +1394,14 @@ function extractPythonDocumentSymbols(
       }
     }
 
+    // Check scope for local variables and loop variables:
+    // Module-level variables (unindented) are always in scope.
+    // Indented variables are only in scope if defined within the current active function.
+    const isIndented = /^\s+/.test(rawLine);
+    if (isIndented && (!inFunc || ln < activeFuncStart || ln > activeFuncEnd)) {
+      continue;
+    }
+
     // Variable assignment: username = ... or username: str = ...
     const varMatch = line.match(/^\s*([a-zA-Z_]\w*)\s*(?::\s*[^=]+)?\s*=/);
     if (varMatch) {
@@ -1313,7 +1412,7 @@ function extractPythonDocumentSymbols(
           label: name,
           kind: monaco.languages.CompletionItemKind.Variable,
           insertText: name,
-          detail: `variable ${name} (local)`,
+          detail: `variable ${name} (${isIndented ? "local" : "module"})`,
           range,
           sortText: `0_${name}`,
         });
@@ -1338,34 +1437,38 @@ function extractPythonDocumentSymbols(
     }
   }
 
-  // Strip comments and string literals so words in docstrings, comments, or strings
-  // (e.g. "# calculate customer revenue" or "Welcome customer") are not suggested as identifiers.
-  const fullText = model.getValue();
-  const codeWithoutCommentsAndStrings = fullText
-    .replace(/"""[\s\S]*?"""|'''[\s\S]*?'''/g, " ")
-    .replace(/#.*$/gm, " ")
-    .replace(/"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g, " ");
-
+  // Also collect general identifier words, filtering out lines belonging to other functions
   const wordRegex = /\b([a-zA-Z_]\w{1,})\b/g;
-  let wMatch: RegExpExecArray | null;
-  while ((wMatch = wordRegex.exec(codeWithoutCommentsAndStrings)) !== null) {
-    const word = wMatch[1];
-    if (
-      !seen.has(word) &&
-      word !== currentWord &&
-      !PYTHON_KEYWORD_SET.has(word) &&
-      !PYTHON_BUILTIN_SET.has(word) &&
-      !PYTHON_MODULE_SET.has(word)
-    ) {
-      seen.add(word);
-      items.push({
-        label: word,
-        kind: monaco.languages.CompletionItemKind.Variable,
-        insertText: word,
-        detail: `identifier (document)`,
-        range,
-        sortText: `1_${word}`,
-      });
+  for (let ln = 1; ln <= lineCount; ln++) {
+    const rawLine = model.getLineContent(ln);
+    const isIndented = /^\s+/.test(rawLine);
+    if (isIndented && (!inFunc || ln < activeFuncStart || ln > activeFuncEnd)) {
+      continue;
+    }
+    const lineWithoutCommentsOrStrings = rawLine
+      .split("#")[0]
+      .replace(/"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g, " ");
+
+    let wMatch: RegExpExecArray | null;
+    while ((wMatch = wordRegex.exec(lineWithoutCommentsOrStrings)) !== null) {
+      const word = wMatch[1];
+      if (
+        !seen.has(word) &&
+        word !== currentWord &&
+        !PYTHON_KEYWORD_SET.has(word) &&
+        !PYTHON_BUILTIN_SET.has(word) &&
+        !PYTHON_MODULE_SET.has(word)
+      ) {
+        seen.add(word);
+        items.push({
+          label: word,
+          kind: monaco.languages.CompletionItemKind.Variable,
+          insertText: word,
+          detail: `identifier (in scope)`,
+          range,
+          sortText: `1_${word}`,
+        });
+      }
     }
   }
 
