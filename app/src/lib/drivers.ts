@@ -51,6 +51,8 @@ export function encodeInput(signature: Signature, values: unknown[]) {
 
 /** Splits what a run printed into the student's own output and the method's result. */
 export function splitOutput(stdout: string): { printed: string; returned: string | null } {
+  // On Windows, Python, C and C++ turn each "\n" they print into "\r\n".
+  stdout = stdout.replace(/\r\n/g, "\n");
   const marker = `\n${RESULT_MARKER}\n`;
   const at = stdout.lastIndexOf(marker);
   if (at < 0) return { printed: stdout, returned: null };
