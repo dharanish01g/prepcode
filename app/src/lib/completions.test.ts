@@ -257,21 +257,11 @@ test("C# Issue 5: C# signature-help argument parsing handles comparison operator
   assert.ok(sig1, "Signature help should return for Console.WriteLine");
   assert.equal(sig1.value.activeParameter, 0, "Comparison '<' must not corrupt active parameter");
 
-  // Case B: Comparison operator before comma: Console.WriteLine(5 < 10, 20)
-  const model2 = createMockModel("Console.WriteLine(5 < 10, 20)");
-  const sig2 = provider.provideSignatureHelp(model2, { lineNumber: 1, column: 27 });
+  // Case B: Comparison operator before comma: Math.Pow(5 < 10, 20)
+  const model2 = createMockModel("Math.Pow(5 < 10, 20)");
+  const sig2 = provider.provideSignatureHelp(model2, { lineNumber: 1, column: 18 });
   assert.ok(sig2);
   assert.equal(sig2.value.activeParameter, 1, "Active parameter after comma must be 1, not 0");
-
-  // Case B2: SomeMethod(5 < 10, 20)
-  const model2b = createMockModel("SomeMethod(5 < 10, 20)");
-  const sig2b = provider.provideSignatureHelp(model2b, { lineNumber: 1, column: 20 });
-  assert.ok(sig2b);
-  assert.equal(
-    sig2b.value.activeParameter,
-    1,
-    "SomeMethod active parameter after comparison must be 1",
-  );
 
   // Case C: Array initializer: Console.WriteLine(new[] { 1, 2 })
   const model3 = createMockModel("Console.WriteLine(new[] { 1, 2 })");
@@ -293,18 +283,6 @@ test("C# Issue 5: C# signature-help argument parsing handles comparison operator
     sig4.value.activeParameter,
     1,
     "Generic comma and brace commas must not corrupt argument count",
-  );
-
-  // Case D2: SomeMethod(new Dictionary<string, int> { ["a"] = 1, ["b"] = 2 }, 10)
-  const model4b = createMockModel(
-    'SomeMethod(new Dictionary<string, int> { ["a"] = 1, ["b"] = 2 }, 10)',
-  );
-  const sig4b = provider.provideSignatureHelp(model4b, { lineNumber: 1, column: 68 });
-  assert.ok(sig4b);
-  assert.equal(
-    sig4b.value.activeParameter,
-    1,
-    "SomeMethod active parameter with Dictionary must be 1",
   );
 });
 
@@ -591,15 +569,13 @@ test("Python Issue 14: Unknown expressions fall back safely without crashing or 
   const result = provider.provideCompletionItems(model, { lineNumber: 1, column: 10 });
 
   assert.ok(result.suggestions.length > 0, "Unknown expression should return fallback suggestions");
+  // Can't tell what foo returns, so every str, list, dict and set method is offered.
+  const labels = result.suggestions.map((s: any) => s.label);
   assert.ok(
-    result.suggestions.some((s: any) => s.label === "__class__"),
-    "Unknown expression should return common instance members",
+    labels.includes("lower") && labels.includes("append"),
+    "Unknown expression offers all methods",
   );
-  assert.equal(
-    result.suggestions.some((s: any) => s.label === "lower"),
-    false,
-    "Unknown expression should not return string-specific methods",
-  );
+  assert.ok(!labels.includes("__class__"), "Unknown expression should not offer only dunders");
 });
 
 // ==========================================
@@ -651,9 +627,10 @@ test("Python Issue 16: another function's locals and annotations do not leak", (
   assert.ok(!pyLabels("def a():\n    only_in_a = 1\n\ndef b():\n    only_").includes("only_in_a"));
   // A blank line after a function is module level, not still inside the function
   assert.ok(!pyLabels("def f():\n    local_only = 1\n\nx = 1\n").includes("local_only"));
-  // `items: list` in function a must not give list methods to unannotated `items` in function b
+  // `items: list` in function a must not make unannotated `items` in function b a list:
+  // b's `items` is unknown, so str methods are offered too
   assert.ok(
-    !pyLabels("def a(items: list):\n    pass\n\ndef b(items):\n    items.").includes("append"),
+    pyLabels("def a(items: list):\n    pass\n\ndef b(items):\n    items.").includes("lower"),
   );
   // ...but the enclosing function's own annotation still works
   assert.ok(pyLabels("def a(items: list):\n    items.").includes("append"));
@@ -692,4 +669,46 @@ test("C# Issue 8: signature help depth is tracked per call", () => {
   assert.equal(csSig('Math.Max(@"C:\\dir\\", '), 1);
   assert.equal(csSig('Math.Max(@"a""b,c", '), 1);
   assert.equal(csSig("Math.Max(new Foo { A = 1, B = 2 }, "), 1);
+});
+
+test("Python Issue 19: a method's typed parameters in a class (the Practice starter)", () => {
+  const starter = (param: string) =>
+    `class Solution:\n    def solve(self, ${param}) -> int:\n        # Write your code here\n        `;
+  const s = pyLabels(starter("s: str") + "s.");
+  assert.ok(s.includes("lower") && !s.includes("append"), "s: str gives str methods");
+  const nums = pyLabels(starter("nums: list[int]") + "nums.");
+  assert.ok(
+    nums.includes("append") && !nums.includes("lower"),
+    "nums: list[int] gives list methods",
+  );
+  const n = pyLabels(starter("n: int") + "n.");
+  assert.ok(n.includes("__class__") && !n.includes("lower"), "n: int gives no str/list methods");
+});
+
+test("Python Issue 20: unknown values offer every method, known numbers don't", () => {
+  assert.ok(pyLabels("x = input().").includes("split"), "input() result offers str methods");
+  assert.ok(pyLabels("r = solve(1)\nr.").includes("append"), "a function's result offers all");
+  const n = pyLabels("count = len(items)\ncount.");
+  assert.ok(!n.includes("lower") && !n.includes("append"), "len() result is a number");
+  const i = pyLabels("for i in range(10):\n    i.");
+  assert.ok(!i.includes("lower"), "a range() loop variable is a number");
+});
+
+test("C# Issue 9: no made-up signature for keywords or unknown methods", () => {
+  const { mockMonaco, sigHelpProviders } = setupMockMonaco();
+  registerCSharpCompletions(mockMonaco);
+  const provider = sigHelpProviders["csharp"];
+  for (const line of ["    if (", "    while (x < ", "    for (int i = 0; ", "    Add(1, "]) {
+    const src = `class A {\n  void M() {\n${line}`;
+    assert.equal(provider.provideSignatureHelp(createMockModel(src), endOf(src)), null, line);
+  }
+  const wl = provider.provideSignatureHelp(
+    createMockModel("Console.WriteLine("),
+    endOf("Console.WriteLine("),
+  );
+  assert.equal(
+    wl.value.signatures[0].parameters.length,
+    1,
+    "WriteLine(object? value) has one parameter",
+  );
 });

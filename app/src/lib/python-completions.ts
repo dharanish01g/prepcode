@@ -1274,6 +1274,24 @@ function isLineVisible(scopes: PythonScopes, ln: number): boolean {
 }
 
 /**
+ * What's before a dot: a str, list, dict or set; "other" when it's clearly
+ * something else (a number, bool or None), so their methods would mislead;
+ * "unknown" when it can't tell, e.g. a function's result.
+ */
+type InferredType = "str" | "list" | "dict" | "set" | "other" | "unknown";
+
+const NON_COLLECTION_TYPES = new Set(["int", "float", "bool", "complex"]);
+
+/** An expression that's clearly a number, bool or None, e.g. `5`, `len(s)`, `a > b`. */
+function isNonCollectionExpr(text: string): boolean {
+  return (
+    /^-?\d/.test(text) ||
+    /^(?:True|False|None)\b/.test(text) ||
+    /^(?:int|float|bool|len|sum|abs|round|ord|range|min|max)\s*\(/.test(text)
+  );
+}
+
+/**
  * Lightweight type inference for Python expressions preceding a dot.
  * Scans the preceding code backwards to find assignments, type annotations,
  * or literal values to determine if the target is a str, list, dict, set, etc.
@@ -1282,7 +1300,7 @@ function inferPythonType(
   model: monacoDefault.editor.ITextModel,
   position: monacoDefault.Position,
   textBeforeWord: string,
-): "str" | "list" | "dict" | "set" | "unknown" {
+): InferredType {
   const expr = textBeforeWord.slice(0, -1).trim();
   if (!expr) return "unknown";
 
@@ -1362,6 +1380,11 @@ function inferPythonType(
           return "dict";
         }
 
+        // A list of numbers or bools gives one of those (e.g. numbers = [10, 20]; numbers[0].)
+        if (/^\[\s*(?:-?\d|True\b|False\b|None\b)/.test(rhs)) {
+          return "other";
+        }
+
         // 4. Indexing a list of strings produces a str (e.g. words = ["hello", "world"] or words = text.split(); words[0].)
         if (/\.split(?:lines)?\s*\(/.test(rhs) || /^\[\s*["']/.test(rhs)) {
           return "str";
@@ -1391,6 +1414,7 @@ function inferPythonType(
             }
             if (valRhs.startsWith("[")) return "list";
             if (valRhs.startsWith("{")) return "dict";
+            if (isNonCollectionExpr(valRhs)) return "other";
           }
           return "unknown";
         }
@@ -1412,6 +1436,22 @@ function inferPythonType(
     const rawLine = model.getLineContent(ln);
     const line = stripPythonComment(rawLine).trim();
     if (!line) continue;
+
+    // Function parameter type annotation: def ...(varName: str, ...), only for
+    // the def(s) enclosing the cursor. Checked before the visibility skip: a
+    // method's own def line belongs to its class, which the method can't see.
+    if (scopes.visible.has(ln) && scopes.kind.get(ln) === "def") {
+      const paramMatch = line.match(new RegExp(`\\b${varName}\\s*:\\s*([a-zA-Z_]\\w*)`));
+      if (paramMatch) {
+        const typeHint = paramMatch[1].toLowerCase();
+        if (typeHint === "str") return "str";
+        if (typeHint === "list") return "list";
+        if (typeHint === "dict") return "dict";
+        if (typeHint === "set") return "set";
+        if (NON_COLLECTION_TYPES.has(typeHint)) return "other";
+      }
+    }
+
     if (!isLineVisible(scopes, ln)) continue;
 
     // Type annotation: varName: str or varName: list[...]
@@ -1422,19 +1462,7 @@ function inferPythonType(
       if (typeHint === "list") return "list";
       if (typeHint === "dict") return "dict";
       if (typeHint === "set") return "set";
-    }
-
-    // Function parameter type annotation: def ...(varName: str, ...)
-    // Only for the def(s) that actually enclose the cursor
-    if (scopes.visible.has(ln) && scopes.kind.get(ln) === "def") {
-      const paramMatch = line.match(new RegExp(`\\b${varName}\\s*:\\s*([a-zA-Z_]\\w*)`));
-      if (paramMatch) {
-        const typeHint = paramMatch[1].toLowerCase();
-        if (typeHint === "str") return "str";
-        if (typeHint === "list") return "list";
-        if (typeHint === "dict") return "dict";
-        if (typeHint === "set") return "set";
-      }
+      if (NON_COLLECTION_TYPES.has(typeHint)) return "other";
     }
 
     // Variable assignment: varName = ...
@@ -1491,6 +1519,8 @@ function inferPythonType(
         return "set";
       }
 
+      if (isNonCollectionExpr(rhs)) return "other";
+
       // If assigned to something else, stop tracing further
       break;
     }
@@ -1508,6 +1538,7 @@ function inferPythonType(
       ) {
         return "str";
       }
+      if (/^range\s*\(/.test(iterable)) return "other";
       // The for-loop is the most recent binding for this variable; stop searching.
       break;
     }
@@ -1789,8 +1820,18 @@ export function registerPythonCompletions(mInstance?: Monaco) {
           return { suggestions: toCompletionItems(SET_MEMBERS, range) };
         }
 
-        // Default member access for any object / instance expression (strings, lists, dicts, sets, etc.):
-        return { suggestions: toCompletionItems(COMMON_INSTANCE_MEMBERS, range) };
+        // A number, bool or None: only what every object has.
+        if (inferred === "other") {
+          return { suggestions: toCompletionItems(COMMON_INSTANCE_MEMBERS, range) };
+        }
+
+        // Can't tell (e.g. a function's result): every str, list, dict and set method.
+        return {
+          suggestions: toCompletionItems(
+            [...STRING_MEMBERS, ...LIST_MEMBERS, ...DICT_MEMBERS, ...SET_MEMBERS],
+            range,
+          ),
+        };
       }
 
       // Check if user is typing an import statement (handling indented lines as well)

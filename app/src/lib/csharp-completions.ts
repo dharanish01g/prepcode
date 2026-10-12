@@ -1572,7 +1572,7 @@ export function registerCSharpCompletions(mInstance?: Monaco) {
         "Console.WriteLine": {
           label: "void Console.WriteLine(object? value)",
           doc: "Writes the specified value to standard output followed by a line terminator.",
-          params: ["value: The value to write.", "arg0: Additional argument or format parameter."],
+          params: ["value: The value to write."],
         },
         "Console.Write": {
           label: "void Console.Write(object? value)",
@@ -1641,20 +1641,10 @@ export function registerCSharpCompletions(mInstance?: Monaco) {
         },
       };
 
-      let sigInfo = signaturesMap[callTarget];
-      if (!sigInfo) {
-        // Fallback for user-defined / unmapped calls (e.g. SomeMethod):
-        const paramCount = Math.max(activeParameter + 1, 2);
-        const paramList: string[] = [];
-        for (let p = 0; p < paramCount; p++) {
-          paramList.push(`arg${p}`);
-        }
-        sigInfo = {
-          label: `${callTarget}(${paramList.join(", ")})`,
-          doc: `Method ${callTarget}`,
-          params: paramList.map((p) => `${p}: Parameter ${p}`),
-        };
-      }
+      // Only calls with a known signature: others (if, while, the student's own
+      // methods) would get a made-up parameter list.
+      const sigInfo = signaturesMap[callTarget];
+      if (!sigInfo) return null;
 
       return {
         value: {
