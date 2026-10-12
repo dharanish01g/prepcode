@@ -183,9 +183,13 @@ pub async fn link_url(
         .ok_or_else(|| AccountError::Other("Unexpected answer from prepcode's servers: no link".into()))
 }
 
-fn browser_params(provider: Provider, port: u16, challenge: &str) -> [(&'static str, String); 4] {
+fn browser_params(provider: Provider, port: u16, challenge: &str) -> [(&'static str, String); 5] {
     [
         ("provider", provider.id().into()),
+        // Supabase passes this on to GitHub and Google, which then ask which
+        // account to use instead of quietly picking the one the browser is
+        // already signed in to (e.g. the previous student's, after a logout).
+        ("prompt", "select_account".into()),
         ("redirect_to", format!("http://127.0.0.1:{port}{CALLBACK_PATH}")),
         ("code_challenge", challenge.into()),
         ("code_challenge_method", "s256".into()),
@@ -516,6 +520,12 @@ fn tokens(body: Value) -> Result<Tokens, AccountError> {
         |what: &str| AccountError::Other(format!("Unexpected answer from prepcode's servers: {what}"));
     let response: TokenResponse = serde_json::from_value(body).map_err(|_| unexpected("no session"))?;
     let user_id = response.user["id"].as_str().ok_or_else(|| unexpected("no account"))?.to_owned();
+    if has_two_githubs(&response.user) {
+        // Two students' GitHubs ended up on one account; opening it would
+        // show one of them the other's work. Ending the session here keeps it
+        // closed (and signs out a saved sign-in) until it's split.
+        return Err(AccountError::SignedOut(MERGED_ACCOUNT.into()));
+    }
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
     Ok(Tokens {
         access_token: response.access_token,
@@ -525,6 +535,15 @@ fn tokens(body: Value) -> Result<Tokens, AccountError> {
         email: response.user["email"].as_str().map(str::to_owned),
         account: account_of(&response.user),
     })
+}
+
+const MERGED_ACCOUNT: &str = "This prepcode account has two GitHub accounts on it, so it can't be opened. \
+    Ask your placement officer to contact prepcode support to separate them.";
+
+/// More than one GitHub on the account (see `MERGED_ACCOUNT`).
+fn has_two_githubs(user: &Value) -> bool {
+    let identities = user["identities"].as_array().map(Vec::as_slice).unwrap_or_default();
+    identities.iter().filter(|i| i["provider"] == "github").count() > 1
 }
 
 /// The account's details from Supabase's user object, via its GitHub identity.
@@ -603,6 +622,7 @@ mod tests {
         assert_eq!(param("provider").as_deref(), Some("github"));
         assert_eq!(param("redirect_to").as_deref(), Some("http://127.0.0.1:51234/auth/callback"));
         assert_eq!(param("code_challenge_method").as_deref(), Some("s256"));
+        assert_eq!(param("prompt").as_deref(), Some("select_account"));
     }
 
     #[test]
@@ -633,6 +653,22 @@ mod tests {
             })
         );
         assert_eq!(account_of(&json!({ "id": "x", "identities": [{ "provider": "email" }] })), None);
+    }
+
+    #[test]
+    fn refuses_an_account_with_two_githubs() {
+        let github = |id: &str| json!({ "provider": "github", "identity_data": { "provider_id": id } });
+        let session = |identities: Value| {
+            json!({
+                "access_token": "a", "refresh_token": "r", "expires_in": 3600,
+                "user": { "id": "u", "identities": identities },
+            })
+        };
+        assert!(tokens(session(json!([github("1")]))).is_ok());
+        assert!(matches!(
+            tokens(session(json!([github("1"), github("2")]))),
+            Err(AccountError::SignedOut(_))
+        ));
     }
 
     #[test]
