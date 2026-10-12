@@ -50,7 +50,7 @@ import { exportGuestFiles, extensionOf, whenSavesSettled } from "@/lib/files";
 import { findLanguage, type Language } from "@/lib/languages";
 import { useFilesQuery, useSolvedQuery, useSyncStatusQuery } from "@/lib/queries";
 import type { Category } from "@/lib/practice";
-import { questionsIn, type Question } from "@/lib/questions";
+import { useCategoryQuestionsQuery, type Question } from "@/lib/questions";
 import { unsyncedCount } from "@/lib/sync";
 import logo from "@/assets/logo.png";
 
@@ -66,6 +66,7 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
   const [programFile, setProgramFile] = useState<string | null>(null);
   const [databaseFile, setDatabaseFile] = useState<string | null>(null);
   // The Practice category open, and its question; null shows the categories.
+  // A null question opens the category's first one the student can open.
   const [practice, setPractice] = useState<{ category: Category; question: string | null } | null>(
     null,
   );
@@ -76,13 +77,20 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
   // questions in the sidebar once one is open.
   const fullScreen = FULL_SCREEN_VIEWS.includes(view) && !(view === "Practice" && practice);
   const solved = useSolvedQuery(session.id);
+  const categoryQuestions = useCategoryQuestionsQuery(practice?.category.slug ?? null);
+  const questionList = categoryQuestions.data ?? [];
+  const selectedQuestion =
+    practice?.question ?? questionList.find((question) => !question.locked)?.slug ?? null;
   const questionColumn: QuestionColumn | null =
     view === "Practice" && practice
       ? {
           title: practice.category.title,
-          list: questionsIn(practice.category.slug),
+          list: questionList,
+          loading: categoryQuestions.isPending,
+          error: categoryQuestions.isError,
+          onRetry: () => void categoryQuestions.refetch(),
           solved: solved.data ?? new Set(),
-          selected: practice.question,
+          selected: selectedQuestion,
           onSelect: (slug) => setPractice({ ...practice, question: slug }),
         }
       : null;
@@ -271,22 +279,25 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
           <QuestionsScreen
             key={practice.category.slug}
             userId={session.id}
-            questions={questionsIn(practice.category.slug)}
+            questions={questionList}
             parents={[
               { label: "Practice", onClick: () => setPractice(null) },
               { label: practice.category.title },
             ]}
             empty={
-              <Empty className="pb-24">
-                <EmptyHeader>
-                  <EmptyTitle>No questions yet</EmptyTitle>
-                  <EmptyDescription>
-                    {practice.category.title} doesn't have any questions yet. Check back soon.
-                  </EmptyDescription>
-                </EmptyHeader>
-              </Empty>
+              // While loading, or if it failed, the sidebar's list says so.
+              categoryQuestions.isSuccess && (
+                <Empty className="pb-24">
+                  <EmptyHeader>
+                    <EmptyTitle>Coming soon</EmptyTitle>
+                    <EmptyDescription>
+                      {practice.category.title} questions are on their way. Check back soon.
+                    </EmptyDescription>
+                  </EmptyHeader>
+                </Empty>
+              )
             }
-            selectedQuestion={practice.question}
+            selectedQuestion={selectedQuestion}
             onSelectQuestion={(slug) => setPractice({ ...practice, question: slug })}
             flushRef={flushEditorRef}
             onSubmitted={onSubmitted}
@@ -295,7 +306,7 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
           <PracticeScreen
             userId={session.id}
             onOpenCategory={(category) => {
-              setPractice({ category, question: questionsIn(category.slug)[0]?.slug ?? null });
+              setPractice({ category, question: null });
               setSidebarOpen(true);
             }}
           />

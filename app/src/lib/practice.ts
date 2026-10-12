@@ -23,17 +23,24 @@ export type Section = {
   categories: Category[];
 };
 
-/** Every section with its published categories, in display order. */
+/**
+ * Every section (a prepwisely domain) with its categories, in display order.
+ * The database returns only active ones.
+ */
 async function fetchSections(): Promise<Section[]> {
   const { data, error } = await supabase
-    .from("sections")
+    .from("pc_domains")
     .select(
-      "slug, title, categories (slug, title, description, icon, logoUrl:logo_url, details, premium)",
+      "slug, title, categories:pc_categories (slug, title, description, icon, logoUrl:logo_url, details)",
     )
     .order("position")
     .order("position", { referencedTable: "categories" });
   if (error) throw new Error(error.message);
-  return data;
+  // prepwisely has no paid categories yet.
+  return data.map((section) => ({
+    ...section,
+    categories: section.categories.map((category) => ({ ...category, premium: false })),
+  }));
 }
 
 export function useSectionsQuery() {

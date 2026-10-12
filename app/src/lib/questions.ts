@@ -1,4 +1,19 @@
+import { useQuery } from "@tanstack/react-query";
 import { VALUE_TYPES, type Param, type Signature, type ValueType } from "@/lib/drivers";
+import { supabase } from "@/lib/supabase";
+
+export type Difficulty = "Easy" | "Medium" | "Hard";
+
+/** A question as its category lists it, before it's opened. */
+export type QuestionSummary = {
+  slug: string;
+  title: string;
+  difficulty: Difficulty;
+  /** What it practises, e.g. "Strings". */
+  topic: string;
+  /** Private: listed, but students can't open it yet. */
+  locked: boolean;
+};
 
 /**
  * A practice question, LeetCode style: the student writes one method, which
@@ -7,58 +22,70 @@ import { VALUE_TYPES, type Param, type Signature, type ValueType } from "@/lib/d
 export type Question = {
   slug: string;
   title: string;
-  difficulty: "Easy" | "Medium" | "Hard";
-  /** What it practises, e.g. "Strings". */
+  difficulty: Difficulty;
   topic: string;
-  /** The Practice category it belongs to, by slug, e.g. "basics" (Programming Basics). */
-  category: string | null;
-  /** Markdown: the problem and its examples. */
+  /** Markdown: the case study, without the examples or constraints. */
   description: string;
+  /** Markdown, one line, e.g. `1 ≤ year ≤ 9999`. Shown after the examples. */
+  constraints: string;
   /** Markdown: how to solve it. */
   explanation: string;
   /** The method to write, or null for a question not ready to solve yet. */
   signature: Signature | null;
-  /** The examples in the description, which Run and Submit check the code against. */
+  /** The examples Run and Submit check the code against, in order. */
   examples: Example[];
 };
 
 /** An example: the method's arguments and what it should return. */
 export type Example = {
-  /** As written, e.g. `a = 3, b = 5`. */
+  /** As shown, e.g. `a = 3, b = 5`. */
   inputText: string;
   /** One per parameter, in order. */
   values: unknown[];
   /** What the method should return, e.g. 8. */
   expected: unknown;
+  /** A line shown under the example; may be empty. */
+  note: string;
 };
 
-/**
- * Splits `a = 3, s = "x, y", nums = [1,2]` at the commas between arguments,
- * not those inside strings or arrays.
- */
-function splitArguments(text: string) {
-  const parts: string[] = [];
-  let depth = 0;
-  let inString = false;
-  let start = 0;
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i];
-    if (inString) {
-      if (ch === "\\") i++;
-      else if (ch === '"') inString = false;
-    } else if (ch === '"') inString = true;
-    else if (ch === "[") depth++;
-    else if (ch === "]") depth--;
-    else if (ch === "," && depth === 0) {
-      parts.push(text.slice(start, i));
-      start = i + 1;
-    }
-  }
-  parts.push(text.slice(start));
-  return parts.map((part) => part.trim());
+// The rows as prepwisely returns them.
+type SummaryRow = {
+  slug: string;
+  title: string;
+  difficulty: string;
+  topic: string;
+  access: string;
+};
+type QuestionRow = {
+  slug: string;
+  title: string;
+  difficulty: string;
+  topic: string;
+  description: string;
+  constraints: string;
+  explanation: string;
+  method: string;
+  params: { name: string; type: string }[];
+  returns: string;
+  examples: { inputs: unknown[]; expected: unknown; note: string }[];
+};
+
+const DIFFICULTIES: Record<string, Difficulty> = { easy: "Easy", medium: "Medium", hard: "Hard" };
+
+function parseDifficulty(text: string, where: string): Difficulty {
+  const difficulty = DIFFICULTIES[text];
+  if (!difficulty) throw new Error(`${where}: ${text} isn't a difficulty`);
+  return difficulty;
 }
 
-/** Whether a value (parsed as JSON) is of a question's type. */
+function parseType(text: string, where: string): ValueType {
+  if (!VALUE_TYPES.includes(text as ValueType)) {
+    throw new Error(`${where}: ${text} isn't a type (use ${VALUE_TYPES.join(", ")})`);
+  }
+  return text as ValueType;
+}
+
+/** Whether a value (parsed from JSON) is of a question's type. */
 function isType(value: unknown, type: ValueType): boolean {
   switch (type) {
     case "int":
@@ -76,123 +103,110 @@ function isType(value: unknown, type: ValueType): boolean {
   }
 }
 
-/** A JSON value of `type`, or an error naming where it came from. */
-function parseValue(text: string, type: ValueType, where: string) {
-  let value: unknown;
-  try {
-    value = JSON.parse(text);
-  } catch {
-    throw new Error(`${where}: ${text} isn't a valid value`);
-  }
-  if (!isType(value, type)) throw new Error(`${where}: ${text} isn't a ${type}`);
+/** A value of `type`, or an error naming where it came from. */
+function checkValue(value: unknown, type: ValueType, where: string) {
+  if (!isType(value, type)) throw new Error(`${where}: ${JSON.stringify(value)} isn't a ${type}`);
   return value;
 }
 
 /**
- * The examples in a question's markdown: each ```text block with an `Input:`
- * line naming every argument and an `Output:` line, values written as JSON:
- *
- *     Input:  s = "hello", nums = [1,2,3]
- *     Output: true
+ * A question from its row, checked the way the drivers need it: a bad value
+ * would otherwise only show up as a confusing failed Run.
  */
-export function parseExamples(markdown: string, signature: Signature, slug: string): Example[] {
-  return [...markdown.matchAll(/^```text\n([\s\S]*?)\n```$/gm)].flatMap(([, block], i) => {
-    const where = `${slug}, example ${i + 1}`;
-    const input = /^Input:(.*)$/m.exec(block)?.[1].trim();
-    const output = /^Output:(.*)$/m.exec(block)?.[1].trim();
-    if (input === undefined || output === undefined) return [];
-    const args = new Map(
-      splitArguments(input).map((arg) => {
-        const eq = arg.indexOf("=");
-        return [arg.slice(0, eq).trim(), arg.slice(eq + 1).trim()];
-      }),
-    );
-    const values = signature.params.map(({ name, type }) => {
-      const text = args.get(name);
-      if (text === undefined) throw new Error(`${where}: the input has no ${name}`);
-      return parseValue(text, type, where);
-    });
-    return [{ inputText: input, values, expected: parseValue(output, signature.returns, where) }];
-  });
+function toQuestion(row: QuestionRow): Question {
+  const { slug } = row;
+  const params: Param[] = row.params.map(({ name, type }) => ({
+    name,
+    type: parseType(type, slug),
+  }));
+  const signature: Signature | null = row.method
+    ? { method: row.method, params, returns: parseType(row.returns, slug) }
+    : null;
+  const examples = signature
+    ? row.examples.map(({ inputs, expected, note }, i): Example => {
+        const where = `${slug}, example ${i + 1}`;
+        if (inputs.length !== params.length) {
+          throw new Error(`${where}: needs ${params.length} inputs, has ${inputs.length}`);
+        }
+        const values = params.map(({ type }, j) => checkValue(inputs[j], type, where));
+        return {
+          inputText: params
+            .map(({ name }, j) => `${name} = ${JSON.stringify(values[j])}`)
+            .join(", "),
+          values,
+          expected: checkValue(expected, signature.returns, where),
+          note,
+        };
+      })
+    : [];
+  return {
+    slug,
+    title: row.title,
+    difficulty: parseDifficulty(row.difficulty, slug),
+    topic: row.topic,
+    description: row.description,
+    constraints: row.constraints,
+    explanation: row.explanation,
+    signature,
+    examples,
+  };
 }
 
-/** The question files, by path: `NNN-slug.md`, where NNN is its place in the list. */
-const FILES = import.meta.glob<string>("../questions/*.md", {
-  query: "?raw",
-  import: "default",
-  eager: true,
-});
-
-function parseType(text: string, where: string): ValueType {
-  if (!VALUE_TYPES.includes(text as ValueType)) {
-    throw new Error(`${where}: ${text} isn't a type (use ${VALUE_TYPES.join(", ")})`);
-  }
-  return text as ValueType;
+/** A category's published questions, in order; private ones come locked. */
+async function fetchCategoryQuestions(category: string): Promise<QuestionSummary[]> {
+  const { data, error } = await supabase.rpc("pc_category_questions", {
+    p_category_slug: category,
+  });
+  if (error) throw new Error(error.message);
+  return (data as SummaryRow[]).map((row) => ({
+    slug: row.slug,
+    title: row.title,
+    difficulty: parseDifficulty(row.difficulty, row.slug),
+    topic: row.topic,
+    locked: row.access !== "public",
+  }));
 }
 
 /**
- * Reads a question file: a `---` header, then the question, then the
- * explanation under `## Explanation`. The header has `title`, `difficulty`,
- * `topic`, `category` (a Practice category's slug, optional), and the method
- * to write:
- *
- *     method: sum
- *     params: a int, b int
- *     returns: int
+ * A question with its examples. Hidden test cases never come: the database
+ * only gives students the examples.
  */
-export function parseQuestion(slug: string, text: string): Question {
-  const match = /^---\n([\s\S]*?)\n---\n([\s\S]*)$/.exec(text.replace(/\r\n/g, "\n"));
-  if (!match) throw new Error(`${slug}: missing the --- header`);
-  const header: Record<string, string | undefined> = Object.fromEntries(
-    match[1].split("\n").map((line) => {
-      const colon = line.indexOf(":");
-      return [line.slice(0, colon).trim(), line.slice(colon + 1).trim()];
-    }),
-  );
-  const [description, explanation = ""] = match[2].split(/^## Explanation$/m);
-  if (!["Easy", "Medium", "Hard"].includes(header.difficulty ?? "")) {
-    throw new Error(`${slug}: difficulty must be Easy, Medium or Hard`);
-  }
-  if (!header.method || !header.returns) throw new Error(`${slug}: missing method or returns`);
-  if (!/^[a-z][A-Za-z0-9]*$/.test(header.method)) {
-    throw new Error(`${slug}: method must be camelCase, e.g. reverseString`);
-  }
-  const params: Param[] = (header.params ?? "")
-    .split(",")
-    .filter((param) => param.trim())
-    .map((param) => {
-      const [name, type, extra] = param.trim().split(/\s+/);
-      if (!/^[a-z][A-Za-z0-9]*$/.test(name) || extra !== undefined) {
-        throw new Error(`${slug}: write each param as "name type", e.g. "nums int[]"`);
-      }
-      return { name, type: parseType(type, slug) };
-    });
-  const signature: Signature = {
-    method: header.method,
-    params,
-    returns: parseType(header.returns, slug),
-  };
-  return {
-    slug,
-    title: header.title ?? slug,
-    difficulty: header.difficulty as Question["difficulty"],
-    topic: header.topic ?? "",
-    category: header.category || null,
-    description: description.trim(),
-    explanation: explanation.trim(),
-    signature,
-    examples: parseExamples(description, signature, slug),
-  };
+async function fetchQuestion(slug: string): Promise<Question> {
+  const { data, error } = await supabase
+    .from("pc_questions")
+    .select(
+      "slug, title, difficulty, topic, description, constraints, explanation, method, params, returns, examples:pc_test_cases (inputs, expected, note)",
+    )
+    .eq("slug", slug)
+    .eq("examples.visibility", "example")
+    .order("position", { referencedTable: "examples" })
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  // Unpublished since the list loaded, or private.
+  if (!data) throw new Error("This question isn't available.");
+  return toQuestion(data as QuestionRow);
 }
 
-const FROM_FILES = Object.entries(FILES)
-  .sort(([a], [b]) => a.localeCompare(b))
-  .map(([path, text]) => parseQuestion(path.replace(/^.*\/\d+-|\.md$/g, ""), text));
+// Questions change more often than categories, as the content team
+// publishes them, but not by the minute.
+const QUESTIONS_STALE_MS = 5 * 60 * 1000;
 
-/** Every question, in order. */
-export const QUESTIONS: Question[] = FROM_FILES;
+/** A category's questions, by its slug; null while none is open. */
+export function useCategoryQuestionsQuery(category: string | null) {
+  return useQuery({
+    queryKey: ["practice-questions", category],
+    queryFn: () => fetchCategoryQuestions(category!),
+    enabled: category !== null,
+    staleTime: QUESTIONS_STALE_MS,
+  });
+}
 
-/** A Practice category's questions, by its slug, in order. */
-export function questionsIn(category: string) {
-  return QUESTIONS.filter((question) => question.category === category);
+/** A question to solve, by its slug; null while none is open. */
+export function useQuestionQuery(slug: string | null) {
+  return useQuery({
+    queryKey: ["practice-question", slug],
+    queryFn: () => fetchQuestion(slug!),
+    enabled: slug !== null,
+    staleTime: QUESTIONS_STALE_MS,
+  });
 }

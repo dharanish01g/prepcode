@@ -220,7 +220,11 @@ export function useSync({
     [exclusive, applyReport],
   );
 
-  /** At sign-in: bring down the student's files, quietly. */
+  /**
+   * At sign-in: bring down the student's files, quietly. If a sync is already
+   * running (it pulls too), waits for that one, so Programs keeps its skeleton
+   * until the files are here.
+   */
   const pull = useCallback(
     () =>
       exclusive(async () => {
@@ -233,7 +237,9 @@ export function useSync({
           if (String(err).startsWith(CONNECT_GITHUB)) onNeedsSetupRef.current();
           return false;
         }
-      }) ?? Promise.resolve(false),
+      }) ??
+      inflight.current ??
+      Promise.resolve(false),
     [exclusive, applyReport],
   );
 

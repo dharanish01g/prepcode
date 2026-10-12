@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { supabase } from "@/lib/supabase";
+import { jobsSupabase } from "@/lib/supabase";
 
 export const WORK_MODES = ["onsite", "remote", "hybrid"] as const;
 export const JOB_TYPES = ["full-time", "part-time", "internship", "contract"] as const;
@@ -51,7 +51,7 @@ function today() {
 
 /** Published jobs still open to applications, newest first. */
 async function fetchJobs(): Promise<Job[]> {
-  const { data, error } = await supabase
+  const { data, error } = await jobsSupabase
     .from("jobs")
     .select(
       "slug, title, company, logoUrl:logo_url, location, workMode:work_mode, jobType:job_type, experience, salary, skills, description, applyUrl:apply_url, postedAt:posted_at, deadline, source, branch",

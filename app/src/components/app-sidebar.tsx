@@ -8,7 +8,7 @@ import { ProfileDialog } from "@/components/profile-dialog";
 import { DeleteFileDialog } from "@/components/delete-file-dialog";
 import { HistoryList } from "@/components/history-list";
 import { QuestionList } from "@/components/question-list";
-import type { Question } from "@/lib/questions";
+import type { QuestionSummary } from "@/lib/questions";
 import { SyncList } from "@/components/sync-list";
 import { NewFileDialog } from "@/components/new-file-dialog";
 import { RenameFileDialog } from "@/components/rename-file-dialog";
@@ -66,7 +66,12 @@ const data: { navMain: { title: View; icon: React.ReactNode }[] } = {
 export type QuestionColumn = {
   /** The column's heading: the category, e.g. "Programming Basics". */
   title: string;
-  list: Question[];
+  list: QuestionSummary[];
+  /** Still loading the list. */
+  loading: boolean;
+  /** The list couldn't load. */
+  error: boolean;
+  onRetry: () => void;
   /** Solved questions, by slug. */
   solved: ReadonlySet<string>;
   selected: string | null;
@@ -235,9 +240,12 @@ export function AppSidebar({
             {questions?.title ?? view}
           </div>
           {questions ? (
-            <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
-              {questions.list.length} {questions.list.length === 1 ? "question" : "questions"}
-            </span>
+            !questions.loading &&
+            !questions.error && (
+              <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
+                {questions.list.length} {questions.list.length === 1 ? "question" : "questions"}
+              </span>
+            )
           ) : view === "Sync" ? (
             <Button
               size="sm"
@@ -291,6 +299,9 @@ export function AppSidebar({
           ) : questions ? (
             <QuestionList
               questions={questions.list}
+              loading={questions.loading}
+              error={questions.error}
+              onRetry={questions.onRetry}
               solved={questions.solved}
               search={questionSearch.trim().toLowerCase()}
               selectedQuestion={questions.selected}

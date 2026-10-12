@@ -1,6 +1,6 @@
 import { Fragment, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { ChevronLeftIcon, ChevronRightIcon, PlayIcon, SendIcon } from "lucide-react";
+import { ChevronLeftIcon, ChevronRightIcon, PlayIcon, SendIcon, WifiOffIcon } from "lucide-react";
 import { passedCount, type CheckState } from "@/components/check-results";
 import type { FlushRef } from "@/components/code-editor";
 import { LanguagePicker } from "@/components/language-picker";
@@ -14,6 +14,14 @@ import {
 } from "@/components/ui/breadcrumb";
 import { QuestionView, type CodeRef } from "@/components/question-view";
 import { Button } from "@/components/ui/button";
+import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty";
 import { Separator } from "@/components/ui/separator";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import { Spinner } from "@/components/ui/spinner";
@@ -22,7 +30,7 @@ import { buildProgram, encodeInput } from "@/lib/drivers";
 import { markPracticeSolved } from "@/lib/files";
 import { queryKeys } from "@/lib/queries";
 import { getLanguages, type Language } from "@/lib/languages";
-import type { Question } from "@/lib/questions";
+import { useQuestionQuery, type Question, type QuestionSummary } from "@/lib/questions";
 import { checkPractice, stopProgram } from "@/lib/run";
 import { useInstalledRuntimes } from "@/lib/runtimes";
 
@@ -52,7 +60,7 @@ export function QuestionsScreen({
 }: {
   userId: string;
   /** The questions previous/next step through, in order. */
-  questions: Question[];
+  questions: QuestionSummary[];
   /** The breadcrumb before the question's title. */
   parents: Crumb[];
   /** Show the button that opens the sidebar's list (not in full-screen views). */
@@ -68,7 +76,15 @@ export function QuestionsScreen({
 }) {
   const queryClient = useQueryClient();
   const index = questions.findIndex((q) => q.slug === selectedQuestion);
-  const question = index >= 0 ? questions[index] : undefined;
+  const summary = index >= 0 ? questions[index] : undefined;
+  const questionQuery = useQuestionQuery(summary && !summary.locked ? summary.slug : null);
+  const question = questionQuery.data;
+  // Previous/next step over locked questions, which don't open.
+  const previous = questions
+    .slice(0, Math.max(index, 0))
+    .reverse()
+    .find((q) => !q.locked);
+  const next = questions.slice(index + 1).find((q) => !q.locked);
   const runtimes = useInstalledRuntimes();
   const languages = getLanguages("program");
   const installed = languages.filter((lang) => runtimes.data?.includes(lang.extension));
@@ -147,7 +163,7 @@ export function QuestionsScreen({
                 <Fragment key={parent.label}>
                   {i > 0 && <BreadcrumbSeparator />}
                   <BreadcrumbItem>
-                    {!question && i === parents.length - 1 ? (
+                    {!summary && i === parents.length - 1 ? (
                       <BreadcrumbPage>{parent.label}</BreadcrumbPage>
                     ) : parent.onClick ? (
                       <BreadcrumbLink
@@ -167,24 +183,24 @@ export function QuestionsScreen({
                   </BreadcrumbItem>
                 </Fragment>
               ))}
-              {question && (
+              {summary && (
                 <>
                   <BreadcrumbSeparator />
                   <BreadcrumbItem>
-                    <BreadcrumbPage>{question.title}</BreadcrumbPage>
+                    <BreadcrumbPage>{summary.title}</BreadcrumbPage>
                   </BreadcrumbItem>
                 </>
               )}
             </BreadcrumbList>
           </Breadcrumb>
         </div>
-        {question && (
+        {summary && (
           <div className="flex shrink-0 items-center gap-1">
             <Button
               variant="ghost"
               size="icon-sm"
-              disabled={index === 0}
-              onClick={() => onSelectQuestion(questions[index - 1].slug)}
+              disabled={!previous}
+              onClick={() => previous && onSelectQuestion(previous.slug)}
               aria-label="Previous question"
             >
               <ChevronLeftIcon />
@@ -195,8 +211,8 @@ export function QuestionsScreen({
             <Button
               variant="ghost"
               size="icon-sm"
-              disabled={index === questions.length - 1}
-              onClick={() => onSelectQuestion(questions[index + 1].slug)}
+              disabled={!next}
+              onClick={() => next && onSelectQuestion(next.slug)}
               aria-label="Next question"
             >
               <ChevronRightIcon />
@@ -248,8 +264,28 @@ export function QuestionsScreen({
             />
           }
         />
+      ) : summary && questionQuery.isError ? (
+        // Most likely offline: questions come from Supabase.
+        <Empty className="pb-24">
+          <EmptyHeader>
+            <EmptyMedia variant="icon">
+              <WifiOffIcon />
+            </EmptyMedia>
+            <EmptyTitle>Couldn't load {summary.title}</EmptyTitle>
+            <EmptyDescription>{questionQuery.error.message}</EmptyDescription>
+          </EmptyHeader>
+          <EmptyContent>
+            <Button variant="outline" onClick={() => questionQuery.refetch()}>
+              Try again
+            </Button>
+          </EmptyContent>
+        </Empty>
+      ) : summary ? (
+        <div className="flex min-h-0 flex-1 items-center justify-center">
+          <Spinner className="text-muted-foreground" />
+        </div>
       ) : (
-        (empty ?? <div className="min-h-0 flex-1" />)
+        empty || <div className="min-h-0 flex-1" />
       )}
     </>
   );

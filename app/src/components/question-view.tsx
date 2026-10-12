@@ -43,6 +43,24 @@ type MonacoEditor = Parameters<OnMount>[0];
 /** Set to a function that saves the code as it is now and returns it (null if none). */
 export type CodeRef = React.RefObject<() => string | null>;
 
+/**
+ * What the question panel shows, as markdown: the case study, each example
+ * with its note, then the constraints.
+ */
+function questionText(question: Question) {
+  const examples = question.examples.map(({ inputText, expected, note }, i) =>
+    [
+      `**Example ${i + 1}**`,
+      `\`\`\`text\nInput:  ${inputText}\nOutput: ${JSON.stringify(expected)}\n\`\`\``,
+      note,
+    ]
+      .filter(Boolean)
+      .join("\n\n"),
+  );
+  const constraints = question.constraints && `**Constraints:** ${question.constraints}`;
+  return [question.description, ...examples, constraints].filter(Boolean).join("\n\n");
+}
+
 /** The question's share of the width, beside the code. */
 function questionSize(sidebarOpen: boolean) {
   return sidebarOpen ? "50%" : "40%";
@@ -126,7 +144,7 @@ export function QuestionView({
           <ScrollArea className="h-full">
             <div className="p-4">
               <h1 className="mb-3 text-base font-semibold">{question.title}</h1>
-              <Markdown>{question.description}</Markdown>
+              <Markdown>{questionText(question)}</Markdown>
             </div>
           </ScrollArea>
         </ResizablePanel>
