@@ -41,6 +41,8 @@ jobs:
         run: pnpm format:check
       - name: Types and build (tsc + Vite)
         run: pnpm build
+      - name: Completion tests
+        run: pnpm test
 
   rust:
     name: Rust (${{ matrix.name }})
