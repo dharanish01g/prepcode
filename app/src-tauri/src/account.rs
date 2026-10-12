@@ -183,9 +183,13 @@ pub async fn link_url(
         .ok_or_else(|| AccountError::Other("Unexpected answer from prepcode's servers: no link".into()))
 }
 
-fn browser_params(provider: Provider, port: u16, challenge: &str) -> [(&'static str, String); 4] {
+fn browser_params(provider: Provider, port: u16, challenge: &str) -> [(&'static str, String); 5] {
     [
         ("provider", provider.id().into()),
+        // Supabase passes this on to GitHub and Google, which then ask which
+        // account to use instead of quietly picking the one the browser is
+        // already signed in to (e.g. the previous student's, after a logout).
+        ("prompt", "select_account".into()),
         ("redirect_to", format!("http://127.0.0.1:{port}{CALLBACK_PATH}")),
         ("code_challenge", challenge.into()),
         ("code_challenge_method", "s256".into()),
@@ -603,6 +607,7 @@ mod tests {
         assert_eq!(param("provider").as_deref(), Some("github"));
         assert_eq!(param("redirect_to").as_deref(), Some("http://127.0.0.1:51234/auth/callback"));
         assert_eq!(param("code_challenge_method").as_deref(), Some("s256"));
+        assert_eq!(param("prompt").as_deref(), Some("select_account"));
     }
 
     #[test]
