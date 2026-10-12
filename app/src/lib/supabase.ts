@@ -1,11 +1,19 @@
 import { createClient } from "@supabase/supabase-js";
 
-// The publishable key is public by design: it ships in every copy of the app,
-// and row level security decides what it can read or write.
-const SUPABASE_URL = "https://osprwlsbdioyejpbwcmj.supabase.co";
-const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_gIBQhNZo4QFEdhQxdSgoYg_GmjWgIDP";
+// The publishable keys are public by design: they ship in every copy of the
+// app, and row level security decides what they can read or write.
 
-export const supabase = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
+/** prepwisely's project, which the content team manages Practice in. */
+export const supabase = createClient(
+  "https://gjlynpdgovgyyklamtds.supabase.co",
+  "sb_publishable_w2bnVW8VQGr5BbV88Xdbcg_IzYGzFVX",
   // Students sign in with GitHub, not Supabase Auth.
-  auth: { persistSession: false, autoRefreshToken: false },
-});
+  { auth: { persistSession: false, autoRefreshToken: false } },
+);
+
+/** The old prepcode project, only for Jobs until its table moves to prepwisely. */
+export const jobsSupabase = createClient(
+  "https://osprwlsbdioyejpbwcmj.supabase.co",
+  "sb_publishable_gIBQhNZo4QFEdhQxdSgoYg_GmjWgIDP",
+  { auth: { persistSession: false, autoRefreshToken: false } },
+);
