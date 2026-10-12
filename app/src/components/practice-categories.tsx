@@ -1,19 +1,6 @@
 import { Fragment } from "react";
-import {
-  BoxesIcon,
-  BrainIcon,
-  BriefcaseIcon,
-  Building2Icon,
-  CalculatorIcon,
-  CpuIcon,
-  DatabaseIcon,
-  FolderIcon,
-  GlobeIcon,
-  PuzzleIcon,
-  SpellCheckIcon,
-  SquareTerminalIcon,
-  StarIcon,
-} from "lucide-react";
+import { FolderIcon, StarIcon } from "lucide-react";
+import { DynamicIcon, iconNames, type IconName } from "lucide-react/dynamic";
 import { Card, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -21,21 +8,17 @@ import type { Category, Section } from "@/lib/practice";
 import { questionsIn } from "@/lib/questions";
 import { cn } from "@/lib/utils";
 
-// The icons a category's `icon` column can name. Others show a folder, so add
-// an icon here before using it in the database.
-const CATEGORY_ICONS: Record<string, React.ReactNode> = {
-  boxes: <BoxesIcon />,
-  brain: <BrainIcon />,
-  briefcase: <BriefcaseIcon />,
-  "building-2": <Building2Icon />,
-  calculator: <CalculatorIcon />,
-  cpu: <CpuIcon />,
-  database: <DatabaseIcon />,
-  globe: <GlobeIcon />,
-  puzzle: <PuzzleIcon />,
-  "spell-check": <SpellCheckIcon />,
-  "square-terminal": <SquareTerminalIcon />,
-};
+const ICON_NAMES: ReadonlySet<string> = new Set(iconNames);
+
+/**
+ * A category's icon: any Lucide icon, by the name in its `icon` column (e.g.
+ * "baby"), loaded when first shown. A name Lucide doesn't have, or none,
+ * shows a folder, as does any icon while it loads.
+ */
+function CategoryIcon({ name }: { name: string | null }) {
+  if (!name || !ICON_NAMES.has(name)) return <FolderIcon />;
+  return <DynamicIcon name={name as IconName} fallback={() => <FolderIcon />} />;
+}
 
 /**
  * The centered column every Practice list sits in, so the category cards and
@@ -83,7 +66,7 @@ export function PracticeCategories({
                       {category.logoUrl ? (
                         <img src={category.logoUrl} alt="" className="size-4" />
                       ) : (
-                        ((category.icon && CATEGORY_ICONS[category.icon]) ?? <FolderIcon />)
+                        <CategoryIcon name={category.icon} />
                       )}
                       <CardTitle>{category.title}</CardTitle>
                       <CardDescription>{category.description}</CardDescription>
