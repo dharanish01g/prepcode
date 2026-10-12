@@ -43,6 +43,13 @@ pub fn run() {
         .manage(sql::Servers::default())
         .manage(files::WorkspaceLock::default())
         .setup(|app| {
+            // The window starts hidden (tauri.conf.json) and is shown once its
+            // webview exists. On Windows, creating the webview waits in a
+            // message loop, and a visible window repainting during that wait
+            // crashes the event loop ("event handler is re-entrant").
+            if let Some(window) = app.get_webview_window("main") {
+                window.show()?;
+            }
             reporting::init_logging(app.handle())?;
             app.manage(db::open(app.handle())?);
             if let Err(e) = runtimes::check_installed(app.handle(), &app.state::<db::Db>()) {
