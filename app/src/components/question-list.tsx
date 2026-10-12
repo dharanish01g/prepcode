@@ -68,7 +68,7 @@ export function QuestionList({
     );
   }
   if (questions.length === 0) {
-    return <p className="px-4 py-2 text-sm text-muted-foreground">No questions here yet.</p>;
+    return <p className="px-4 py-2 text-sm text-muted-foreground">Questions coming soon.</p>;
   }
   // "3" or "3." finds question 3, as well as titles with a 3 in them.
   const number = search.replace(/\.$/, "");

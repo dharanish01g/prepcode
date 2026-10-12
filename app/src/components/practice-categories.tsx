@@ -5,7 +5,7 @@ import { Card, CardDescription, CardFooter, CardHeader, CardTitle } from "@/comp
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { Category, Section } from "@/lib/practice";
-import { useCategoryQuestionsQuery } from "@/lib/questions";
+import { useCategoryQuestionsQuery, type QuestionSummary } from "@/lib/questions";
 import { cn } from "@/lib/utils";
 
 const ICON_NAMES: ReadonlySet<string> = new Set(iconNames);
@@ -55,33 +55,12 @@ export function PracticeCategories({
                 {section.title}
               </h2>
               {section.categories.map((category) => (
-                <button
+                <CategoryCard
                   key={category.slug}
-                  type="button"
-                  className="group/open cursor-pointer text-left outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                  onClick={() => onOpen(category)}
-                >
-                  <Card className="size-56 transition-colors group-hover/open:bg-muted/50">
-                    <CardHeader>
-                      {category.logoUrl ? (
-                        <img src={category.logoUrl} alt="" className="size-4" />
-                      ) : (
-                        <CategoryIcon name={category.icon} />
-                      )}
-                      <CardTitle>{category.title}</CardTitle>
-                      <CardDescription>{category.description}</CardDescription>
-                    </CardHeader>
-                    <CardFooter className="mt-auto gap-2 text-xs tabular-nums">
-                      <CategoryProgress category={category.slug} solved={solved} />
-                      {category.premium && (
-                        <StarIcon
-                          aria-label="Paid content"
-                          className="ml-auto size-3.5 shrink-0 fill-amber-500 text-amber-500"
-                        />
-                      )}
-                    </CardFooter>
-                  </Card>
-                </button>
+                  category={category}
+                  solved={solved}
+                  onOpen={() => onOpen(category)}
+                />
               ))}
             </Fragment>
           ))}
@@ -91,19 +70,83 @@ export function PracticeCategories({
 }
 
 /**
+ * A category's card. One with no questions yet says it's coming soon and
+ * doesn't open; while its list loads, or if that failed, it still opens (the
+ * question list then says what's wrong).
+ */
+function CategoryCard({
+  category,
+  solved,
+  onOpen,
+}: {
+  category: Category;
+  solved: ReadonlySet<string>;
+  onOpen: () => void;
+}) {
+  // The same list the category shows when opened, so opening it is instant.
+  const questions = useCategoryQuestionsQuery(category.slug);
+  const comingSoon = questions.data?.length === 0;
+  return (
+    <button
+      type="button"
+      disabled={comingSoon}
+      className="group/open cursor-pointer text-left outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-default"
+      onClick={onOpen}
+    >
+      <Card
+        className={cn("size-56 transition-colors", !comingSoon && "group-hover/open:bg-muted/50")}
+      >
+        <CardHeader>
+          {category.logoUrl ? (
+            <img src={category.logoUrl} alt="" className="size-4" />
+          ) : (
+            <CategoryIcon name={category.icon} />
+          )}
+          <CardTitle>{category.title}</CardTitle>
+          <CardDescription>{category.description}</CardDescription>
+        </CardHeader>
+        <CardFooter className="mt-auto gap-2 text-xs tabular-nums">
+          {questions.isPending ? (
+            <Skeleton className="h-4 w-28" />
+          ) : comingSoon ? (
+            <span className="text-muted-foreground">Coming soon</span>
+          ) : (
+            questions.data && <CategoryProgress questions={questions.data} solved={solved} />
+          )}
+          {category.premium && (
+            <StarIcon
+              aria-label="Paid content"
+              className="ml-auto size-3.5 shrink-0 fill-amber-500 text-amber-500"
+            />
+          )}
+        </CardFooter>
+      </Card>
+    </button>
+  );
+}
+
+/**
  * How far the student is in a category: what's left to do, so they can pick
  * where to go next, and what's done.
  */
-function CategoryProgress({ category, solved }: { category: string; solved: ReadonlySet<string> }) {
-  // The same list the category shows when opened, so opening it is instant.
-  const questions = useCategoryQuestionsQuery(category);
-  if (questions.isPending) return <Skeleton className="h-4 w-28" />;
-  if (questions.isError) return null;
+function CategoryProgress({
+  questions,
+  solved,
+}: {
+  questions: QuestionSummary[];
+  solved: ReadonlySet<string>;
+}) {
   // Locked questions can't be solved yet, so they don't count.
-  const open = questions.data.filter((question) => !question.locked);
+  const open = questions.filter((question) => !question.locked);
   const total = open.length;
   const done = open.filter((question) => solved.has(question.slug)).length;
-  if (total === 0) return <span className="text-muted-foreground">No questions yet</span>;
+  if (total === 0) {
+    return (
+      <span className="text-muted-foreground">
+        {questions.length} locked {questions.length === 1 ? "question" : "questions"}
+      </span>
+    );
+  }
   if (done === total) {
     return (
       <span className="font-medium text-emerald-600 dark:text-emerald-400">

@@ -289,9 +289,9 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
               categoryQuestions.isSuccess && (
                 <Empty className="pb-24">
                   <EmptyHeader>
-                    <EmptyTitle>No questions yet</EmptyTitle>
+                    <EmptyTitle>Coming soon</EmptyTitle>
                     <EmptyDescription>
-                      {practice.category.title} doesn't have any questions yet. Check back soon.
+                      {practice.category.title} questions are on their way. Check back soon.
                     </EmptyDescription>
                   </EmptyHeader>
                 </Empty>
