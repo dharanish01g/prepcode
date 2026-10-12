@@ -432,7 +432,7 @@ async fn download_runtime(app: &AppHandle, runtime: &Runtime, extension: &str) -
             log::warn!("Replacing {}, which was there without its program", runtime.id);
         }
         let _ = fs::remove_dir_all(&target);
-        if let Err(e) = fs::rename(&unpacked_root, &target) {
+        if let Err(e) = rename_when_unlocked(&unpacked_root, &target).await {
             if executable_path(app, runtime)?.is_some() {
                 return Ok(());
             }
@@ -457,6 +457,22 @@ async fn download_runtime(app: &AppHandle, runtime: &Runtime, extension: &str) -
     let _ = fs::remove_dir_all(&staging);
     let _ = fs::remove_dir_all(&warmup);
     result
+}
+
+/// Renames `from` to `to`, waiting out a brief lock. On Windows, antivirus
+/// scans freshly unpacked files (and the version check just ran one), and
+/// while a scan holds them the rename fails with "Access is denied".
+async fn rename_when_unlocked(from: &Path, to: &Path) -> std::io::Result<()> {
+    const ATTEMPTS: u32 = 10;
+    for attempt in 1.. {
+        match fs::rename(from, to) {
+            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied && attempt < ATTEMPTS => {
+                tokio::time::sleep(Duration::from_millis(250 * u64::from(attempt))).await;
+            }
+            result => return result,
+        }
+    }
+    unreachable!()
 }
 
 /// Streams the download to `dest`, hashing as it goes, and rejects it if the
