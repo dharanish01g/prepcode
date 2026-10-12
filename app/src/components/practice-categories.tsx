@@ -5,7 +5,7 @@ import { Card, CardDescription, CardFooter, CardHeader, CardTitle } from "@/comp
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { Category, Section } from "@/lib/practice";
-import { questionsIn } from "@/lib/questions";
+import { useCategoryQuestionsQuery } from "@/lib/questions";
 import { cn } from "@/lib/utils";
 
 const ICON_NAMES: ReadonlySet<string> = new Set(iconNames);
@@ -72,10 +72,7 @@ export function PracticeCategories({
                       <CardDescription>{category.description}</CardDescription>
                     </CardHeader>
                     <CardFooter className="mt-auto gap-2 text-xs tabular-nums">
-                      <CategoryProgress
-                        total={questionsIn(category.slug).length}
-                        done={questionsIn(category.slug).filter((q) => solved.has(q.slug)).length}
-                      />
+                      <CategoryProgress category={category.slug} solved={solved} />
                       {category.premium && (
                         <StarIcon
                           aria-label="Paid content"
@@ -97,7 +94,15 @@ export function PracticeCategories({
  * How far the student is in a category: what's left to do, so they can pick
  * where to go next, and what's done.
  */
-function CategoryProgress({ total, done }: { total: number; done: number }) {
+function CategoryProgress({ category, solved }: { category: string; solved: ReadonlySet<string> }) {
+  // The same list the category shows when opened, so opening it is instant.
+  const questions = useCategoryQuestionsQuery(category);
+  if (questions.isPending) return <Skeleton className="h-4 w-28" />;
+  if (questions.isError) return null;
+  // Locked questions can't be solved yet, so they don't count.
+  const open = questions.data.filter((question) => !question.locked);
+  const total = open.length;
+  const done = open.filter((question) => solved.has(question.slug)).length;
   if (total === 0) return <span className="text-muted-foreground">No questions yet</span>;
   if (done === total) {
     return (
