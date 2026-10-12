@@ -135,3 +135,9 @@
     @apply font-sans;
   }
 }
+
+/* Hide Monaco's "No suggestions." popup widget */
+.monaco-editor .suggest-widget.message,
+.monaco-editor .suggest-widget .message {
+  display: none !important;
+}

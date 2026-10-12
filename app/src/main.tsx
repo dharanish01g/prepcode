@@ -17,6 +17,45 @@ initZoom();
 // Our own menus, like the one on files, still open: they handle the click first.
 document.addEventListener("contextmenu", (e) => e.preventDefault());
 
+// Block accidental page reload (Ctrl/Cmd+R, Ctrl/Cmd+Shift+R, F5) which resets app state / logs out.
+// Block DevTools shortcuts (Ctrl/Cmd+Shift+I/J/C, F12).
+// Block manual suggestion trigger (Ctrl/Cmd+Space).
+window.addEventListener(
+  "keydown",
+  (e) => {
+    const isCtrlOrCmd = e.ctrlKey || e.metaKey;
+
+    // Reload and DevTools stay available in `tauri dev`, for debugging.
+    const blockDevKeys = import.meta.env.PROD;
+
+    // Refresh: Ctrl+R, Ctrl+Shift+R, F5, Ctrl+F5
+    if (blockDevKeys && ((isCtrlOrCmd && (e.key === "r" || e.key === "R")) || e.key === "F5")) {
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+
+    // DevTools: Ctrl+Shift+I, Ctrl+Shift+J, Ctrl+Shift+C, F12
+    if (
+      blockDevKeys &&
+      ((isCtrlOrCmd && e.shiftKey && ["I", "i", "J", "j", "C", "c"].includes(e.key)) ||
+        e.key === "F12")
+    ) {
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+
+    // Suggestions shortcut: Ctrl+Space / Cmd+Space
+    if (isCtrlOrCmd && (e.code === "Space" || e.key === " " || e.keyCode === 32)) {
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+  },
+  true,
+);
+
 // Languages are used everywhere (icons, editor, new-file dialog), so load the
 // catalog before the first render. It's a local database read, so it's quick.
 loadLanguages()
