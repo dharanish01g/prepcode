@@ -70,9 +70,6 @@ export function blockClipboard(editor: monaco.editor.IStandaloneCodeEditor) {
     KeyMod.CtrlCmd | KeyCode.Insert,
     KeyMod.Shift | KeyCode.Insert,
     KeyMod.Shift | KeyCode.Delete,
-    KeyMod.CtrlCmd | KeyCode.KeyR,
-    KeyMod.CtrlCmd | KeyMod.Shift | KeyCode.KeyI,
-    KeyMod.CtrlCmd | KeyCode.Space,
   ]) {
     editor.addCommand(keybinding, () => {});
   }

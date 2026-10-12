@@ -25,8 +25,11 @@ window.addEventListener(
   (e) => {
     const isCtrlOrCmd = e.ctrlKey || e.metaKey;
 
+    // Reload and DevTools stay available in `tauri dev`, for debugging.
+    const blockDevKeys = import.meta.env.PROD;
+
     // Refresh: Ctrl+R, Ctrl+Shift+R, F5, Ctrl+F5
-    if ((isCtrlOrCmd && (e.key === "r" || e.key === "R")) || e.key === "F5") {
+    if (blockDevKeys && ((isCtrlOrCmd && (e.key === "r" || e.key === "R")) || e.key === "F5")) {
       e.preventDefault();
       e.stopPropagation();
       return;
@@ -34,8 +37,9 @@ window.addEventListener(
 
     // DevTools: Ctrl+Shift+I, Ctrl+Shift+J, Ctrl+Shift+C, F12
     if (
-      (isCtrlOrCmd && e.shiftKey && ["I", "i", "J", "j", "C", "c"].includes(e.key)) ||
-      e.key === "F12"
+      blockDevKeys &&
+      ((isCtrlOrCmd && e.shiftKey && ["I", "i", "J", "j", "C", "c"].includes(e.key)) ||
+        e.key === "F12")
     ) {
       e.preventDefault();
       e.stopPropagation();
