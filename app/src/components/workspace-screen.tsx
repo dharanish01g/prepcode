@@ -13,7 +13,24 @@ import { QuestionsScreen } from "@/components/questions-screen";
 import { RepoSetupSteps } from "@/components/repo-setup";
 import { SaveStatus } from "@/components/save-status";
 import { UnsyncedDialog } from "@/components/unsynced-dialog";
-import { PlayIcon, SquareIcon, TextCursorIcon, WandSparklesIcon } from "lucide-react";
+import {
+  AlertTriangleIcon,
+  PlayIcon,
+  SquareIcon,
+  TextCursorIcon,
+  WandSparklesIcon,
+} from "lucide-react";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogMedia,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Spinner } from "@/components/ui/spinner";
 import { useQueryRunner } from "@/hooks/use-query-runner";
 import { useRunner } from "@/hooks/use-runner";
@@ -102,6 +119,7 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
   const [guestAction, setGuestAction] = useState<"log out" | "close" | null>(null);
   // Logging out or closing, held back by unsynced changes.
   const [unsyncedAction, setUnsyncedAction] = useState<"log out" | "close" | null>(null);
+  const [saveFailedLogout, setSaveFailedLogout] = useState(false);
   const runner = useRunner();
   const queries = useQueryRunner();
   const syncStatus = useSyncStatusQuery(session.id, !session.guest);
@@ -121,7 +139,10 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
     userId: session.id,
     selectedFile,
     onSelectFile: setSelectedFile,
-    flushEdits: () => flushEditorRef.current(),
+    flushEdits: async () => {
+      await flushEditorRef.current();
+      await whenSavesSettled();
+    },
     onNeedsSetup: () => setSettingUpGitHub(true),
   });
 
@@ -188,15 +209,21 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
   }
 
   // Save the last few keystrokes before the backend forgets who's logged in.
-  async function handleLogout() {
+  async function handleLogout(force = false) {
     if (runner.running) runner.stop();
     if (queries.busy) queries.stop();
-    try {
-      await flushEditorRef.current();
-    } catch (err) {
-      console.error("Flush before logout failed:", err);
+    if (!force) {
+      try {
+        await flushEditorRef.current();
+        await whenSavesSettled();
+      } catch (err) {
+        setSaveFailedLogout(true);
+        toast.error("Could not save your changes before logging out", {
+          description: err instanceof Error ? err.message : String(err),
+        });
+        return;
+      }
     }
-    await whenSavesSettled();
     onLogout();
   }
 
@@ -227,10 +254,13 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
     const line = atCursor ? (cursorLineRef.current() ?? undefined) : undefined;
     try {
       await flushEditorRef.current();
+      await whenSavesSettled();
     } catch (err) {
-      console.error("Flush before running queries failed:", err);
+      toast.error(`Cannot run queries: failed to save ${selectedFile}`, {
+        description: err instanceof Error ? err.message : String(err),
+      });
+      return;
     }
-    await whenSavesSettled();
     queries.run(selectedFile, line);
   }
 
@@ -238,10 +268,13 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
     if (!selectedFile) return;
     try {
       await flushEditorRef.current();
+      await whenSavesSettled();
     } catch (err) {
-      console.error("Flush before run failed:", err);
+      toast.error(`Cannot run: failed to save ${selectedFile}`, {
+        description: err instanceof Error ? err.message : String(err),
+      });
+      return;
     }
-    await whenSavesSettled();
     runner.run(selectedFile);
   }
 
@@ -275,11 +308,8 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
         selectedFile={selectedFile}
         onSelectFile={setSelectedFile}
         onFlushEdits={async () => {
-          try {
-            await flushEditorRef.current();
-          } catch (err) {
-            console.error("Flush edits failed:", err);
-          }
+          await flushEditorRef.current();
+          await whenSavesSettled();
         }}
         pulling={!pulled}
         syncStatus={syncStatus.data}
@@ -538,11 +568,7 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
         onCancel={() => setGuestAction(null)}
         onExport={async () => {
           // Include the last few keystrokes.
-          try {
-            await flushEditorRef.current();
-          } catch (err) {
-            console.error("Flush before export failed:", err);
-          }
+          await flushEditorRef.current();
           await whenSavesSettled();
           return exportGuestFiles();
         }}
@@ -553,6 +579,34 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
           else closeWindow();
         }}
       />
+      <AlertDialog open={saveFailedLogout} onOpenChange={setSaveFailedLogout}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogMedia className="text-destructive">
+              <AlertTriangleIcon />
+            </AlertDialogMedia>
+            <AlertDialogTitle>Unsaved changes couldn't be saved</AlertDialogTitle>
+            <AlertDialogDescription>
+              An error occurred while saving your latest edits to disk. If you log out now, your
+              unsaved edits will be lost permanently.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => setSaveFailedLogout(false)}>
+              Stay in workspace
+            </AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={() => {
+                setSaveFailedLogout(false);
+                void handleLogout(true);
+              }}
+            >
+              Discard and log out
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </SidebarProvider>
   );
 }

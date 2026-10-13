@@ -26,6 +26,7 @@ import { useIsDark } from "@/hooks/use-theme";
 import { readPractice, writePractice } from "@/lib/files";
 import { queryKeys } from "@/lib/queries";
 import { queryClient } from "@/lib/query-client";
+import { createEditorSaveCoordinator } from "@/lib/save-queue";
 import type { Language } from "@/lib/languages";
 import {
   blockClipboard,
@@ -296,47 +297,40 @@ function PracticeEditor({
     queryFn: () => readPractice(question, extension),
   });
 
-  const pending = useRef<string | null>(null);
+  const fileKey = `${question}.${extension}`;
+  const paramsRef = useRef({ question, extension, userId });
+  useLayoutEffect(() => {
+    paramsRef.current = { question, extension, userId };
+  });
+
+  const coordinator = useRef<ReturnType<typeof createEditorSaveCoordinator> | null>(null);
+  if (!coordinator.current) {
+    coordinator.current = createEditorSaveCoordinator(async (edit) => {
+      const { question: q, extension: ext, userId: uid } = paramsRef.current;
+      try {
+        await writePractice(q, ext, edit.content);
+        queryClient.setQueryData(queryKeys.practice(uid, q, ext), edit.content);
+        // So the unsynced count, and the sync on close, include it.
+        await queryClient.invalidateQueries({ queryKey: queryKeys.syncStatus(uid) });
+      } catch (err) {
+        queryClient.invalidateQueries({
+          queryKey: queryKeys.practice(uid, q, ext),
+        });
+        toast.error("Couldn't save your code", {
+          description: err instanceof Error ? err.message : String(err),
+        });
+        throw err;
+      }
+    });
+  }
+
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
-  const inflight = useRef<Promise<void> | null>(null);
 
   const flush = useCallback(async () => {
     clearTimeout(timer.current);
-    if (pending.current !== null) {
-      const content = pending.current;
-      pending.current = null;
-      const task = (async () => {
-        try {
-          await writePractice(question, extension, content);
-          queryClient.setQueryData(queryKeys.practice(userId, question, extension), content);
-          // So the unsynced count, and the sync on close, include it.
-          await queryClient.invalidateQueries({ queryKey: queryKeys.syncStatus(userId) });
-        } catch (err) {
-          // Keep edit pending so it can be retried on next flush or keystroke
-          if (pending.current === null) {
-            pending.current = content;
-          }
-          queryClient.invalidateQueries({
-            queryKey: queryKeys.practice(userId, question, extension),
-          });
-          toast.error("Couldn't save your code", {
-            description: err instanceof Error ? err.message : String(err),
-          });
-          throw err;
-        }
-      })();
-      inflight.current = task;
-      try {
-        await task;
-      } finally {
-        if (inflight.current === task) {
-          inflight.current = null;
-        }
-      }
-    } else if (inflight.current) {
-      await inflight.current;
-    }
-  }, [question, extension, userId]);
+    if (!coordinator.current) return;
+    await coordinator.current.flush();
+  }, []);
 
   // Layout effects so the cleanups run synchronously: edits are saved when the
   // question or language changes, and when the editor unmounts.
@@ -357,8 +351,7 @@ function PracticeEditor({
       // Saved even if untouched, so the starter code is kept too.
       const content = editorRef.current?.getValue();
       if (content === undefined) return null;
-      pending.current = content;
-      void flush().catch(() => {});
+      coordinator.current?.recordEdit(fileKey, content);
       return content;
     };
     return () => {
@@ -367,7 +360,7 @@ function PracticeEditor({
       codeRef.current = () => null;
       resetRef.current = () => {};
     };
-  }, [flush, flushRef, codeRef, resetRef, starter]);
+  }, [flush, flushRef, codeRef, resetRef, starter, fileKey]);
 
   if (saved.isError) {
     return (
@@ -393,7 +386,7 @@ function PracticeEditor({
         blockClipboard(editor);
       }}
       onChange={(value) => {
-        pending.current = value ?? "";
+        coordinator.current?.recordEdit(fileKey, value ?? "");
         clearTimeout(timer.current);
         timer.current = setTimeout(flush, AUTOSAVE_DELAY_MS);
       }}

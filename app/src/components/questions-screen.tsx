@@ -27,8 +27,9 @@ import { SidebarTrigger } from "@/components/ui/sidebar";
 import { Spinner } from "@/components/ui/spinner";
 import { celebrate } from "@/lib/celebrate";
 import { buildProgram, encodeInput } from "@/lib/drivers";
-import { markPracticeSolved } from "@/lib/files";
+import { markPracticeSolved, whenSavesSettled } from "@/lib/files";
 import { queryKeys } from "@/lib/queries";
+import { toast } from "sonner";
 import { getLanguages, type Language } from "@/lib/languages";
 import { useQuestionQuery, type Question, type QuestionSummary } from "@/lib/questions";
 import { checkPractice, stopProgram } from "@/lib/run";
@@ -115,6 +116,15 @@ export function QuestionsScreen({
       return;
     }
     // Saves it too, so what runs is what's kept.
+    try {
+      await flushRef.current();
+      await whenSavesSettled();
+    } catch (err) {
+      toast.error("Cannot run: failed to save code", {
+        description: err instanceof Error ? err.message : String(err),
+      });
+      return;
+    }
     const code = codeRef.current();
     if (code === null) return;
     setCheck({ status: "checking", kind });

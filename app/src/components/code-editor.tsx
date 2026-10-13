@@ -12,6 +12,7 @@ import { useIsDark } from "@/hooks/use-theme";
 import { monacoLanguageOf } from "@/lib/files";
 import { formatCode, NoFormatterError } from "@/lib/format";
 import { useFileContentQuery, useSaveFileMutation } from "@/lib/queries";
+import { createEditorSaveCoordinator } from "@/lib/save-queue";
 
 /** How long to wait after the last keystroke before saving. */
 export const AUTOSAVE_DELAY_MS = 500;
@@ -75,40 +76,23 @@ function FileEditor({
   const content = useFileContentQuery(userId, filename);
   const { mutateAsync: saveAsync } = useSaveFileMutation(userId);
 
-  // Remembers which file the unsaved text belongs to, so a flush after
-  // switching files still saves to the right place.
-  const pending = useRef<{ filename: string; content: string } | null>(null);
+  const saveAsyncRef = useRef(saveAsync);
+  useLayoutEffect(() => {
+    saveAsyncRef.current = saveAsync;
+  });
+
+  const coordinator = useRef<ReturnType<typeof createEditorSaveCoordinator> | null>(null);
+  if (!coordinator.current) {
+    coordinator.current = createEditorSaveCoordinator((edit) => saveAsyncRef.current(edit));
+  }
+
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
-  const inflight = useRef<Promise<void> | null>(null);
 
   const flush = useCallback(async () => {
     clearTimeout(timer.current);
-    if (pending.current) {
-      const edit = pending.current;
-      pending.current = null;
-      const task = (async () => {
-        try {
-          await saveAsync(edit);
-        } catch (err) {
-          // Keep the edit pending so it can be retried on next flush or keystroke
-          if (!pending.current) {
-            pending.current = edit;
-          }
-          throw err;
-        }
-      })();
-      inflight.current = task;
-      try {
-        await task;
-      } finally {
-        if (inflight.current === task) {
-          inflight.current = null;
-        }
-      }
-    } else if (inflight.current) {
-      await inflight.current;
-    }
-  }, [saveAsync]);
+    if (!coordinator.current) return;
+    await coordinator.current.flush();
+  }, []);
 
   // Layout effects so the cleanups run synchronously: the previous file's edits
   // are saved on switch, and everything is saved when the editor unmounts.
@@ -122,9 +106,11 @@ function FileEditor({
 
   useLayoutEffect(
     () => () => {
-      void flush().catch(() => {});
+      if (coordinator.current) {
+        void coordinator.current.flushFile(filename).catch(() => {});
+      }
     },
-    [filename, flush],
+    [filename],
   );
 
   // Replaces the text with the formatted version as one edit, so a single
@@ -207,7 +193,7 @@ function FileEditor({
         });
       }}
       onChange={(value) => {
-        pending.current = { filename, content: value ?? "" };
+        coordinator.current?.recordEdit(filename, value ?? "");
         clearTimeout(timer.current);
         timer.current = setTimeout(flush, AUTOSAVE_DELAY_MS);
       }}

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -88,7 +89,10 @@ function RenameFileForm({
     try {
       await beforeRename();
     } catch (err) {
-      console.error("Flush before rename failed:", err);
+      toast.error("Cannot rename: failed to save pending edits", {
+        description: err instanceof Error ? err.message : String(err),
+      });
+      return;
     }
     rename.mutate(
       { filename, newName: trimmed },

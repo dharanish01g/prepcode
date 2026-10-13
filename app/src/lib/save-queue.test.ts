@@ -1,7 +1,17 @@
 /// <reference types="node" />
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createSaveQueue } from "./save-queue.ts";
+import { createEditorSaveCoordinator, createSaveQueue } from "./save-queue.ts";
+
+function deferred<T = void>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
 
 test("save queue: sequential execution on save success", async () => {
   const queue = createSaveQueue();
@@ -81,147 +91,186 @@ test("save queue: file switching during in-flight save preserves order", async (
   assert.deepEqual(log, ["save:fileA.py", "save:fileB.py"]);
 });
 
-test("editor flush coordinator: overlapping flush requests do not duplicate writes", async () => {
-  // Simulates the flush coordinator state in FileEditor and PracticeEditor
-  let pending: { filename: string; content: string } | null = {
-    filename: "app.py",
-    content: "print('hello')",
-  };
-  let inflight: Promise<void> | null = null;
-  let writeCount = 0;
+test("regression: failed older revision A never overwrites newer revision B after B started and succeeded", async () => {
+  const saveCalls: { filename: string; content: string }[] = [];
+  const defA = deferred<void>();
+  const defB = deferred<void>();
 
-  async function mockSaveAsync(_edit: { filename: string; content: string }) {
-    writeCount++;
-    await new Promise((r) => setTimeout(r, 30));
-  }
-
-  async function flush() {
-    if (pending) {
-      const edit = pending;
-      pending = null;
-      const task = (async () => {
-        try {
-          await mockSaveAsync(edit);
-        } catch (err) {
-          if (!pending) pending = edit;
-          throw err;
-        }
-      })();
-      inflight = task;
-      try {
-        await task;
-      } finally {
-        if (inflight === task) inflight = null;
-      }
-    } else if (inflight) {
-      await inflight;
+  const coordinator = createEditorSaveCoordinator(async (edit) => {
+    saveCalls.push({ ...edit });
+    if (edit.content === "revA") {
+      await defA.promise;
+    } else if (edit.content === "revB") {
+      await defB.promise;
     }
-  }
+  });
 
-  // Two simultaneous flush calls (e.g. Run clicked while autosave flush initiated)
-  const [f1, f2] = await Promise.all([flush(), flush()]);
-  await Promise.all([f1, f2]);
+  // 1. Revision A begins saving.
+  coordinator.recordEdit("app.py", "revA");
+  assert.equal(coordinator.getLatestRevision("app.py"), 1);
+  const flushA = coordinator.flushFile("app.py");
 
-  assert.equal(writeCount, 1, "Only one disk write should occur for concurrent flushes");
-  assert.equal(pending, null, "Pending content cleared after successful flush");
+  assert.equal(saveCalls.length, 1);
+  assert.equal(saveCalls[0].content, "revA");
+
+  // 2. The user types revision B.
+  coordinator.recordEdit("app.py", "revB");
+  assert.equal(coordinator.getLatestRevision("app.py"), 2);
+
+  // 3. Revision B begins saving before A finishes.
+  const flushB = coordinator.flushFile("app.py");
+  assert.equal(saveCalls.length, 2);
+  assert.equal(saveCalls[1].content, "revB");
+
+  // 4. A fails after B has been scheduled or started.
+  defA.reject(new Error("I/O error during save of revision A"));
+  await assert.rejects(flushA, { message: "I/O error during save of revision A" });
+
+  // 5. B succeeds.
+  defB.resolve();
+  await flushB;
+
+  // 6. A later flush must never write revision A over revision B.
+  assert.equal(
+    coordinator.hasPending("app.py"),
+    false,
+    "Revision A must not be requeued or pending after B succeeded",
+  );
+  await coordinator.flush("app.py");
+  assert.equal(saveCalls.length, 2, "No subsequent write should overwrite revision B");
+  assert.equal(coordinator.getSavedRevision("app.py"), 2);
 });
 
-test("editor flush coordinator: failed save preserves pending edits without data loss", async () => {
-  let pending: { filename: string; content: string } | null = {
-    filename: "script.py",
-    content: "critical_user_code()",
-  };
-  let inflight: Promise<void> | null = null;
-  let attempt = 0;
+test("coordinator: overlapping flush requests do not duplicate writes", async () => {
+  let writeCount = 0;
+  const def = deferred<void>();
 
-  async function mockSaveAsync(edit: { filename: string; content: string }) {
+  const coordinator = createEditorSaveCoordinator(async (_edit) => {
+    writeCount++;
+    await def.promise;
+  });
+
+  coordinator.recordEdit("app.py", "print('hello')");
+  const p1 = coordinator.flush();
+  const p2 = coordinator.flush();
+
+  assert.equal(writeCount, 1, "Only one disk write should occur for concurrent flushes");
+  def.resolve();
+  await Promise.all([p1, p2]);
+
+  assert.equal(writeCount, 1);
+  assert.equal(coordinator.hasPending("app.py"), false);
+  assert.equal(coordinator.getSavedRevision("app.py"), 1);
+});
+
+test("coordinator: rapid typing coalesces intermediate edits and saves latest revision", async () => {
+  const savedEdits: string[] = [];
+  const coordinator = createEditorSaveCoordinator(async (edit) => {
+    savedEdits.push(edit.content);
+  });
+
+  for (let i = 1; i <= 5; i++) {
+    coordinator.recordEdit("app.py", `typed_v${i}`);
+  }
+
+  assert.equal(coordinator.getLatestRevision("app.py"), 5);
+  assert.equal(coordinator.getPending("app.py")?.content, "typed_v5");
+
+  await coordinator.flush();
+
+  assert.deepEqual(savedEdits, ["typed_v5"]);
+  assert.equal(coordinator.getSavedRevision("app.py"), 5);
+  assert.equal(coordinator.hasPending("app.py"), false);
+});
+
+test("coordinator: out-of-order completion does not allow older save to overwrite newer save", async () => {
+  const saveCalls: { filename: string; content: string }[] = [];
+  const defA = deferred<void>();
+  const defB = deferred<void>();
+
+  const coordinator = createEditorSaveCoordinator(async (edit) => {
+    saveCalls.push({ ...edit });
+    if (edit.content === "revA") {
+      await defA.promise;
+    } else if (edit.content === "revB") {
+      await defB.promise;
+    }
+  });
+
+  coordinator.recordEdit("test.py", "revA");
+  const flushA = coordinator.flushFile("test.py");
+
+  coordinator.recordEdit("test.py", "revB");
+  const flushB = coordinator.flushFile("test.py");
+
+  // Revision B completes and succeeds first (out of order completion)
+  defB.resolve();
+  await flushB;
+  assert.equal(coordinator.getSavedRevision("test.py"), 2);
+
+  // Revision A completes second and fails
+  defA.reject(new Error("Late failure of rev A"));
+  await assert.rejects(flushA, { message: "Late failure of rev A" });
+
+  // Coordinator must never requeue rev A over rev B
+  assert.equal(coordinator.hasPending("test.py"), false);
+  await coordinator.flush();
+  assert.equal(saveCalls.length, 2);
+});
+
+test("coordinator: failed write preserves pending edits for retry if still latest", async () => {
+  let attempt = 0;
+  const coordinator = createEditorSaveCoordinator(async (_edit) => {
     attempt++;
     if (attempt === 1) {
       throw new Error("Simulated I/O failure");
     }
-    // Succeeded on retry
-    return edit;
-  }
+  });
 
-  async function flush() {
-    if (pending) {
-      const edit = pending;
-      pending = null;
-      const task = (async () => {
-        try {
-          await mockSaveAsync(edit);
-        } catch (err) {
-          if (!pending) pending = edit;
-          throw err;
-        }
-      })();
-      inflight = task;
-      try {
-        await task;
-      } finally {
-        if (inflight === task) inflight = null;
-      }
-    } else if (inflight) {
-      await inflight;
-    }
-  }
+  coordinator.recordEdit("script.py", "critical_user_code()");
+  assert.equal(coordinator.getLatestRevision("script.py"), 1);
 
   // First flush fails
-  await assert.rejects(flush(), { message: "Simulated I/O failure" });
-  assert.notEqual(pending, null, "Failed edit must be retained in pending ref");
-  assert.equal(pending?.content, "critical_user_code()");
+  await assert.rejects(coordinator.flush(), { message: "Simulated I/O failure" });
+  assert.equal(
+    coordinator.hasPending("script.py"),
+    true,
+    "Failed edit must be retained in pending",
+  );
+  assert.equal(coordinator.getPending("script.py")?.content, "critical_user_code()");
 
   // Second flush retries successfully
-  await flush();
+  await coordinator.flush();
   assert.equal(attempt, 2);
-  assert.equal(pending, null, "Pending edit successfully saved on second flush");
+  assert.equal(coordinator.hasPending("script.py"), false);
+  assert.equal(coordinator.getSavedRevision("script.py"), 1);
 });
 
-test("editor flush coordinator: newer edit is never overwritten by failed older save", async () => {
-  let pending: { filename: string; content: string } | null = {
-    filename: "main.ts",
-    content: "older_edit",
-  };
-  let inflight: Promise<void> | null = null;
-
-  async function flush() {
-    if (pending) {
-      const edit = pending;
-      pending = null;
-      const task = (async () => {
-        try {
-          await new Promise((_, reject) =>
-            setTimeout(() => reject(new Error("Old write failed")), 20),
-          );
-        } catch (err) {
-          if (!pending) pending = edit;
-          throw err;
-        }
-      })();
-      inflight = task;
-      try {
-        await task;
-      } finally {
-        if (inflight === task) inflight = null;
-      }
-    } else if (inflight) {
-      await inflight;
+test("coordinator: file switching tracks and flushes multiple files independently", async () => {
+  const savedFiles: string[] = [];
+  const coordinator = createEditorSaveCoordinator(async (edit) => {
+    if (edit.filename === "fileA.py") {
+      throw new Error("Write failed for fileA");
     }
-  }
+    savedFiles.push(edit.filename);
+  });
 
-  const flushPromise = flush();
+  // Edit fileA
+  coordinator.recordEdit("fileA.py", "contentA");
+  // Switch to fileB and edit
+  coordinator.recordEdit("fileB.py", "contentB");
 
-  // User immediately continues typing while the old write was in flight
-  pending = { filename: "main.ts", content: "newer_edit_typed_by_user" };
+  assert.equal(coordinator.hasPending("fileA.py"), true);
+  assert.equal(coordinator.hasPending("fileB.py"), true);
 
-  await assert.rejects(flushPromise, { message: "Old write failed" });
+  // Flush all files
+  await assert.rejects(coordinator.flush(), { message: "Write failed for fileA" });
 
-  // Verify that the newer edit was NOT overwritten by older_edit
-  assert.equal(
-    pending?.content,
-    "newer_edit_typed_by_user",
-    "Newer edit must be preserved despite older save failure",
-  );
+  // fileB succeeded, fileA failed and remained pending for retry
+  assert.deepEqual(savedFiles, ["fileB.py"]);
+  assert.equal(coordinator.hasPending("fileA.py"), true);
+  assert.equal(coordinator.hasPending("fileB.py"), false);
+  assert.equal(coordinator.getSavedRevision("fileB.py"), 1);
 });
 
 test("query cache rollback: only rolls back if cache content matches failed mutation", () => {

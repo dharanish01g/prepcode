@@ -1,5 +1,6 @@
 import { useRef } from "react";
 import { Trash2Icon } from "lucide-react";
+import { toast } from "sonner";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -64,7 +65,10 @@ export function DeleteFileDialog({
               try {
                 await beforeDelete();
               } catch (err) {
-                console.error("Flush before delete failed:", err);
+                toast.error("Cannot delete: failed to flush pending edits", {
+                  description: err instanceof Error ? err.message : String(err),
+                });
+                return;
               }
               remove.mutate(filename, {
                 onSuccess: () => {

@@ -229,6 +229,8 @@ export function useSync({
     () =>
       exclusive(async () => {
         try {
+          await flushEditsRef.current();
+          await whenSavesSettled();
           await applyReport(await pullFromGitHub());
           return true;
         } catch (err) {
