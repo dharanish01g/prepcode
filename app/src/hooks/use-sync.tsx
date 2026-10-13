@@ -42,7 +42,7 @@ export function useSync({
   selectedFile: string | null;
   onSelectFile: (filename: string | null) => void;
   /** Saves the editor's pending edits now, so they're included. */
-  flushEdits: () => void;
+  flushEdits: () => Promise<void> | void;
   /** prepcode has no access to the student's repo (any more): set it up. */
   onNeedsSetup: () => void;
 }) {
@@ -129,7 +129,7 @@ export function useSync({
     return (
       exclusive(async () => {
         try {
-          flushEditsRef.current();
+          await flushEditsRef.current();
           await whenSavesSettled();
           const report = await syncNow();
           await applyReport(report);
@@ -177,7 +177,7 @@ export function useSync({
     () =>
       exclusive(async () => {
         try {
-          flushEditsRef.current();
+          await flushEditsRef.current();
           await whenSavesSettled();
           if (unsyncedCount(await syncStatus()) === 0) return true;
           await applyReport(await syncNow());
@@ -205,7 +205,7 @@ export function useSync({
       return (
         exclusive(async () => {
           try {
-            flushEditsRef.current();
+            await flushEditsRef.current();
             await whenSavesSettled();
             await applyReport(await syncPractice(question, extension, message));
             return true;

@@ -1,5 +1,6 @@
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { openUrl } from "@tauri-apps/plugin-opener";
 
 // shadcn's typography styles, sized down to the app's text-sm so a question
 // reads like the rest of the app, with the theme's sharp corners and greys.
@@ -9,8 +10,19 @@ const COMPONENTS: Components = {
   h2: ({ node: _, ...props }) => <h2 className="mt-2 text-sm font-semibold" {...props} />,
   h3: ({ node: _, ...props }) => <h3 className="text-sm font-medium" {...props} />,
   p: ({ node: _, ...props }) => <p className="leading-relaxed" {...props} />,
-  a: ({ node: _, ...props }) => (
-    <a className="font-medium text-primary underline underline-offset-4" {...props} />
+  a: ({ node: _, href, onClick, ...props }) => (
+    <a
+      href={href}
+      className="font-medium text-primary underline underline-offset-4"
+      onClick={(e) => {
+        if (href && /^https?:\/\//i.test(href)) {
+          e.preventDefault();
+          openUrl(href).catch((err) => console.error("Could not open URL:", err));
+        }
+        onClick?.(e);
+      }}
+      {...props}
+    />
   ),
   strong: ({ node: _, ...props }) => <strong className="font-semibold" {...props} />,
   ul: ({ node: _, ...props }) => <ul className="ml-5 list-disc [&>li]:mt-1" {...props} />,

@@ -16,7 +16,7 @@ import { useFileContentQuery, useSaveFileMutation } from "@/lib/queries";
 /** How long to wait after the last keystroke before saving. */
 export const AUTOSAVE_DELAY_MS = 500;
 
-export type FlushRef = React.RefObject<() => void>;
+export type FlushRef = React.RefObject<() => Promise<void> | void>;
 export type FormatRef = React.RefObject<() => Promise<void>>;
 export type CursorLineRef = React.RefObject<() => number | null>;
 
@@ -73,32 +73,37 @@ function FileEditor({
   const isDark = useIsDark();
   const editorRef = useRef<MonacoEditor | null>(null);
   const content = useFileContentQuery(userId, filename);
-  const { mutate: save } = useSaveFileMutation(userId);
+  const { mutateAsync: saveAsync } = useSaveFileMutation(userId);
 
   // Remembers which file the unsaved text belongs to, so a flush after
   // switching files still saves to the right place.
   const pending = useRef<{ filename: string; content: string } | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
-  const flush = useCallback(() => {
+  const flush = useCallback(async () => {
     clearTimeout(timer.current);
     const edit = pending.current;
     if (!edit) return;
     pending.current = null;
-    save(edit);
-  }, [save]);
+    await saveAsync(edit);
+  }, [saveAsync]);
 
   // Layout effects so the cleanups run synchronously: the previous file's edits
   // are saved on switch, and everything is saved when the editor unmounts.
   useLayoutEffect(() => {
     flushRef.current = flush;
     return () => {
-      flush();
+      void flush();
       flushRef.current = () => {};
     };
   }, [flush, flushRef]);
 
-  useLayoutEffect(() => () => flush(), [filename, flush]);
+  useLayoutEffect(
+    () => () => {
+      void flush();
+    },
+    [filename, flush],
+  );
 
   // Replaces the text with the formatted version as one edit, so a single
   // Ctrl/Cmd+Z undoes it. The change then autosaves like any other edit.

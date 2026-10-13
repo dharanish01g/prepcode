@@ -94,7 +94,7 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
           onSelect: (slug) => setPractice({ ...practice, question: slug }),
         }
       : null;
-  const flushEditorRef = useRef<() => void>(() => {});
+  const flushEditorRef = useRef<() => Promise<void> | void>(() => {});
   const formatEditorRef = useRef<() => Promise<void>>(async () => {});
   const cursorLineRef = useRef<() => number | null>(() => null);
   const [formatting, setFormatting] = useState(false);
@@ -191,7 +191,7 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
   async function handleLogout() {
     if (runner.running) runner.stop();
     if (queries.busy) queries.stop();
-    flushEditorRef.current();
+    await flushEditorRef.current();
     await whenSavesSettled();
     onLogout();
   }
@@ -221,14 +221,14 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
   async function handleRunQueries(atCursor: boolean) {
     if (!selectedFile) return;
     const line = atCursor ? (cursorLineRef.current() ?? undefined) : undefined;
-    flushEditorRef.current();
+    await flushEditorRef.current();
     await whenSavesSettled();
     queries.run(selectedFile, line);
   }
 
   async function handleRun() {
     if (!selectedFile) return;
-    flushEditorRef.current();
+    await flushEditorRef.current();
     await whenSavesSettled();
     runner.run(selectedFile);
   }
@@ -520,7 +520,7 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
         onCancel={() => setGuestAction(null)}
         onExport={async () => {
           // Include the last few keystrokes.
-          flushEditorRef.current();
+          await flushEditorRef.current();
           await whenSavesSettled();
           return exportGuestFiles();
         }}
