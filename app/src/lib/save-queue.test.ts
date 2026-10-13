@@ -309,3 +309,88 @@ test("query cache rollback: only rolls back if cache content matches failed muta
   // Cache MUST NOT be rolled back to "initial", because cache is now "v2", not "v1"!
   assert.equal(cache.get("file.py"), "v2", "Cache must not revert when newer mutation exists");
 });
+
+test("coordinator: flush cannot report success when concurrent in-flight save fails", async () => {
+  const def = deferred<void>();
+  const coordinator = createEditorSaveCoordinator(async () => {
+    await def.promise;
+  });
+
+  coordinator.recordEdit("test.py", "unsaved_work");
+  // Background autosave starts
+  const p1 = coordinator.flush();
+
+  // User triggers operation requiring save (e.g. Run or Logout)
+  const p2 = coordinator.flush();
+
+  // Background save fails
+  def.reject(new Error("Disk permission denied"));
+
+  // Both the initiator and any concurrent flush caller MUST fail closed
+  await assert.rejects(p1, { message: "Disk permission denied" });
+  await assert.rejects(p2, { message: "Disk permission denied" });
+  assert.equal(coordinator.hasPending("test.py"), true);
+});
+
+test("coordinator: newer edit typed during in-flight save is guaranteed to be saved before flush returns", async () => {
+  const savedEdits: string[] = [];
+  const def1 = deferred<void>();
+
+  const coordinator = createEditorSaveCoordinator(async (edit) => {
+    savedEdits.push(edit.content);
+    if (edit.content === "edit_1") {
+      await def1.promise;
+    }
+  });
+
+  coordinator.recordEdit("doc.txt", "edit_1");
+  // Flush 1 starts saving edit_1
+  const pFlush = coordinator.flush();
+
+  // User types edit_2 while edit_1 is saving
+  coordinator.recordEdit("doc.txt", "edit_2");
+
+  // Edit 1 completes
+  def1.resolve();
+  await pFlush;
+
+  // Flush must have persisted edit_2 as well, leaving no pending edits
+  assert.deepEqual(savedEdits, ["edit_1", "edit_2"]);
+  assert.equal(coordinator.hasPending("doc.txt"), false);
+  assert.equal(coordinator.getSavedRevision("doc.txt"), 2);
+});
+
+test("integration: coordinator and filesystem saveQueue cooperation under failure and settlement", async () => {
+  const disk: Record<string, string> = {};
+  const queue = createSaveQueue();
+  let failFirstWrite = true;
+
+  // Real production save coordination wrapping the real filesystem queue
+  const coordinator = createEditorSaveCoordinator((edit) =>
+    queue.enqueue(async () => {
+      if (edit.filename === "critical.py" && failFirstWrite) {
+        failFirstWrite = false;
+        throw new Error("Temporary disk I/O glitch");
+      }
+      disk[edit.filename] = edit.content;
+    }),
+  );
+
+  coordinator.recordEdit("critical.py", "version_1");
+
+  // Attempt 1 fails at the filesystem queue level
+  await assert.rejects(coordinator.flush(), { message: "Temporary disk I/O glitch" });
+  assert.equal(disk["critical.py"], undefined, "Failed write must not be in disk state");
+  assert.equal(coordinator.hasPending("critical.py"), true, "Must be retained for retry");
+
+  // Queue settles
+  await queue.settled();
+
+  // Retry succeeds and settles
+  await coordinator.flush();
+  await queue.settled();
+
+  assert.equal(disk["critical.py"], "version_1");
+  assert.equal(coordinator.hasPending("critical.py"), false);
+  assert.equal(coordinator.getSavedRevision("critical.py"), 1);
+});

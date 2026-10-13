@@ -99,29 +99,11 @@ export function createEditorSaveCoordinator(saveFn: SaveFn) {
         }
       })();
 
-      const previousInflight = inflightByFile.get(filename);
-      const combined = (async () => {
-        try {
-          await task;
-        } catch {
-          // Task error is propagated to the caller awaiting task;
-          // combined is purely an inflight synchronization tracker.
-        } finally {
-          if (previousInflight) {
-            try {
-              await previousInflight;
-            } catch {
-              // Ignore previous inflight errors in the combined tracker
-            }
-          }
-        }
-      })();
-
-      inflightByFile.set(filename, combined);
+      inflightByFile.set(filename, task);
       try {
         await task;
       } finally {
-        if (inflightByFile.get(filename) === combined) {
+        if (inflightByFile.get(filename) === task) {
           inflightByFile.delete(filename);
         }
       }
@@ -135,12 +117,18 @@ export function createEditorSaveCoordinator(saveFn: SaveFn) {
 
   async function flush(targetFilename?: string): Promise<void> {
     if (targetFilename) {
-      await flushFile(targetFilename);
+      while (pendingByFile.has(targetFilename)) {
+        await flushFile(targetFilename);
+      }
+      const inflight = inflightByFile.get(targetFilename);
+      if (inflight) await inflight;
       return;
     }
-    const targets = new Set<string>([...pendingByFile.keys(), ...inflightByFile.keys()]);
-    if (targets.size === 0) return;
-    await Promise.all(Array.from(targets).map((f) => flushFile(f)));
+    while (pendingByFile.size > 0 || inflightByFile.size > 0) {
+      const targets = new Set<string>([...pendingByFile.keys(), ...inflightByFile.keys()]);
+      if (targets.size === 0) break;
+      await Promise.all(Array.from(targets).map((f) => flushFile(f)));
+    }
   }
 
   return {
