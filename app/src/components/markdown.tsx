@@ -1,6 +1,7 @@
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { classifyUrl } from "@/lib/urls";
 
 // shadcn's typography styles, sized down to the app's text-sm so a question
 // reads like the rest of the app, with the theme's sharp corners and greys.
@@ -10,20 +11,37 @@ const COMPONENTS: Components = {
   h2: ({ node: _, ...props }) => <h2 className="mt-2 text-sm font-semibold" {...props} />,
   h3: ({ node: _, ...props }) => <h3 className="text-sm font-medium" {...props} />,
   p: ({ node: _, ...props }) => <p className="leading-relaxed" {...props} />,
-  a: ({ node: _, href, onClick, ...props }) => (
-    <a
-      href={href}
-      className="font-medium text-primary underline underline-offset-4"
-      onClick={(e) => {
-        if (href && /^https?:\/\//i.test(href)) {
-          e.preventDefault();
-          openUrl(href).catch((err) => console.error("Could not open URL:", err));
-        }
-        onClick?.(e);
-      }}
-      {...props}
-    />
-  ),
+  a: ({ node: _, href, onClick, ...props }) => {
+    const classification = classifyUrl(href);
+
+    function handleClick(e: React.MouseEvent<HTMLAnchorElement>) {
+      if (classification.type === "blocked") {
+        e.preventDefault();
+        return;
+      }
+
+      if (classification.type === "external") {
+        e.preventDefault();
+        openUrl(classification.url).catch((err) => {
+          console.warn("Could not open external URL:", err);
+        });
+      }
+
+      onClick?.(e);
+    }
+
+    return (
+      <a
+        {...props}
+        href={classification.type === "blocked" ? undefined : href}
+        className="font-medium text-primary underline underline-offset-4"
+        onClick={handleClick}
+        {...(classification.type === "external"
+          ? { target: "_blank", rel: "noopener noreferrer" }
+          : {})}
+      />
+    );
+  },
   strong: ({ node: _, ...props }) => <strong className="font-semibold" {...props} />,
   ul: ({ node: _, ...props }) => <ul className="ml-5 list-disc [&>li]:mt-1" {...props} />,
   ol: ({ node: _, ...props }) => <ol className="ml-5 list-decimal [&>li]:mt-1" {...props} />,
