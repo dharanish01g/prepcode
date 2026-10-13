@@ -9,7 +9,7 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "test": "node --loader ./css-loader.mjs --test src/lib/completions.test.ts src/lib/drivers.test.ts src/lib/urls.test.ts",
+    "test": "node --loader ./css-loader.mjs --test src/lib/completions.test.ts src/lib/drivers.test.ts src/lib/urls.test.ts src/lib/save-queue.test.ts",
     "format": "prettier --write src",
     "format:check": "prettier --check src"
   },

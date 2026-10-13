@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 import {
   createFile,
   deleteFile,
@@ -141,8 +142,21 @@ export function useSaveFileMutation(userId: string) {
       writeFile(filename, content),
     // Update the cache right away, so switching back to this file shows the
     // latest text even while the save is still in flight.
-    onMutate: ({ filename, content }) => {
+    onMutate: async ({ filename, content }) => {
+      await queryClient.cancelQueries({ queryKey: queryKeys.fileContent(userId, filename) });
+      const previous = queryClient.getQueryData<string>(queryKeys.fileContent(userId, filename));
       queryClient.setQueryData(queryKeys.fileContent(userId, filename), content);
+      return { previous, filename, content };
+    },
+    onError: (err, { filename, content }, context) => {
+      const current = queryClient.getQueryData<string>(queryKeys.fileContent(userId, filename));
+      if (current === content && context?.previous !== undefined) {
+        queryClient.setQueryData(queryKeys.fileContent(userId, filename), context.previous);
+      }
+      queryClient.invalidateQueries({ queryKey: queryKeys.fileContent(userId, filename) });
+      toast.error(`Could not save ${filename}`, {
+        description: err instanceof Error ? err.message : String(err),
+      });
     },
     onSuccess: () => invalidateHistory(queryClient, userId),
   });

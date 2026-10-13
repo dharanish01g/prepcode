@@ -133,6 +133,23 @@ test("dangerous schemes (javascript:, data:, file:, vbscript:, blob:) are blocke
 
   const blobUrl = classifyUrl("blob:http://localhost:1420/uuid", DEV_ORIGIN);
   assert.equal(blobUrl.type, "blocked");
+
+  // Percent-encoded schemes
+  const encodedJs = classifyUrl("%6a%61%76%61%73%63%72%69%70%74%3aalert(1)", DEV_ORIGIN);
+  assert.equal(encodedJs.type, "blocked");
+
+  const uppercaseEncodedJs = classifyUrl("%6A%61%56%61%53%63%72%69%70%74%3Aalert(1)", DEV_ORIGIN);
+  assert.equal(uppercaseEncodedJs.type, "blocked");
+
+  const encodedData = classifyUrl("%64%61%74%61%3atext/html,<script>alert(1)</script>", DEV_ORIGIN);
+  assert.equal(encodedData.type, "blocked");
+
+  const encodedFile = classifyUrl("%66%69%6c%65%3a///etc/passwd", DEV_ORIGIN);
+  assert.equal(encodedFile.type, "blocked");
+
+  // Mixed encoding with control characters and spaces
+  const mixedJs = classifyUrl("  %6a\t%61 v%61%73%63%72%69%70%74%3aalert(1)  ", DEV_ORIGIN);
+  assert.equal(mixedJs.type, "blocked");
 });
 
 test("malformed and empty URLs are handled safely without crashing", () => {

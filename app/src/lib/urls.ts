@@ -51,10 +51,14 @@ export function classifyUrl(
     return { type: "internal", url: trimmed, isFragment: false };
   }
 
-  // 3. Early sanitize check for dangerous schemes (handling obfuscated control chars / spaces)
+  // 3. Early sanitize check for dangerous schemes (handling obfuscated control chars, spaces, and percent-encoding)
   const stripped = trimmed.replace(/[\x00-\x1f\s]/g, "").toLowerCase();
+  const unescaped = stripped
+    .replace(/%([0-9a-fA-F]{2})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
+    .replace(/[\x00-\x1f\s]/g, "")
+    .toLowerCase();
   for (const scheme of DANGEROUS_SCHEMES) {
-    if (stripped.startsWith(scheme)) {
+    if (stripped.startsWith(scheme) || unescaped.startsWith(scheme)) {
       return { type: "blocked", reason: `unsafe_scheme:${scheme.slice(0, -1)}` };
     }
   }

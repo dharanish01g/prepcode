@@ -21,7 +21,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self' ipc: http://ipc.localhost; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' asset: https: data:; connect-src 'self' ipc: http://ipc.localhost https://*.supabase.co https://api.github.com;"
+      "csp": "default-src 'self' ipc: http://ipc.localhost; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' asset: https: data:; connect-src 'self' ipc: http://ipc.localhost https://*.supabase.co wss://*.supabase.co https://api.github.com https://github.com;"
     }
   },
   "bundle": {

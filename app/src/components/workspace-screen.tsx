@@ -191,7 +191,11 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
   async function handleLogout() {
     if (runner.running) runner.stop();
     if (queries.busy) queries.stop();
-    await flushEditorRef.current();
+    try {
+      await flushEditorRef.current();
+    } catch (err) {
+      console.error("Flush before logout failed:", err);
+    }
     await whenSavesSettled();
     onLogout();
   }
@@ -221,14 +225,22 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
   async function handleRunQueries(atCursor: boolean) {
     if (!selectedFile) return;
     const line = atCursor ? (cursorLineRef.current() ?? undefined) : undefined;
-    await flushEditorRef.current();
+    try {
+      await flushEditorRef.current();
+    } catch (err) {
+      console.error("Flush before running queries failed:", err);
+    }
     await whenSavesSettled();
     queries.run(selectedFile, line);
   }
 
   async function handleRun() {
     if (!selectedFile) return;
-    await flushEditorRef.current();
+    try {
+      await flushEditorRef.current();
+    } catch (err) {
+      console.error("Flush before run failed:", err);
+    }
     await whenSavesSettled();
     runner.run(selectedFile);
   }
@@ -262,7 +274,13 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
         onViewChange={handleViewChange}
         selectedFile={selectedFile}
         onSelectFile={setSelectedFile}
-        onFlushEdits={() => flushEditorRef.current()}
+        onFlushEdits={async () => {
+          try {
+            await flushEditorRef.current();
+          } catch (err) {
+            console.error("Flush edits failed:", err);
+          }
+        }}
         pulling={!pulled}
         syncStatus={syncStatus.data}
         unsynced={unsynced}
@@ -520,7 +538,11 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
         onCancel={() => setGuestAction(null)}
         onExport={async () => {
           // Include the last few keystrokes.
-          await flushEditorRef.current();
+          try {
+            await flushEditorRef.current();
+          } catch (err) {
+            console.error("Flush before export failed:", err);
+          }
           await whenSavesSettled();
           return exportGuestFiles();
         }}

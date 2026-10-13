@@ -298,17 +298,44 @@ function PracticeEditor({
 
   const pending = useRef<string | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const inflight = useRef<Promise<void> | null>(null);
 
-  const flush = useCallback(() => {
+  const flush = useCallback(async () => {
     clearTimeout(timer.current);
-    const content = pending.current;
-    if (content === null) return;
-    pending.current = null;
-    writePractice(question, extension, content).then(
-      // So the unsynced count, and the sync on close, include it.
-      () => queryClient.invalidateQueries({ queryKey: queryKeys.syncStatus(userId) }),
-      (err) => toast.error("Couldn't save your code", { description: String(err) }),
-    );
+    if (pending.current !== null) {
+      const content = pending.current;
+      pending.current = null;
+      const task = (async () => {
+        try {
+          await writePractice(question, extension, content);
+          queryClient.setQueryData(queryKeys.practice(userId, question, extension), content);
+          // So the unsynced count, and the sync on close, include it.
+          await queryClient.invalidateQueries({ queryKey: queryKeys.syncStatus(userId) });
+        } catch (err) {
+          // Keep edit pending so it can be retried on next flush or keystroke
+          if (pending.current === null) {
+            pending.current = content;
+          }
+          queryClient.invalidateQueries({
+            queryKey: queryKeys.practice(userId, question, extension),
+          });
+          toast.error("Couldn't save your code", {
+            description: err instanceof Error ? err.message : String(err),
+          });
+          throw err;
+        }
+      })();
+      inflight.current = task;
+      try {
+        await task;
+      } finally {
+        if (inflight.current === task) {
+          inflight.current = null;
+        }
+      }
+    } else if (inflight.current) {
+      await inflight.current;
+    }
   }, [question, extension, userId]);
 
   // Layout effects so the cleanups run synchronously: edits are saved when the
@@ -331,11 +358,11 @@ function PracticeEditor({
       const content = editorRef.current?.getValue();
       if (content === undefined) return null;
       pending.current = content;
-      flush();
+      void flush().catch(() => {});
       return content;
     };
     return () => {
-      flush();
+      void flush().catch(() => {});
       flushRef.current = () => {};
       codeRef.current = () => null;
       resetRef.current = () => {};

@@ -79,13 +79,35 @@ function FileEditor({
   // switching files still saves to the right place.
   const pending = useRef<{ filename: string; content: string } | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const inflight = useRef<Promise<void> | null>(null);
 
   const flush = useCallback(async () => {
     clearTimeout(timer.current);
-    const edit = pending.current;
-    if (!edit) return;
-    pending.current = null;
-    await saveAsync(edit);
+    if (pending.current) {
+      const edit = pending.current;
+      pending.current = null;
+      const task = (async () => {
+        try {
+          await saveAsync(edit);
+        } catch (err) {
+          // Keep the edit pending so it can be retried on next flush or keystroke
+          if (!pending.current) {
+            pending.current = edit;
+          }
+          throw err;
+        }
+      })();
+      inflight.current = task;
+      try {
+        await task;
+      } finally {
+        if (inflight.current === task) {
+          inflight.current = null;
+        }
+      }
+    } else if (inflight.current) {
+      await inflight.current;
+    }
   }, [saveAsync]);
 
   // Layout effects so the cleanups run synchronously: the previous file's edits
@@ -93,14 +115,14 @@ function FileEditor({
   useLayoutEffect(() => {
     flushRef.current = flush;
     return () => {
-      void flush();
+      void flush().catch(() => {});
       flushRef.current = () => {};
     };
   }, [flush, flushRef]);
 
   useLayoutEffect(
     () => () => {
-      void flush();
+      void flush().catch(() => {});
     },
     [filename, flush],
   );

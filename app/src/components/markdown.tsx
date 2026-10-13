@@ -17,14 +17,17 @@ const COMPONENTS: Components = {
     function handleClick(e: React.MouseEvent<HTMLAnchorElement>) {
       if (classification.type === "blocked") {
         e.preventDefault();
+        e.stopPropagation();
         return;
       }
 
       if (classification.type === "external") {
         e.preventDefault();
+        e.stopPropagation();
         openUrl(classification.url).catch((err) => {
           console.warn("Could not open external URL:", err);
         });
+        return;
       }
 
       onClick?.(e);
@@ -34,6 +37,8 @@ const COMPONENTS: Components = {
       <a
         {...props}
         href={classification.type === "blocked" ? undefined : href}
+        role={classification.type === "blocked" ? "link" : undefined}
+        aria-disabled={classification.type === "blocked" ? true : undefined}
         className="font-medium text-primary underline underline-offset-4"
         onClick={handleClick}
         {...(classification.type === "external"
