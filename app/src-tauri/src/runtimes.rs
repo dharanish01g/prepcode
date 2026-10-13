@@ -22,7 +22,6 @@ use futures_util::StreamExt;
 use rusqlite::OptionalExtension;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-#[cfg(not(windows))]
 use tauri::Manager;
 use tauri::{AppHandle, Emitter, State};
 use tokio::io::AsyncWriteExt;
