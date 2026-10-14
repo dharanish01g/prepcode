@@ -22,7 +22,6 @@ use futures_util::StreamExt;
 use rusqlite::OptionalExtension;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-#[cfg(not(windows))]
 use tauri::Manager;
 use tauri::{AppHandle, Emitter, State};
 use tokio::io::AsyncWriteExt;
@@ -418,7 +417,8 @@ async fn download_runtime(app: &AppHandle, runtime: &Runtime, extension: &str) -
         emit("verifying", 0, 0);
         let exe = unpacked_root.join(runtime.executable());
         let version_args = runtime.version_args.clone();
-        tauri::async_runtime::spawn_blocking(move || check_runs(&exe, &version_args))
+        let vc_runtime = app.path().resource_dir().ok().map(|dir| dir.join("vc-runtime"));
+        tauri::async_runtime::spawn_blocking(move || check_runs(&exe, &version_args, vc_runtime.as_deref()))
             .await
             .map_err(|e| format!("Verification failed: {e}"))??;
 
@@ -590,8 +590,50 @@ fn run_warmup(runtime: &Runtime, exe: &Path, shared: &Path, scratch: &Path) {
     let _ = fs::remove_dir_all(scratch);
 }
 
+/// Windows' exit code for "a DLL the program needs wasn't found".
+const DLL_NOT_FOUND: i32 = 0xC000_0135_u32 as i32;
+
 /// Runs the executable's version command to prove the runtime actually works here.
-fn check_runs(exe: &Path, args: &[String]) -> Result<(), String> {
+///
+/// If Windows can't find one of its DLLs, it's usually the Visual C++ runtime
+/// (MySQL needs it, and not every PC has it installed). prepcode ships a copy
+/// in `vc_runtime` (see .github/workflows/release.yml); it's put next to the
+/// executable, where Windows looks first, and the check runs once more.
+fn check_runs(exe: &Path, args: &[String], vc_runtime: Option<&Path>) -> Result<(), String> {
+    match (run_version(exe, args), vc_runtime) {
+        (Ok(status), Some(dlls)) if status.code() == Some(DLL_NOT_FOUND) => {
+            if add_dlls(dlls, exe.parent().unwrap_or(exe))? {
+                log::info!("Added the Visual C++ runtime to {}", exe.display());
+                return check_runs(exe, args, None);
+            }
+            Err(format!("The downloaded language didn't start ({status})."))
+        }
+        (Ok(status), _) if status.success() => Ok(()),
+        (Ok(status), _) => Err(format!("The downloaded language didn't start ({status}).")),
+        (Err(e), _) => Err(format!("The downloaded language didn't start: {e}")),
+    }
+}
+
+/// Copies the DLLs in `from` into `to`, keeping any `to` already has. Returns
+/// whether there were any to copy (a development build has none).
+fn add_dlls(from: &Path, to: &Path) -> Result<bool, String> {
+    let Ok(entries) = fs::read_dir(from) else { return Ok(false) };
+    let mut found = false;
+    for path in entries.flatten().map(|entry| entry.path()) {
+        if !path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("dll")) {
+            continue;
+        }
+        found = true;
+        let Some(name) = path.file_name() else { continue };
+        if !to.join(name).exists() {
+            fs::copy(&path, to.join(name))
+                .map_err(|e| format!("Could not add the Visual C++ runtime: {e}"))?;
+        }
+    }
+    Ok(found)
+}
+
+fn run_version(exe: &Path, args: &[String]) -> std::io::Result<std::process::ExitStatus> {
     let mut command = Command::new(exe);
     command.args(args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
     #[cfg(windows)]
@@ -600,11 +642,7 @@ fn check_runs(exe: &Path, args: &[String]) -> Result<(), String> {
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         command.creation_flags(CREATE_NO_WINDOW);
     }
-    match command.status() {
-        Ok(status) if status.success() => Ok(()),
-        Ok(status) => Err(format!("The downloaded language didn't start ({status}).")),
-        Err(e) => Err(format!("The downloaded language didn't start: {e}")),
-    }
+    command.status()
 }
 
 #[cfg(test)]
@@ -629,7 +667,7 @@ pub(crate) mod tests {
             .expect("download or checksum failed");
         unpack(&archive, &staging, download.kind).expect("unpack failed");
         let root = single_top_level_dir(&staging).unwrap();
-        check_runs(&root.join(runtime.executable()), &runtime.version_args).expect("didn't run");
+        check_runs(&root.join(runtime.executable()), &runtime.version_args, None).expect("didn't run");
         then(&root);
 
         fs::remove_dir_all(&dir).unwrap();
@@ -646,5 +684,25 @@ pub(crate) mod tests {
     #[ignore = "downloads ~50 MB"]
     fn installs_zig() {
         install_for_this_platform("zig-", |_| {});
+    }
+
+    #[test]
+    fn adds_only_missing_dlls() {
+        let dir = std::env::temp_dir().join(format!("prepcode-dlls-test-{}", std::process::id()));
+        let (from, to) = (dir.join("vc-runtime"), dir.join("bin"));
+        fs::create_dir_all(&from).unwrap();
+        fs::create_dir_all(&to).unwrap();
+        fs::write(from.join("vcruntime140.dll"), "ours").unwrap();
+        fs::write(from.join("msvcp140.DLL"), "ours").unwrap();
+        fs::write(from.join("README.md"), "").unwrap();
+        fs::write(to.join("vcruntime140.dll"), "theirs").unwrap();
+
+        assert!(add_dlls(&from, &to).unwrap());
+        assert_eq!(fs::read_to_string(to.join("vcruntime140.dll")).unwrap(), "theirs");
+        assert_eq!(fs::read_to_string(to.join("msvcp140.DLL")).unwrap(), "ours");
+        assert!(!to.join("README.md").exists());
+        assert!(!add_dlls(&dir.join("missing"), &to).unwrap());
+
+        fs::remove_dir_all(&dir).unwrap();
     }
 }
