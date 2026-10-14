@@ -4,7 +4,8 @@ import { findLanguage } from "@/lib/languages";
 import { cn } from "@/lib/utils";
 
 // Icons come from the language catalog (the bundled ones are from the "Icons –
-// Maintained" VS Code theme, MIT, see src-tauri/catalog/ICONS-LICENSE).
+// Maintained" VS Code theme, and PostgreSQL's from vscode-icons; both MIT, see
+// src-tauri/catalog/ICONS-LICENSE).
 
 /**
  * The language logo for a file or extension, like VS Code's file icons.

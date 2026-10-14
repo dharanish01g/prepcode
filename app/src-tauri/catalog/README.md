@@ -33,7 +33,7 @@ Use Go (`go-1.27.1` / `"go"`) in `catalog.json` as a worked example.
 | **Name** | Shown to students, e.g. `Go`. |
 | **Monaco id** | Editor highlighting. Must be one of [Monaco's languages](https://github.com/microsoft/monaco-editor/tree/main/src/basic-languages), otherwise it shows as plain text. |
 | **Formatter** | One of the app's built-in formatters, or `null`. See [Formatter](#formatter). |
-| **Icon** | SVG from the [Icons – Maintained](https://github.com/yusifaliyevpro/vscode-icons/tree/main/icons) theme, so all icons match (MIT, see `ICONS-LICENSE`). |
+| **Icon** | SVG from the [Icons – Maintained](https://github.com/yusifaliyevpro/vscode-icons/tree/main/icons) theme, so all icons match (MIT, see `ICONS-LICENSE`). It has no database logos, so a database's comes from [vscode-icons](https://github.com/vscode-icons/vscode-icons/tree/master/icons) (`file_type_<name>.svg`, also MIT) when that one is clear at 16px, as PostgreSQL's is; otherwise use the theme's `database.svg`, as MySQL does. Note either in `ICONS-LICENSE`. |
 | **Compile step** (compiled languages) | Must write the program to `{binary}`. Omit for interpreted languages. |
 | **Run step** | Runs `{binary}`, or the runtime with the file (`{filename}`). |
 | **Unbuffered output** | Prompts like `Enter a number: ` must appear *before* the program waits for input. Check how the language buffers stdout when it's a pipe; fix with a flag (Python `-u`), a prelude file (C/C++), or nothing (Go, Node, Java). |
