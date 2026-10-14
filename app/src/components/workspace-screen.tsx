@@ -8,6 +8,7 @@ import { ConsolePanel } from "@/components/console-panel";
 import { ResultsPanel } from "@/components/results-panel";
 import { GuestLogoutDialog } from "@/components/guest-logout-dialog";
 import { JobsScreen } from "@/components/jobs-screen";
+import { McqScreen } from "@/components/mcq-screen";
 import { PracticeScreen } from "@/components/practice-screen";
 import { QuestionsScreen } from "@/components/questions-screen";
 import { RepoSetupSteps } from "@/components/repo-setup";
@@ -54,7 +55,7 @@ import { useCategoryQuestionsQuery, type Question } from "@/lib/questions";
 import { unsyncedCount } from "@/lib/sync";
 import logo from "@/assets/logo.png";
 
-const FULL_SCREEN_VIEWS: View[] = ["Practice", "Jobs"];
+const FULL_SCREEN_VIEWS: View[] = ["Practice", "MCQ", "Jobs"];
 
 /** How often unsynced work is sent to GitHub on its own (see useSync). */
 const AUTO_SYNC_MS = 15 * 60 * 1000;
@@ -70,7 +71,7 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
   const [practice, setPractice] = useState<{ category: Category; question: string | null } | null>(
     null,
   );
-  // Practice and Jobs use the whole main area, so the sidebar's second column
+  // Practice, MCQ and Jobs use the whole main area, so the sidebar's second column
   // stays hidden there, and comes back as it was when leaving.
   const [sidebarOpen, setSidebarOpen] = useState(true);
   // Practice is full screen for its categories, but lists a category's
@@ -310,6 +311,8 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
               setSidebarOpen(true);
             }}
           />
+        ) : view === "MCQ" ? (
+          <McqScreen />
         ) : view === "Jobs" ? (
           // A guest logs in by logging out of the guest session.
           <JobsScreen guest={session.guest} onLogin={() => setGuestAction("log out")} />
