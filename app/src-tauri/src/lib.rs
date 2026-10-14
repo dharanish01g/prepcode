@@ -11,6 +11,8 @@ mod runtimes;
 mod sql;
 mod sync;
 
+use std::time::Duration;
+
 use tauri::{Manager, RunEvent};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -43,14 +45,12 @@ pub fn run() {
         .manage(sql::Servers::default())
         .manage(files::WorkspaceLock::default())
         .setup(|app| {
+            reporting::init_logging(app.handle())?;
             // The window starts hidden (tauri.conf.json) and is shown once its
             // webview exists. On Windows, creating the webview waits in a
             // message loop, and a visible window repainting during that wait
             // crashes the event loop ("event handler is re-entrant").
-            if let Some(window) = app.get_webview_window("main") {
-                window.show()?;
-            }
-            reporting::init_logging(app.handle())?;
+            open_main_window(app)?.show()?;
             app.manage(db::open(app.handle())?);
             if let Err(e) = runtimes::check_installed(app.handle(), &app.state::<db::Db>()) {
                 log::error!("Could not check the installed languages: {e}");
@@ -118,4 +118,32 @@ pub fn run() {
                 reporting::flush();
             }
         });
+}
+
+/// Opens the main window, which tauri.conf.json leaves for us to create.
+///
+/// Just after an update, or a crash, the last run's WebView2 processes can
+/// still hold its data folder for a few seconds, and creating a webview then
+/// fails with "The requested resource is in use" (0x800700AA). So wait for
+/// them to exit instead of failing to start.
+fn open_main_window(app: &tauri::App) -> tauri::Result<tauri::WebviewWindow> {
+    let config = app
+        .config()
+        .app
+        .windows
+        .iter()
+        .find(|w| w.label == "main")
+        .expect("tauri.conf.json has the main window")
+        .clone();
+    let mut attempt = 1;
+    loop {
+        match tauri::WebviewWindowBuilder::from_config(app, &config)?.build() {
+            Err(e) if attempt < 15 && e.to_string().contains("0x800700AA") => {
+                log::warn!("WebView2 still in use, trying again (attempt {attempt}): {e}");
+                std::thread::sleep(Duration::from_secs(1));
+                attempt += 1;
+            }
+            result => return result,
+        }
+    }
 }
