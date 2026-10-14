@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { extensionOf } from "@/lib/files";
 import { runQueries, stopQueries, summary, type QueryOutput } from "@/lib/sql";
 
 export type QueryResults = {
@@ -64,9 +65,10 @@ export function useQueryRunner() {
   // Each file keeps the results of its own last run, by filename.
   const [results, setResults] = useState<Partial<Record<string, QueryResults>>>({});
   const [runningFile, setRunningFile] = useState<string | null>(null);
-  // Every file runs in the same session, so this is shared. Undefined until
-  // the first run connects; null when no database is selected.
-  const [database, setDatabase] = useState<string | null>();
+  // Every file of a database (MySQL, PostgreSQL) runs in that server's one
+  // session, so this is per database, by extension. Missing until its first
+  // run connects; null when no database is selected.
+  const [databases, setDatabases] = useState<Partial<Record<string, string | null>>>({});
   const [logs, setLogs] = useState<LogEntry[]>([]);
   // Finished runs of any file, so views of the database know to refresh.
   const [runs, setRuns] = useState(0);
@@ -82,7 +84,7 @@ export function useQueryRunner() {
     let finished: Pick<QueryResults, "output" | "failure">;
     try {
       const output = await runQueries(filename, line);
-      setDatabase(output.database);
+      setDatabases((all) => ({ ...all, [extensionOf(filename)]: output.database }));
       finished = { output, failure: null };
     } catch (err) {
       finished = { output: null, failure: String(err) };
@@ -114,7 +116,8 @@ export function useQueryRunner() {
 
   return {
     resultsFor: (filename: string) => results[filename] ?? NO_RESULTS,
-    database,
+    /** The current database of the session `filename` runs in. */
+    databaseFor: (filename: string) => databases[extensionOf(filename)],
     runs,
     logs,
     clearLogs: () => setLogs([]),

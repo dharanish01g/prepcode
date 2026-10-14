@@ -113,6 +113,15 @@ pub enum Kind {
     Database,
 }
 
+/// Which database server a database's files run on. The driver that talks to
+/// it is code, so each engine is built into the app (see sql/).
+#[derive(Clone, Copy, PartialEq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Engine {
+    Mysql,
+    Postgres,
+}
+
 #[derive(Clone, Deserialize)]
 pub struct Language {
     /// File extension, e.g. "py". Also the language's id.
@@ -142,9 +151,13 @@ pub struct Language {
     #[serde(default)]
     pub setup: Vec<Step>,
     /// Databases only: starts the account's server on `{data}`, listening on
-    /// 127.0.0.1:`{port}` (see sql.rs).
+    /// 127.0.0.1:`{port}` (see sql/).
     #[serde(default)]
     pub server: Option<Step>,
+    /// Databases only: which engine `server` starts, so prepcode knows how to
+    /// talk to it.
+    #[serde(default)]
+    pub engine: Option<Engine>,
 }
 
 fn db_err(e: rusqlite::Error) -> String {
@@ -235,8 +248,8 @@ pub fn validate(catalog: &Catalog) -> Result<(), String> {
                 if let Some(compile) = &language.compile {
                     validate_step(compile, &format!("Language .{ext} compile"))?;
                 }
-                if !language.setup.is_empty() || language.server.is_some() {
-                    return Err(format!("Language .{ext}: only databases have setup and server steps"));
+                if !language.setup.is_empty() || language.server.is_some() || language.engine.is_some() {
+                    return Err(format!("Language .{ext}: only databases have setup, server and engine"));
                 }
             }
             Kind::Database => {
@@ -249,6 +262,9 @@ pub fn validate(catalog: &Catalog) -> Result<(), String> {
                 let server =
                     language.server.as_ref().ok_or_else(|| format!("Database .{ext} has no server step"))?;
                 validate_step(server, &format!("Database .{ext} server"))?;
+                if language.engine.is_none() {
+                    return Err(format!("Database .{ext} has no engine"));
+                }
             }
         }
     }
@@ -320,8 +336,8 @@ pub fn import(conn: &mut Connection, catalog: &Catalog) -> Result<bool, String> 
     for (position, language) in catalog.languages.iter().enumerate() {
         tx.execute(
             "INSERT INTO languages
-               (extension, kind, position, name, monaco, formatter, icon, runtime_id, compile, run, setup, server)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+               (extension, kind, position, name, monaco, formatter, icon, runtime_id, compile, run, setup, server, engine)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             params![
                 language.extension,
                 to_json(&language.kind),
@@ -335,6 +351,7 @@ pub fn import(conn: &mut Connection, catalog: &Catalog) -> Result<bool, String> 
                 language.run.as_ref().map(to_json),
                 to_json(&language.setup),
                 language.server.as_ref().map(to_json),
+                language.engine.as_ref().map(to_json),
             ],
         )
         .map_err(db_err)?;
@@ -351,7 +368,7 @@ pub fn import(conn: &mut Connection, catalog: &Catalog) -> Result<bool, String> 
 }
 
 const LANGUAGE_COLUMNS: &str =
-    "extension, kind, name, monaco, formatter, icon, runtime_id, compile, run, setup, server FROM languages";
+    "extension, kind, name, monaco, formatter, icon, runtime_id, compile, run, setup, server, engine FROM languages";
 
 fn language_from_row(row: &rusqlite::Row) -> rusqlite::Result<Language> {
     Ok(Language {
@@ -366,6 +383,7 @@ fn language_from_row(row: &rusqlite::Row) -> rusqlite::Result<Language> {
         run: row.get::<_, Option<String>>(8)?.map(|raw| from_json(8, raw)).transpose()?,
         setup: from_json(9, row.get(9)?)?,
         server: row.get::<_, Option<String>>(10)?.map(|raw| from_json(10, raw)).transpose()?,
+        engine: row.get::<_, Option<String>>(11)?.map(|raw| from_json(11, raw)).transpose()?,
     })
 }
 
@@ -515,7 +533,7 @@ mod tests {
 
         let languages = languages(&conn).unwrap();
         let exts: Vec<_> = languages.iter().map(|l| l.extension.as_str()).collect();
-        assert_eq!(exts, ["py", "js", "c", "cpp", "java", "go", "cs", "mysql.sql"]);
+        assert_eq!(exts, ["py", "js", "c", "cpp", "java", "go", "cs", "mysql.sql", "pgsql.sql"]);
 
         let c = language(&conn, "c").unwrap().unwrap();
         assert_eq!(c.kind, Kind::Program);
@@ -534,7 +552,15 @@ mod tests {
         assert!(mysql.run.is_none());
         assert_eq!(mysql.setup.len(), 1);
         assert!(mysql.server.is_some());
+        assert_eq!(mysql.engine, Some(Engine::Mysql));
         assert_eq!(runtime(&conn, &mysql.runtime).unwrap().downloads.len(), 4);
+
+        let postgres = language(&conn, "pgsql.sql").unwrap().unwrap();
+        assert_eq!(postgres.kind, Kind::Database);
+        assert_eq!(postgres.engine, Some(Engine::Postgres));
+        assert_eq!(postgres.setup[0].program.as_deref(), Some("{runtime}/bin/initdb"));
+        assert_eq!(runtime(&conn, &postgres.runtime).unwrap().downloads.len(), 4);
+        assert!(language(&conn, "py").unwrap().unwrap().engine.is_none());
     }
 
     #[test]
@@ -577,6 +603,14 @@ mod tests {
         let mut bad = bundled();
         let mysql = bad.languages.iter_mut().find(|l| l.kind == Kind::Database).unwrap();
         mysql.setup[0].files.insert("../my.cnf".into(), String::new());
+        assert!(validate(&bad).is_err());
+
+        let mut bad = bundled();
+        bad.languages.iter_mut().find(|l| l.kind == Kind::Database).unwrap().engine = None;
+        assert!(validate(&bad).is_err());
+
+        let mut bad = bundled();
+        bad.languages[0].engine = Some(Engine::Mysql);
         assert!(validate(&bad).is_err());
     }
 

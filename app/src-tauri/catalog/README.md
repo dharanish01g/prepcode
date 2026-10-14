@@ -138,10 +138,10 @@ Otherwise use `null`: the Format button is then disabled for that language.
 
 ## Databases
 
-A database (MySQL so far) is a language entry with `"kind": "database"`. It
+A database (MySQL, PostgreSQL) is a language entry with `"kind": "database"`. It
 shows in the Database view's New file dialog instead of Programs', and it gets
 its own extension because the extension is the id. Since they're all SQL,
-database extensions end in `.sql`: `queries.mysql.sql`, later `.pgsql.sql`, …
+database extensions end in `.sql`: `queries.mysql.sql`, `queries.pgsql.sql`, …
 (an extension may have dots; file names can't, so the first dot splits them).
 Its runtime is the database server, downloaded once per computer like any
 other. Use MySQL (`mysql-8.4.11` / `"mysql.sql"`) as the worked example.
@@ -159,9 +159,23 @@ other. Use MySQL (`mysql-8.4.11` / `"mysql.sql"`) as the worked example.
   // No compile or run step (yet). Instead, steps that create the signed-in
   // account's own data folder, {data}, once per account:
   "setup": [{ "args": ["--no-defaults", "--initialize-insecure",
-                       "--basedir={runtime}", "--datadir={data}"] }]
+                       "--basedir={runtime}", "--datadir={data}"] }],
+  // Starts the account's server on its data, listening on 127.0.0.1:{port}:
+  "server": { "args": ["--no-defaults", "--datadir={data}", "--port={port}", …] },
+  // Which driver prepcode talks to it with: "mysql" or "postgres".
+  "engine": "mysql"
 }
 ```
+
+`engine` is the one part that isn't data: running queries, Stop, listing
+tables and shutting the server down are code, one module per engine in
+`src/sql/`. A new engine (e.g. SQL Server) needs a module there, its name in
+`Engine` in `catalog.rs`, and a migration if the shape changes; a new version
+of an existing engine is only a catalog change.
+
+PostgreSQL's setup runs `initdb`, not the runtime's main program
+(`bin/postgres`), so its step names it with `"program": "{runtime}/bin/initdb"`.
+Leave `.exe` off: Windows finds `initdb.exe` from that.
 
 Setup runs after the download, or on its own when another account on the PC
 already downloaded it. It writes into a scratch folder that's renamed to
@@ -172,17 +186,33 @@ already downloaded it. It writes into a scratch folder that's renamed to
 | `{data}` | The folder setup must create (it doesn't exist yet) |
 | `{runtime}` | The runtime's install folder, e.g. for MySQL's `--basedir` |
 
+Server steps also get `{port}` (a free port, chosen on each start), `{socket}`
+(MySQL's socket or pipe name) and `{log}` (a log file next to `{data}`). A
+server that doesn't take `{log}` (PostgreSQL) has what it prints saved there
+instead. Either way its errors are shown when it fails to start.
+
 Keep setup self-contained like the runtime: ignore system config files
 (`--no-defaults` for MySQL) and keep the data small, since every account on a
 lab PC gets its own copy (MySQL's `--innodb-redo-log-capacity=8M` makes it
-~100 MB instead of ~190 MB).
+~100 MB instead of ~190 MB; PostgreSQL's `--wal-segsize=1` makes it ~30 MB
+instead of ~40 MB).
 
 **Checksums:** MySQL publishes MD5 files and GPG signatures (`<archive>.md5`,
 `<archive>.asc` next to each download), not SHA-256. Check the archive against
 both, then record the SHA-256 of that verified archive.
 
-**Windows:** MySQL needs the Microsoft Visual C++ runtime, which its zip doesn't
-include. Check on a freshly installed lab PC; without it, "Checking…" fails.
+**PostgreSQL** doesn't publish portable builds itself. EDB's zip archives
+(the official Windows/macOS ones) are 385–450 MB with pgAdmin, have no
+checksums and no Linux build, so the catalog uses
+[theseus-rs/postgresql-binaries](https://github.com/theseus-rs/postgresql-binaries):
+the same PostgreSQL, built by CI for all four targets (11–51 MB), with a
+`.sha256` next to each archive. Pick the release matching the PostgreSQL
+version (`18.6.0` for 18.6) and copy each archive's SHA-256 after checking it.
+
+**Windows:** MySQL and PostgreSQL need the Microsoft Visual C++ runtime, which
+their zips don't include. Check on a freshly installed lab PC; without it,
+"Checking…" fails. PostgreSQL also refuses to run as an elevated
+administrator, so test it from a normal (non-"Run as administrator") prepcode.
 
 ## 3. Verify
 
