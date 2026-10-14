@@ -10,6 +10,7 @@ mod run;
 mod runtimes;
 mod sql;
 mod sync;
+mod updates;
 
 use tauri::{Manager, RunEvent};
 
@@ -100,6 +101,7 @@ pub fn run() {
             sync::sync_practice,
             sync::pull_from_github,
             sync::repo_setup,
+            updates::report_update_failure,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
