@@ -1,3 +1,4 @@
+import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { relaunch } from "@tauri-apps/plugin-process";
@@ -36,7 +37,14 @@ export function checkForUpdate(): Promise<UpdateStatus> {
 }
 
 async function download(): Promise<UpdateStatus> {
-  const update = await check();
+  let update: Update | null;
+  try {
+    update = await check();
+  } catch (err) {
+    // The app finds out why (DNS, timeout, firewall…) and reports it.
+    void invoke("report_update_failure", { error: String(err) }).catch(() => {});
+    throw err;
+  }
   if (!update) return { kind: "latest" };
 
   await update.download();
