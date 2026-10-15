@@ -45,6 +45,7 @@ export type SaveFn = (edit: { filename: string; content: string }) => Promise<vo
 export function createEditorSaveCoordinator(saveFn: SaveFn) {
   const revisions = new Map<string, number>();
   const savedRevisions = new Map<string, number>();
+  const discardedRevisions = new Map<string, number>();
   const pendingByFile = new Map<string, PendingEdit>();
   const inflightByFile = new Map<string, Promise<void>>();
 
@@ -83,11 +84,17 @@ export function createEditorSaveCoordinator(saveFn: SaveFn) {
         );
       } catch (err) {
         // Only restore if this exact revision is still the latest revision
-        // for this file, has not been superseded by a newer edit, and a newer
-        // revision has not already been successfully saved.
+        // for this file, has not been superseded by a newer edit, a newer
+        // revision has not already been successfully saved, and this revision
+        // was not explicitly discarded.
         const latestRev = revisions.get(pending.filename) ?? 0;
         const lastSaved = savedRevisions.get(pending.filename) ?? 0;
-        if (latestRev === pending.revision && lastSaved < pending.revision) {
+        const discardedRev = discardedRevisions.get(pending.filename) ?? 0;
+        if (
+          latestRev === pending.revision &&
+          lastSaved < pending.revision &&
+          pending.revision > discardedRev
+        ) {
           if (!pendingByFile.has(pending.filename)) {
             pendingByFile.set(pending.filename, pending);
           }
@@ -122,8 +129,12 @@ export function createEditorSaveCoordinator(saveFn: SaveFn) {
 
   function discard(targetFilename?: string): void {
     if (targetFilename) {
+      discardedRevisions.set(targetFilename, revisions.get(targetFilename) ?? 0);
       pendingByFile.delete(targetFilename);
     } else {
+      for (const [f, rev] of revisions.entries()) {
+        discardedRevisions.set(f, rev);
+      }
       pendingByFile.clear();
     }
   }

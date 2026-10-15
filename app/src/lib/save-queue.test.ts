@@ -428,3 +428,40 @@ test("coordinator: discard with target filename clears only that file's pending 
   await coordinator.flush();
   assert.deepEqual(saved, ["b.py"]);
 });
+
+test("coordinator: in-flight save that fails after discard is not restored to pending", async () => {
+  let rejectInflight: ((err: Error) => void) | null = null;
+  const saved: string[] = [];
+
+  const coordinator = createEditorSaveCoordinator(async (edit) => {
+    saved.push(edit.content);
+    if (edit.content === "rev 1") {
+      await new Promise<void>((_, reject) => {
+        rejectInflight = reject;
+      });
+    }
+  });
+
+  coordinator.recordEdit("test.py", "rev 1");
+  const flushPromise = coordinator.flushFile("test.py").catch(() => {});
+
+  // Wait for save task to start and assign rejectInflight
+  await new Promise((r) => setTimeout(r, 0));
+  assert.ok(rejectInflight);
+
+  // Discard is called while rev 1 is in-flight
+  coordinator.discard("test.py");
+
+  // rev 1 fails
+  rejectInflight!(new Error("disk failure"));
+  await flushPromise;
+
+  // After discard, flush should not re-try rev 1
+  await coordinator.flush();
+  assert.deepEqual(saved, ["rev 1"]);
+
+  // A brand new edit after discard still saves normally
+  coordinator.recordEdit("test.py", "rev 2");
+  await coordinator.flush();
+  assert.deepEqual(saved, ["rev 1", "rev 2"]);
+});
