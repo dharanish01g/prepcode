@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import Editor, { type OnMount } from "@monaco-editor/react";
 import { useQuery } from "@tanstack/react-query";
 import { usePanelRef } from "react-resizable-panels";
-import { Maximize2Icon, Minimize2Icon, RotateCcwIcon } from "lucide-react";
+import { CircleCheckIcon, Maximize2Icon, Minimize2Icon, RotateCcwIcon } from "lucide-react";
 import { toast } from "sonner";
 import { CheckResults, passedCount, type CheckState } from "@/components/check-results";
 import { AUTOSAVE_DELAY_MS, type FlushRef } from "@/components/code-editor";
@@ -24,7 +24,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { useSidebar } from "@/components/ui/sidebar";
 import { useIsDark } from "@/hooks/use-theme";
 import { readPractice, whenSavesSettled, writePractice } from "@/lib/files";
-import { queryKeys } from "@/lib/queries";
+import { queryKeys, useSolvedQuery } from "@/lib/queries";
 import { queryClient } from "@/lib/query-client";
 import { createEditorSaveCoordinator } from "@/lib/save-queue";
 import type { Language } from "@/lib/languages";
@@ -95,6 +95,7 @@ export function QuestionView({
   languagePicker: React.ReactNode;
 }) {
   const { open: sidebarOpen } = useSidebar();
+  const solved = useSolvedQuery(userId).data?.has(question.slug) ?? false;
   const questionPanel = usePanelRef();
   const resultsPanel = usePanelRef();
   const resetRef = useRef<() => void>(() => {});
@@ -144,7 +145,15 @@ export function QuestionView({
           {/* The explanation (question.explanation) is hidden for now. */}
           <ScrollArea className="h-full">
             <div className="p-4">
-              <h1 className="mb-3 text-base font-semibold">{question.title}</h1>
+              <h1 className="mb-3 flex items-center gap-2 text-base font-semibold">
+                {question.title}
+                {solved && (
+                  <CircleCheckIcon
+                    aria-label="Solved"
+                    className="size-4 shrink-0 text-emerald-600 dark:text-emerald-400"
+                  />
+                )}
+              </h1>
               <Markdown>{questionText(question)}</Markdown>
             </div>
           </ScrollArea>

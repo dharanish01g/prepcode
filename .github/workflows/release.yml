@@ -71,6 +71,18 @@ jobs:
         working-directory: app
         run: pnpm install --frozen-lockfile
 
+      # Languages that need the Visual C++ runtime (MySQL) get these DLLs when
+      # the PC doesn't have it (see app/src-tauri/vc-runtime/README.md).
+      - name: Bundle the Visual C++ runtime
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          $crt = Get-ChildItem "$vs\VC\Redist\MSVC\*\x64\Microsoft.VC*.CRT" -Directory | Sort-Object FullName | Select-Object -Last 1
+          if (-not $crt) { throw "Visual C++ runtime not found under $vs" }
+          Copy-Item "$($crt.FullName)\*.dll" app/src-tauri/vc-runtime/ -ErrorAction Stop
+          Get-ChildItem app/src-tauri/vc-runtime/*.dll | ForEach-Object { $_.Name }
+
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

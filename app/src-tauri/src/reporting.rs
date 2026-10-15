@@ -77,6 +77,10 @@ pub fn init_logging<R: Runtime>(app: &AppHandle<R>) -> Result<(), Box<dyn std::e
         let target = metadata.target();
         if target.starts_with(WEBVIEW_TARGET) || target == PANIC_TARGET || target == LOCAL {
             LogFilter::Ignore
+        } else if target.starts_with("tauri_plugin_updater") {
+            // A failed check is usually the network; updates.rs reports it,
+            // with the reason, as a warning.
+            LogFilter::Breadcrumb
         } else {
             sentry::integrations::log::default_filter(metadata)
         }

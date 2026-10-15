@@ -457,7 +457,8 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
                     <ResizablePanel id="results" defaultSize="30%" minSize="10%">
                       <ResultsPanel
                         results={queryResults}
-                        database={queries.database}
+                        extension={extensionOf(selectedFile)}
+                        database={queries.databaseFor(selectedFile)}
                         runs={queries.runs}
                         logs={queries.logs}
                         onClearLogs={queries.clearLogs}

@@ -71,9 +71,20 @@ pub(crate) fn set_up_in(
     fs::create_dir_all(parent).map_err(|e| format!("Could not create your database folder: {e}"))?;
     let staging = parent.join(format!(".{}.setup", folder_name(language)));
     let _ = fs::remove_dir_all(&staging);
-    let vars = vars.set("data", &staging);
+    let password = password_file(target);
+    let vars = vars.set("data", &staging).set("password_file", &password);
 
     let result = (|| {
+        // A server that asks for a password (PostgreSQL) gets a random one,
+        // so other programs and users on a shared PC can't sign in to it.
+        let wants_password =
+            language.setup.iter().flat_map(|step| &step.args).any(|arg| arg.contains("{password_file}"));
+        if wants_password {
+            let mut bytes = [0u8; 16];
+            getrandom::fill(&mut bytes).map_err(|e| format!("Could not make a password: {e}"))?;
+            fs::write(&password, hex::encode(bytes))
+                .map_err(|e| format!("Could not save the database password: {e}"))?;
+        }
         for step in &language.setup {
             write_step_files(step, parent)?;
             let mut command = step_command(step, runtime, exe, &vars);
@@ -101,8 +112,21 @@ pub(crate) fn set_up_in(
 
     if result.is_err() {
         let _ = fs::remove_dir_all(&staging);
+        let _ = fs::remove_file(&password);
     }
     result
+}
+
+/// The password a database's setup made for its superuser, next to its data
+/// folder (`pgsql.password`), in the account's own folder that only this OS
+/// user can read.
+pub fn password_file(data: &Path) -> PathBuf {
+    data.with_extension("password")
+}
+
+/// That password, if the database has one.
+pub fn password(data: &Path) -> Option<String> {
+    fs::read_to_string(password_file(data)).ok().map(|text| text.trim().to_owned())
 }
 
 /// The end of what a failed setup printed, to show the student (and us).

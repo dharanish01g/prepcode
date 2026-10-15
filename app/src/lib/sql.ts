@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 
-/** One statement's result. Mirrors StatementResult in src-tauri/src/sql.rs. */
+/** One statement's result. Mirrors StatementResult in src-tauri/src/sql/mod.rs. */
 export type StatementResult = {
   /** Line where the statement starts. */
   line: number;
@@ -22,6 +22,8 @@ export type StatementResult = {
       rows: (string | null)[][];
       /** How many rows the statement returned. */
       total: number;
+      /** What the server said on the side, e.g. PostgreSQL's RAISE NOTICE. */
+      info: string;
     }
   | {
       /** No rows (INSERT, CREATE, …). */
@@ -37,7 +39,7 @@ export type StatementResult = {
 
 export type ResultTable = Extract<StatementResult, { kind: "table" }>;
 
-/** What a run shows. Mirrors QueryOutput in src-tauri/src/sql.rs. */
+/** What a run shows. Mirrors QueryOutput in src-tauri/src/sql/mod.rs. */
 export type QueryOutput = {
   /** In order: one per statement, or more for a procedure that returns several. */
   results: StatementResult[];
@@ -45,7 +47,7 @@ export type QueryOutput = {
   error: { line: number; message: string } | null;
   /** Stop interrupted the file. */
   stopped: boolean;
-  /** The session's current database after the run (USE changes it). */
+  /** The session's current database after the run (USE or \c changes it). */
   database: string | null;
 };
 
@@ -54,7 +56,7 @@ export function rowCount(n: number) {
   return n === 1 ? "1 row" : `${n.toLocaleString()} rows`;
 }
 
-/** How a statement went, as the `mysql` shell says it, e.g. "Query OK, 1 row affected". */
+/** How a statement went, as the shell says it, e.g. "Query OK, 1 row affected". */
 export function summary(result: StatementResult) {
   if (result.kind === "table") {
     return result.total === 0 ? "Empty set" : `${rowCount(result.total)} in set`;
@@ -78,12 +80,15 @@ export function stopQueries() {
   return invoke<void>("stop_queries");
 }
 
-/** The tables in the session's current database; null before the first run or with no database selected. */
-export function listTables() {
-  return invoke<string[] | null>("list_tables");
+/**
+ * The tables in the current database of the server for `extension` (e.g.
+ * "mysql.sql"); null before its first run or with no database selected.
+ */
+export function listTables(extension: string) {
+  return invoke<string[] | null>("list_tables", { extension });
 }
 
-/** A table's rows (at most 1,000 shown), from the session's current database. */
-export function tableRows(table: string) {
-  return invoke<ResultTable>("table_rows", { table });
+/** A table's rows (at most 1,000 shown), from that server's current database. */
+export function tableRows(extension: string, table: string) {
+  return invoke<ResultTable>("table_rows", { extension, table });
 }

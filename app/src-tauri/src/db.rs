@@ -120,6 +120,12 @@ const MIGRATIONS: &[&str] = &[
         PRIMARY KEY (user_id, question, extension)
     );
 ",
+    "
+    -- Which engine runs a database's queries (JSON string: \"mysql\" or
+    -- \"postgres\"); NULL for programs.
+    ALTER TABLE languages ADD COLUMN engine TEXT;
+    DELETE FROM meta WHERE key = 'catalog_version';
+",
 ];
 
 fn migrate(conn: &mut Connection) -> rusqlite::Result<()> {

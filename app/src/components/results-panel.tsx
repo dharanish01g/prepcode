@@ -33,6 +33,8 @@ function took(seconds: number) {
 
 type PanelProps = {
   results: QueryResults;
+  /** The file's extension, e.g. "pgsql.sql": which database's server it runs on. */
+  extension: string;
   /** Undefined until the first run connects; null when none is selected. */
   database: string | null | undefined;
   /** Finished runs of any file; the database's tables refresh on each. */
@@ -55,6 +57,7 @@ export function ResultsPanel(props: PanelProps) {
 
 function ResultsTabs({
   results: { running, output, failure },
+  extension,
   database,
   runs,
   logs,
@@ -92,7 +95,7 @@ function ResultsTabs({
         )}
         <div
           className="ml-auto flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground"
-          title="The database your queries run in. USE changes it."
+          title="The database your queries run in. USE (MySQL) or \c (PostgreSQL) changes it."
         >
           <DatabaseIcon className="size-3.5 shrink-0" />
           <span className="truncate">
@@ -116,7 +119,7 @@ function ResultsTabs({
             <LogsTable logs={logs} />
           </TabsContent>
           <TabsContent value="tables" className="flex min-h-0 flex-col">
-            <TablesView results={tables} database={database} runs={runs} />
+            <TablesView results={tables} extension={extension} database={database} runs={runs} />
           </TabsContent>
         </>
       )}
@@ -144,14 +147,16 @@ function tabLabels(tables: ResultTable[]) {
  */
 function TablesView({
   results,
+  extension,
   database,
   runs,
 }: {
   results: ResultTable[];
+  extension: string;
   database: string | null | undefined;
   runs: number;
 }) {
-  const databaseTables = useDatabaseTablesQuery(database, runs);
+  const databaseTables = useDatabaseTablesQuery(extension, database, runs);
   const names = databaseTables.data ?? [];
   const labels = tabLabels(results);
 
@@ -208,7 +213,7 @@ function TablesView({
       {database &&
         names.map((name) => (
           <TabsContent key={name} value={`table-${name}`} className="min-h-0">
-            <DatabaseTable database={database} name={name} runs={runs} />
+            <DatabaseTable extension={extension} database={database} name={name} runs={runs} />
           </TabsContent>
         ))}
     </Tabs>
@@ -216,8 +221,18 @@ function TablesView({
 }
 
 /** All of one table's rows, read when its tab opens. */
-function DatabaseTable({ database, name, runs }: { database: string; name: string; runs: number }) {
-  const rows = useTableRowsQuery(database, name, runs);
+function DatabaseTable({
+  extension,
+  database,
+  name,
+  runs,
+}: {
+  extension: string;
+  database: string;
+  name: string;
+  runs: number;
+}) {
+  const rows = useTableRowsQuery(extension, database, name, runs);
   if (rows.isPending) return <Loading />;
   return (
     <ScrollArea className="h-full">
