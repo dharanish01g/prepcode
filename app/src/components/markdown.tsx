@@ -30,6 +30,15 @@ const COMPONENTS: Components = {
         return;
       }
 
+      // Non-fragment internal links (e.g. /faq, ./readme.md, ?tab=x) must not
+      // navigate the WebView away from the app. Only #fragment anchors stay default.
+      if (classification.type === "internal" && !classification.isFragment) {
+        e.preventDefault();
+        e.stopPropagation();
+        onClick?.(e);
+        return;
+      }
+
       onClick?.(e);
     }
 

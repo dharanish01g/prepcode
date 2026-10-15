@@ -63,7 +63,7 @@ import { Separator } from "@/components/ui/separator";
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { displayName, type Session } from "@/lib/auth";
 import { allowClose, isCloseBlocked, setCloseGuarded } from "@/lib/close-guard";
-import { exportGuestFiles, extensionOf, whenSavesSettled } from "@/lib/files";
+import { exportGuestFiles, extensionOf, flushAndSettle } from "@/lib/files";
 import { findLanguage, type Language } from "@/lib/languages";
 import { useFilesQuery, useSolvedQuery, useSyncStatusQuery } from "@/lib/queries";
 import type { Category } from "@/lib/practice";
@@ -139,10 +139,7 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
     userId: session.id,
     selectedFile,
     onSelectFile: setSelectedFile,
-    flushEdits: async () => {
-      await flushEditorRef.current();
-      await whenSavesSettled();
-    },
+    flushEdits: () => flushAndSettle(flushEditorRef.current),
     onNeedsSetup: () => setSettingUpGitHub(true),
   });
 
@@ -212,10 +209,9 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
   async function handleLogout(force = false) {
     if (runner.running) runner.stop();
     if (queries.busy) queries.stop();
-    if (!force) {
+    if (force !== true) {
       try {
-        await flushEditorRef.current();
-        await whenSavesSettled();
+        await flushAndSettle(flushEditorRef.current);
       } catch (err) {
         setSaveFailedLogout(true);
         toast.error("Could not save your changes before logging out", {
@@ -253,8 +249,7 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
     if (!selectedFile) return;
     const line = atCursor ? (cursorLineRef.current() ?? undefined) : undefined;
     try {
-      await flushEditorRef.current();
-      await whenSavesSettled();
+      await flushAndSettle(flushEditorRef.current);
     } catch (err) {
       toast.error(`Cannot run queries: failed to save ${selectedFile}`, {
         description: err instanceof Error ? err.message : String(err),
@@ -267,8 +262,7 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
   async function handleRun() {
     if (!selectedFile) return;
     try {
-      await flushEditorRef.current();
-      await whenSavesSettled();
+      await flushAndSettle(flushEditorRef.current);
     } catch (err) {
       toast.error(`Cannot run: failed to save ${selectedFile}`, {
         description: err instanceof Error ? err.message : String(err),
@@ -301,16 +295,13 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
             ? () => setGuestAction("log out")
             : unsynced > 0
               ? () => setUnsyncedAction("log out")
-              : handleLogout
+              : () => void handleLogout()
         }
         view={view}
         onViewChange={handleViewChange}
         selectedFile={selectedFile}
         onSelectFile={setSelectedFile}
-        onFlushEdits={async () => {
-          await flushEditorRef.current();
-          await whenSavesSettled();
-        }}
+        onFlushEdits={() => flushAndSettle(flushEditorRef.current)}
         pulling={!pulled}
         syncStatus={syncStatus.data}
         unsynced={unsynced}
@@ -559,7 +550,7 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
           // Stay put if the sync fails (its error shows), so nothing is lost.
           if (!(await sync.sync())) return;
           setUnsyncedAction(null);
-          if (action === "log out") handleLogout();
+          if (action === "log out") void handleLogout();
           else closeWindow();
         }}
       />
@@ -568,14 +559,13 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
         onCancel={() => setGuestAction(null)}
         onExport={async () => {
           // Include the last few keystrokes.
-          await flushEditorRef.current();
-          await whenSavesSettled();
+          await flushAndSettle(flushEditorRef.current);
           return exportGuestFiles();
         }}
         onConfirm={() => {
           const action = guestAction;
           setGuestAction(null);
-          if (action === "log out") handleLogout();
+          if (action === "log out") void handleLogout();
           else closeWindow();
         }}
       />

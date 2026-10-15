@@ -36,8 +36,12 @@ async function fetchSections(): Promise<Section[]> {
     .order("position")
     .order("position", { referencedTable: "categories" });
   if (error) throw new Error(error.message);
-  // prepwisely has no paid categories yet.
-  return data.map((section) => ({
+  type FetchedSection = {
+    slug: string;
+    title: string;
+    categories: Omit<Category, "premium">[];
+  };
+  return (data as unknown as FetchedSection[]).map((section) => ({
     ...section,
     categories: section.categories.map((category) => ({ ...category, premium: false })),
   }));

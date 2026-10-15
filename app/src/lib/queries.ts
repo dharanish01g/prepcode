@@ -142,8 +142,8 @@ export function useSaveFileMutation(userId: string) {
       writeFile(filename, content),
     // Update the cache right away, so switching back to this file shows the
     // latest text even while the save is still in flight.
-    onMutate: async ({ filename, content }) => {
-      await queryClient.cancelQueries({ queryKey: queryKeys.fileContent(userId, filename) });
+    onMutate: ({ filename, content }) => {
+      void queryClient.cancelQueries({ queryKey: queryKeys.fileContent(userId, filename) });
       const previous = queryClient.getQueryData<string>(queryKeys.fileContent(userId, filename));
       queryClient.setQueryData(queryKeys.fileContent(userId, filename), content);
       return { previous, filename, content };

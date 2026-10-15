@@ -55,73 +55,62 @@ export function createEditorSaveCoordinator(saveFn: SaveFn) {
     return rev;
   }
 
-  function getPending(filename?: string): PendingEdit | undefined {
-    if (filename) return pendingByFile.get(filename);
-    return pendingByFile.values().next().value;
-  }
-
-  function hasPending(filename?: string): boolean {
-    if (filename) return pendingByFile.has(filename);
-    return pendingByFile.size > 0;
-  }
-
-  function getLatestRevision(filename: string): number {
-    return revisions.get(filename) ?? 0;
-  }
-
-  function getSavedRevision(filename: string): number {
-    return savedRevisions.get(filename) ?? 0;
-  }
-
   async function flushFile(filename: string): Promise<void> {
-    const pending = pendingByFile.get(filename);
-    if (pending) {
-      pendingByFile.delete(filename);
-      const task = (async () => {
-        try {
-          await saveFn({ filename: pending.filename, content: pending.content });
-          savedRevisions.set(
-            pending.filename,
-            Math.max(savedRevisions.get(pending.filename) ?? 0, pending.revision),
-          );
-        } catch (err) {
-          // Only restore if this exact revision is still the latest revision
-          // for this file, has not been superseded by a newer edit, and a newer
-          // revision has not already been successfully saved.
-          const latestRev = revisions.get(pending.filename) ?? 0;
-          const lastSaved = savedRevisions.get(pending.filename) ?? 0;
-          if (latestRev === pending.revision && lastSaved < pending.revision) {
-            if (!pendingByFile.has(pending.filename)) {
-              pendingByFile.set(pending.filename, pending);
-            }
-          }
+    const existingInflight = inflightByFile.get(filename);
+    const hadPendingEdit = pendingByFile.has(filename);
+    if (existingInflight) {
+      try {
+        await existingInflight;
+      } catch (err) {
+        if (!hadPendingEdit) {
           throw err;
         }
-      })();
-
-      inflightByFile.set(filename, task);
-      try {
-        await task;
-      } finally {
-        if (inflightByFile.get(filename) === task) {
-          inflightByFile.delete(filename);
-        }
       }
-    } else {
-      const inflight = inflightByFile.get(filename);
-      if (inflight) {
-        await inflight;
+    }
+
+    const pending = pendingByFile.get(filename);
+    if (!pending) {
+      return;
+    }
+
+    pendingByFile.delete(filename);
+    const task = (async () => {
+      try {
+        await saveFn({ filename: pending.filename, content: pending.content });
+        savedRevisions.set(
+          pending.filename,
+          Math.max(savedRevisions.get(pending.filename) ?? 0, pending.revision),
+        );
+      } catch (err) {
+        // Only restore if this exact revision is still the latest revision
+        // for this file, has not been superseded by a newer edit, and a newer
+        // revision has not already been successfully saved.
+        const latestRev = revisions.get(pending.filename) ?? 0;
+        const lastSaved = savedRevisions.get(pending.filename) ?? 0;
+        if (latestRev === pending.revision && lastSaved < pending.revision) {
+          if (!pendingByFile.has(pending.filename)) {
+            pendingByFile.set(pending.filename, pending);
+          }
+        }
+        throw err;
+      }
+    })();
+
+    inflightByFile.set(filename, task);
+    try {
+      await task;
+    } finally {
+      if (inflightByFile.get(filename) === task) {
+        inflightByFile.delete(filename);
       }
     }
   }
 
   async function flush(targetFilename?: string): Promise<void> {
     if (targetFilename) {
-      while (pendingByFile.has(targetFilename)) {
+      while (pendingByFile.has(targetFilename) || inflightByFile.has(targetFilename)) {
         await flushFile(targetFilename);
       }
-      const inflight = inflightByFile.get(targetFilename);
-      if (inflight) await inflight;
       return;
     }
     while (pendingByFile.size > 0 || inflightByFile.size > 0) {
@@ -133,15 +122,7 @@ export function createEditorSaveCoordinator(saveFn: SaveFn) {
 
   return {
     recordEdit,
-    getPending,
-    hasPending,
-    getLatestRevision,
-    getSavedRevision,
     flush,
     flushFile,
-    revisions,
-    savedRevisions,
-    pendingByFile,
-    inflightByFile,
   };
 }

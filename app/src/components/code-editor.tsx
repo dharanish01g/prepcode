@@ -9,7 +9,7 @@ import {
   NO_CLIPBOARD_OPTIONS,
 } from "@/lib/monaco";
 import { useIsDark } from "@/hooks/use-theme";
-import { monacoLanguageOf } from "@/lib/files";
+import { monacoLanguageOf, whenSavesSettled } from "@/lib/files";
 import { formatCode, NoFormatterError } from "@/lib/format";
 import { useFileContentQuery, useSaveFileMutation } from "@/lib/queries";
 import { createEditorSaveCoordinator } from "@/lib/save-queue";
@@ -92,6 +92,7 @@ function FileEditor({
     clearTimeout(timer.current);
     if (!coordinator.current) return;
     await coordinator.current.flush();
+    await whenSavesSettled();
   }, []);
 
   // Layout effects so the cleanups run synchronously: the previous file's edits
@@ -195,7 +196,7 @@ function FileEditor({
       onChange={(value) => {
         coordinator.current?.recordEdit(filename, value ?? "");
         clearTimeout(timer.current);
-        timer.current = setTimeout(flush, AUTOSAVE_DELAY_MS);
+        timer.current = setTimeout(() => void flush().catch(() => {}), AUTOSAVE_DELAY_MS);
       }}
       options={{
         ...NO_CLIPBOARD_OPTIONS,

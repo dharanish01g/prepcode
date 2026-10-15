@@ -27,7 +27,7 @@ import { SidebarTrigger } from "@/components/ui/sidebar";
 import { Spinner } from "@/components/ui/spinner";
 import { celebrate } from "@/lib/celebrate";
 import { buildProgram, encodeInput } from "@/lib/drivers";
-import { markPracticeSolved, whenSavesSettled } from "@/lib/files";
+import { flushAndSettle, markPracticeSolved } from "@/lib/files";
 import { queryKeys } from "@/lib/queries";
 import { toast } from "sonner";
 import { getLanguages, type Language } from "@/lib/languages";
@@ -115,18 +115,17 @@ export function QuestionsScreen({
       setCheck({ status: "error", message: "This question isn't ready to solve yet." });
       return;
     }
+    const code = codeRef.current();
+    if (code === null) return;
     // Saves it too, so what runs is what's kept.
     try {
-      await flushRef.current();
-      await whenSavesSettled();
+      await flushAndSettle(flushRef.current);
     } catch (err) {
       toast.error("Cannot run: failed to save code", {
         description: err instanceof Error ? err.message : String(err),
       });
       return;
     }
-    const code = codeRef.current();
-    if (code === null) return;
     setCheck({ status: "checking", kind });
     // Every Run and Submit loads for at least this long, however it ends.
     const minimum = new Promise((resolve) => setTimeout(resolve, MIN_CHECK_MS));

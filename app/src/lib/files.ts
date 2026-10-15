@@ -91,6 +91,17 @@ export function whenSavesSettled() {
   return saveQueue.settled();
 }
 
+/**
+ * Flushes pending editor changes (if any) and waits until all queued file
+ * operations (saves, renames, deletes) have settled to disk.
+ */
+export async function flushAndSettle(flushFn?: () => Promise<void> | void) {
+  if (flushFn) {
+    await flushFn();
+  }
+  await whenSavesSettled();
+}
+
 /** Mirrors validate_name in files.rs so errors show while typing. */
 export function fileNameError(name: string): string | null {
   if (!name) return null;

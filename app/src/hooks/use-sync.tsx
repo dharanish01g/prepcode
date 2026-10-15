@@ -4,7 +4,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import { readFile, readPractice, whenSavesSettled } from "@/lib/files";
+import { flushAndSettle, readFile, readPractice } from "@/lib/files";
 import { disposeEditorModel, editorModelPath, setEditorModelText } from "@/lib/monaco";
 import { queryKeys } from "@/lib/queries";
 import {
@@ -129,8 +129,7 @@ export function useSync({
     return (
       exclusive(async () => {
         try {
-          await flushEditsRef.current();
-          await whenSavesSettled();
+          await flushAndSettle(flushEditsRef.current);
           const report = await syncNow();
           await applyReport(report);
           const received = report.updated.length + report.deleted.length;
@@ -177,8 +176,7 @@ export function useSync({
     () =>
       exclusive(async () => {
         try {
-          await flushEditsRef.current();
-          await whenSavesSettled();
+          await flushAndSettle(flushEditsRef.current);
           if (unsyncedCount(await syncStatus()) === 0) return true;
           await applyReport(await syncNow());
           return true;
@@ -205,8 +203,7 @@ export function useSync({
       return (
         exclusive(async () => {
           try {
-            await flushEditsRef.current();
-            await whenSavesSettled();
+            await flushAndSettle(flushEditsRef.current);
             await applyReport(await syncPractice(question, extension, message));
             return true;
           } catch (err) {
@@ -229,8 +226,9 @@ export function useSync({
     () =>
       exclusive(async () => {
         try {
-          await flushEditsRef.current();
-          await whenSavesSettled();
+          await flushAndSettle(flushEditsRef.current).catch((flushErr) => {
+            console.warn("Could not flush local edits before pull:", flushErr);
+          });
           await applyReport(await pullFromGitHub());
           return true;
         } catch (err) {
