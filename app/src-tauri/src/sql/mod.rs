@@ -116,7 +116,7 @@ impl Server {
 /// A running server's process.
 enum Process {
     /// Started by prepcode, as its child (MySQL).
-    Child(Child),
+    Child(Box<Child>),
     /// Started by a launcher that exits once the server is ready: PostgreSQL's
     /// `pg_ctl`, which on Windows also drops administrator rights, which
     /// postgres.exe refuses to run with. Its pid, and its program's name to
@@ -584,7 +584,7 @@ async fn launch(
                 }
             }
         }
-        _ => Process::Child(child),
+        _ => Process::Child(Box::new(child)),
     };
     let pid = match &process {
         Process::Child(child) => child.id(),
