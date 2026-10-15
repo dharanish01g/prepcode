@@ -120,6 +120,10 @@ pub enum Kind {
 pub enum Engine {
     Mysql,
     Postgres,
+    /// One a newer catalog added that this version can't talk to. Only that
+    /// database fails to run, instead of the whole catalog failing to load.
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Clone, Deserialize)]
@@ -561,6 +565,13 @@ mod tests {
         assert_eq!(postgres.setup[0].program.as_deref(), Some("{runtime}/bin/initdb"));
         assert_eq!(runtime(&conn, &postgres.runtime).unwrap().downloads.len(), 4);
         assert!(language(&conn, "py").unwrap().unwrap().engine.is_none());
+    }
+
+    #[test]
+    fn reads_engines_it_doesnt_know() {
+        let engine: Engine = serde_json::from_str("\"sqlserver\"").unwrap();
+        assert_eq!(engine, Engine::Unknown);
+        assert_eq!(serde_json::from_str::<Engine>("\"postgres\"").unwrap(), Engine::Postgres);
     }
 
     #[test]

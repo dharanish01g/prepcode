@@ -22,6 +22,8 @@ export type StatementResult = {
       rows: (string | null)[][];
       /** How many rows the statement returned. */
       total: number;
+      /** What the server said on the side, e.g. PostgreSQL's RAISE NOTICE. */
+      info: string;
     }
   | {
       /** No rows (INSERT, CREATE, …). */

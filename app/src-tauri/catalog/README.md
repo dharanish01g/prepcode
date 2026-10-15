@@ -185,11 +185,18 @@ already downloaded it. It writes into a scratch folder that's renamed to
 |---|---|
 | `{data}` | The folder setup must create (it doesn't exist yet) |
 | `{runtime}` | The runtime's install folder, e.g. for MySQL's `--basedir` |
+| `{password_file}` | A file holding a random password for the superuser, made only when a step uses it, e.g. PostgreSQL's `--pwfile`. prepcode signs in with it. |
 
 Server steps also get `{port}` (a free port, chosen on each start), `{socket}`
-(MySQL's socket or pipe name) and `{log}` (a log file next to `{data}`). A
-server that doesn't take `{log}` (PostgreSQL) has what it prints saved there
-instead. Either way its errors are shown when it fails to start.
+(MySQL's socket or pipe name) and `{log}` (a log file next to `{data}`, emptied
+on each start). A server that doesn't take `{log}` has what it prints saved
+there instead. Either way its errors are shown when it fails to start.
+
+PostgreSQL's server step is `pg_ctl start -w`, not `postgres` itself: on
+Windows, postgres.exe refuses to run with administrator rights (prepcode run as
+administrator, or a lab PC with UAC off), and pg_ctl drops them first. pg_ctl
+exits once the server is ready, and prepcode keeps track of the server by the
+pid it writes in `postmaster.pid`.
 
 Keep setup self-contained like the runtime: ignore system config files
 (`--no-defaults` for MySQL) and keep the data small, since every account on a

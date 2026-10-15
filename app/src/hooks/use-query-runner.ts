@@ -46,7 +46,7 @@ function logEntries(
     sql: result.sql,
     status: "ok",
     message: summary(result),
-    detail: result.kind === "status" && result.info ? result.info : null,
+    detail: result.info || null,
     seconds: result.seconds,
   }));
   if (output.error) {

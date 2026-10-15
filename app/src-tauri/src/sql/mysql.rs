@@ -148,7 +148,7 @@ async fn run_statement(
             }
             let name = table_name(&statement.sql, &columns);
             let columns = columns.iter().map(|c| c.name_str().into_owned()).collect();
-            Outcome::Table { name, columns, rows, total }
+            Outcome::Table { name, columns, rows, total, info: String::new() }
         };
         let seconds = started.elapsed().as_secs_f64();
         results.push(StatementResult { line: statement.line, sql: sql.clone(), seconds, outcome });

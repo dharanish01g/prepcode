@@ -579,7 +579,8 @@
           "args": [
             "--pgdata={data}",
             "--username=postgres",
-            "--auth=trust",
+            "--auth=scram-sha-256",
+            "--pwfile={password_file}",
             "--encoding=UTF8",
             "--locale-provider=builtin",
             "--locale=C.UTF-8",
@@ -589,23 +590,19 @@
         }
       ],
       "server": {
+        "program": "{runtime}/bin/pg_ctl",
         "args": [
+          "start",
           "-D",
           "{data}",
-          "-p",
-          "{port}",
-          "-c",
-          "listen_addresses=127.0.0.1",
-          "-c",
-          "unix_socket_directories=",
-          "-c",
-          "shared_buffers=16MB",
-          "-c",
-          "max_connections=20",
-          "-c",
-          "max_wal_size=32MB",
-          "-c",
-          "min_wal_size=4MB"
+          "-l",
+          "{log}",
+          "-w",
+          "-t",
+          "60",
+          "-s",
+          "-o",
+          "-p {port} -c listen_addresses=127.0.0.1 -c unix_socket_directories= -c shared_buffers=16MB -c max_connections=20 -c max_wal_size=32MB -c min_wal_size=4MB -c log_min_messages=fatal"
         ]
       },
       "engine": "postgres"

@@ -37,6 +37,8 @@ const MAX_ROWS: usize = 1000;
 const START_TIMEOUT: Duration = Duration::from_secs(60);
 /// How long a server may take to shut down before it's killed.
 const STOP_TIMEOUT: Duration = Duration::from_secs(15);
+/// For a database a newer catalog added (see `Engine::Unknown`).
+const UPDATE_NEEDED: &str = "This database needs a newer prepcode. Update it from Profile > About.";
 
 #[derive(Default)]
 pub struct Servers {
@@ -52,7 +54,7 @@ pub struct Servers {
 struct Server {
     account: String,
     extension: String,
-    process: Child,
+    process: Process,
     /// The session runs share.
     session: Session,
     /// The server's program and data folder, for engines that are shut down
@@ -95,8 +97,66 @@ impl Server {
                 postgres::shutdown(&self.exe, &self.data).await;
             }
         }
-        if tokio::time::timeout(STOP_TIMEOUT, self.process.wait()).await.is_err() {
-            let _ = self.process.kill().await;
+        if !self.process.exited_within(STOP_TIMEOUT).await {
+            self.process.kill().await;
+        }
+    }
+
+    /// Whether it's still there to run queries on.
+    async fn is_running(&mut self) -> bool {
+        match &mut self.process {
+            Process::Child(child) => matches!(child.try_wait(), Ok(None)),
+            // Not prepcode's child, so ask it: reconnecting does nothing while
+            // the connection is open, and fails once the server is gone.
+            Process::Detached { .. } => self.session.reconnect().await.is_ok(),
+        }
+    }
+}
+
+/// A running server's process.
+enum Process {
+    /// Started by prepcode, as its child (MySQL).
+    Child(Child),
+    /// Started by a launcher that exits once the server is ready: PostgreSQL's
+    /// `pg_ctl`, which on Windows also drops administrator rights, which
+    /// postgres.exe refuses to run with. Its pid, and its program's name to
+    /// check the pid is still it.
+    Detached { pid: u32, program: String },
+}
+
+impl Process {
+    /// Waits up to `timeout` for it to exit; whether it did.
+    async fn exited_within(&mut self, timeout: Duration) -> bool {
+        match self {
+            Process::Child(child) => tokio::time::timeout(timeout, child.wait()).await.is_ok(),
+            Process::Detached { pid, program } => {
+                let deadline = Instant::now() + timeout;
+                while is_program(*pid, program) {
+                    if Instant::now() >= deadline {
+                        return false;
+                    }
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                }
+                true
+            }
+        }
+    }
+
+    /// Kills it and, on Windows, the processes it started (PostgreSQL runs
+    /// one per connection, which would hold its data folder).
+    async fn kill(&mut self) {
+        match self {
+            Process::Child(child) => {
+                if let Some(pid) = child.id() {
+                    kill(pid, true);
+                }
+                let _ = child.kill().await;
+            }
+            Process::Detached { pid, program } => {
+                if is_program(*pid, program) {
+                    kill(*pid, true);
+                }
+            }
         }
     }
 }
@@ -104,23 +164,21 @@ impl Server {
 /// A connection to one engine's server.
 enum Session {
     Mysql(mysql::Session),
-    Postgres(postgres::Session),
+    Postgres(Box<postgres::Session>),
 }
 
 /// How to interrupt the statement a session is running.
 #[derive(Clone)]
 enum Cancel {
     Mysql(mysql::Cancel),
-    Postgres(tokio_postgres::CancelToken),
+    Postgres(postgres::Cancel),
 }
 
 impl Cancel {
     async fn cancel(self) -> Result<(), String> {
         match self {
             Cancel::Mysql(cancel) => cancel.cancel().await,
-            Cancel::Postgres(token) => {
-                token.cancel_query(tokio_postgres::NoTls).await.map_err(|e| e.to_string())
-            }
+            Cancel::Postgres(cancel) => cancel.cancel().await,
         }
     }
 }
@@ -136,11 +194,15 @@ enum Failure {
 }
 
 impl Session {
-    /// Connects to a server listening on 127.0.0.1:`port`. One attempt.
-    async fn connect(engine: Engine, port: u16) -> Result<Session, String> {
+    /// Connects to a server on `data` listening on 127.0.0.1:`port`. One attempt.
+    async fn connect(engine: Engine, port: u16, data: &Path) -> Result<Session, String> {
         Ok(match engine {
             Engine::Mysql => Session::Mysql(mysql::Session::connect(port).await?),
-            Engine::Postgres => Session::Postgres(postgres::Session::connect(port).await?),
+            Engine::Postgres => {
+                let password = databases::password(data);
+                Session::Postgres(Box::new(postgres::Session::connect(port, password).await?))
+            }
+            Engine::Unknown => return Err(UPDATE_NEEDED.into()),
         })
     }
 
@@ -192,10 +254,10 @@ impl Session {
     async fn table_rows(&mut self, table: &str) -> Result<StatementResult, String> {
         let sql = match self {
             Session::Mysql(_) => mysql::select_all(table),
-            Session::Postgres(_) => postgres::select_all(table),
+            Session::Postgres(session) => return session.table_rows(table).await,
         };
         let mut results = Vec::new();
-        match self.run(&Statement { line: 0, sql }, &mut results).await {
+        match self.run(&Statement::new(0, sql), &mut results).await {
             Ok(()) => results.into_iter().next().ok_or_else(|| format!("{table} returned nothing.")),
             Err(Failure::Error { message, .. }) => Err(message),
             Err(Failure::Lost(e)) => Err(format!("Could not read {table}: {e}")),
@@ -246,6 +308,9 @@ enum Outcome {
         rows: Vec<Vec<Option<String>>>,
         /// How many rows the statement returned.
         total: usize,
+        /// What the server said on the side, e.g. a function's RAISE NOTICE
+        /// from PostgreSQL.
+        info: String,
     },
     /// No rows (INSERT, CREATE, …): "Query OK, 2 rows affected".
     Status {
@@ -287,6 +352,9 @@ pub async fn run_queries(
             .filter(|language| language.kind == Kind::Database && language.server.is_some())
             .ok_or_else(|| format!("Can't run .{extension} files."))?;
         let engine = language.engine.ok_or_else(|| format!("Can't run .{extension} files."))?;
+        if engine == Engine::Unknown {
+            return Err(UPDATE_NEEDED.into());
+        }
         let runtime = catalog::runtime(conn, &language.runtime)?;
         Ok((language, runtime, engine))
     })?;
@@ -303,10 +371,16 @@ pub async fn run_queries(
         server.stop().await;
     }
     let found = guard.iter_mut().position(|server| server.extension == language.extension);
+    let running = match found {
+        Some(i) => guard[i].is_running().await,
+        None => false,
+    };
     let index = match found {
-        Some(i) if matches!(guard[i].process.try_wait(), Ok(None)) => i,
+        Some(i) if running => i,
         // Not started yet, or it stopped (crashed, or killed from outside).
         found => {
+            // A server left hanging is stopped when the new one starts (see
+            // stop_leftover).
             if let Some(i) = found {
                 guard.remove(i);
             }
@@ -446,13 +520,17 @@ async fn launch(
     exe: &Path,
     data: &Path,
     vars: Vars,
-) -> Result<(Child, Session), String> {
+) -> Result<(Process, Session), String> {
     let name = &language.name;
     let step = language.server.as_ref().ok_or_else(|| format!("{name} has no server."))?;
     // Next to the data folder: `mysql.pid`, `mysql.log`.
     let pid_file = data.with_extension("pid");
     let log = data.with_extension("log");
-    stop_leftover(&pid_file, exe).await;
+    let program = exe.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    stop_leftover(&pid_file, &program).await;
+    // A fresh log each start: it's for this run's problems, and would grow
+    // forever otherwise.
+    let _ = std::fs::File::create(&log);
 
     let port = std::net::TcpListener::bind("127.0.0.1:0")
         .and_then(|listener| listener.local_addr())
@@ -470,8 +548,8 @@ async fn launch(
     };
     let vars = vars.set("data", data).set("log", &log).set("port", port.to_string()).set("socket", &socket);
 
-    // A server that isn't told where to write its log (no `{log}`, like
-    // PostgreSQL) prints it, so that goes in the log file instead.
+    // A server that isn't told where to write its log (no `{log}`) prints
+    // it, so that goes in the log file instead.
     let writes_own_log = step.args.iter().any(|arg| arg.contains("{log}"));
     let stderr = match writes_own_log {
         true => Stdio::null(),
@@ -481,21 +559,55 @@ async fn launch(
     command.stdin(Stdio::null()).stdout(Stdio::null()).stderr(stderr).kill_on_drop(true);
     #[cfg(windows)]
     command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-    let mut process = command.spawn().map_err(|e| format!("Could not start {name}: {e}"))?;
-    if let Some(pid) = process.id() {
+    let mut child = command.spawn().map_err(|e| format!("Could not start {name}: {e}"))?;
+
+    let mut process = match engine {
+        // pg_ctl waits until the server is ready (or gave up), then exits.
+        Engine::Postgres => {
+            let waited = tokio::time::timeout(START_TIMEOUT + Duration::from_secs(10), child.wait()).await;
+            let started = postgres::postmaster_pid(data).map(|pid| Process::Detached { pid, program });
+            match waited {
+                Ok(Ok(status)) if status.success() => {
+                    started.ok_or_else(|| format!("{name} started but didn't say its process id."))?
+                }
+                failed => {
+                    let _ = child.kill().await;
+                    if let Some(mut server) = started {
+                        server.kill().await;
+                    }
+                    let why = match failed {
+                        Ok(Ok(status)) => format!("{name} stopped while starting ({status})."),
+                        Ok(Err(e)) => format!("Could not start {name}: {e}"),
+                        Err(_) => format!("{name} didn't start in time."),
+                    };
+                    return Err(format!("{why}{}", log_errors(&log)));
+                }
+            }
+        }
+        _ => Process::Child(child),
+    };
+    let pid = match &process {
+        Process::Child(child) => child.id(),
+        Process::Detached { pid, .. } => Some(*pid),
+    };
+    if let Some(pid) = pid {
         let _ = std::fs::write(&pid_file, pid.to_string());
     }
 
     let deadline = Instant::now() + START_TIMEOUT;
     loop {
-        if let Ok(Some(status)) = process.try_wait() {
+        let stopped = match &mut process {
+            Process::Child(child) => child.try_wait().ok().flatten().map(|status| status.to_string()),
+            Process::Detached { pid, program } => (!is_program(*pid, program)).then(|| "it exited".into()),
+        };
+        if let Some(status) = stopped {
             return Err(format!("{name} stopped while starting ({status}).{}", log_errors(&log)));
         }
-        match Session::connect(engine, port).await {
+        match Session::connect(engine, port, data).await {
             Ok(session) => return Ok((process, session)),
             Err(_) if Instant::now() < deadline => tokio::time::sleep(Duration::from_millis(200)).await,
             Err(e) => {
-                let _ = process.kill().await;
+                process.kill().await;
                 return Err(format!("{name} didn't start: {e}{}", log_errors(&log)));
             }
         }
@@ -518,19 +630,24 @@ fn log_errors(log: &Path) -> String {
 /// Stops a server left running by a copy of prepcode that crashed or was
 /// force-quit; it would still hold the data folder. The pid is checked to
 /// still be that server, not some other program that got the number since.
-async fn stop_leftover(pid_file: &Path, exe: &Path) {
+async fn stop_leftover(pid_file: &Path, program: &str) {
     let Some(pid) = std::fs::read_to_string(pid_file).ok().and_then(|s| s.trim().parse::<u32>().ok()) else {
         return;
     };
-    let Some(exe_name) = exe.file_name().map(|n| n.to_string_lossy().into_owned()) else { return };
-    if process_name(pid).is_some_and(|name| name.contains(&exe_name)) {
-        kill(pid);
+    if !program.is_empty() && is_program(pid, program) {
+        kill(pid, false);
         let deadline = Instant::now() + STOP_TIMEOUT;
         while process_name(pid).is_some() && Instant::now() < deadline {
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
     }
     let _ = std::fs::remove_file(pid_file);
+}
+
+/// Whether `pid` is still `program`, not some other program that got the
+/// number since.
+fn is_program(pid: u32, program: &str) -> bool {
+    process_name(pid).is_some_and(|name| name.contains(program))
 }
 
 /// The program running as `pid`, if any.
@@ -550,19 +667,23 @@ fn process_name(pid: u32) -> Option<String> {
     (!text.is_empty() && !text.starts_with("INFO:")).then_some(text)
 }
 
-fn kill(pid: u32) {
+/// Ends a server: on Windows with the processes it started (/T), which would
+/// otherwise keep its data folder; on Unix they exit when it does. `force`
+/// doesn't let it shut down cleanly first.
+fn kill(pid: u32, force: bool) {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
+        let _ = force;
         let _ = std::process::Command::new("taskkill")
-            .args(["/PID", &pid.to_string(), "/F"])
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
             .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
             .status();
     }
     #[cfg(unix)]
     // SAFETY: kill only sends a signal; the pid was checked to be our server.
     unsafe {
-        libc::kill(pid as libc::pid_t, libc::SIGTERM);
+        libc::kill(pid as libc::pid_t, if force { libc::SIGKILL } else { libc::SIGTERM });
     }
 }
 
@@ -573,6 +694,14 @@ fn kill(pid: u32) {
 pub struct Statement {
     pub line: usize,
     pub sql: String,
+    /// PostgreSQL's `COPY … FROM STDIN`: the lines after it, up to `\.`.
+    pub copy_data: Option<String>,
+}
+
+impl Statement {
+    fn new(line: usize, sql: String) -> Statement {
+        Statement { line, sql, copy_data: None }
+    }
 }
 
 /// Splits a file into statements the way the engine's shell does.
@@ -580,6 +709,7 @@ fn split_statements(engine: Engine, text: &str) -> Vec<Statement> {
     match engine {
         Engine::Mysql => mysql::split_statements(text),
         Engine::Postgres => postgres::split_statements(text),
+        Engine::Unknown => Vec::new(),
     }
 }
 
@@ -588,7 +718,7 @@ fn split_statements(engine: Engine, text: &str) -> Vec<Statement> {
 fn statement(chars: &[char], start: usize, end: usize) -> Statement {
     let line = 1 + chars[..start].iter().filter(|&&c| c == '\n').count();
     let sql = chars[start..end].iter().collect::<String>().trim_end().to_owned();
-    Statement { line, sql }
+    Statement::new(line, sql)
 }
 
 /// The statement on the cursor's line. Between statements (a blank or comment
