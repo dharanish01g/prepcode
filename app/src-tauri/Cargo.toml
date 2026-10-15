@@ -48,6 +48,9 @@ tauri-plugin-sentry = { version = "0.7", default-features = false }
 sentry = { version = "0.49", features = ["log"] }
 tauri-plugin-log = "2"
 log = "0.4"
+tokio-postgres = "0.7.18"
+# The data lines of a PostgreSQL COPY … FROM STDIN (see sql/postgres.rs).
+bytes = "1"
 
 # Stopping a program kills its whole process group (see run.rs).
 [target."cfg(unix)".dependencies]

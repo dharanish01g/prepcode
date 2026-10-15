@@ -27,25 +27,35 @@ export const queryKeys = {
   syncStatus: (userId: string) => ["sync-status", userId] as const,
   accountDetails: (userId: string) => ["account-details", userId] as const,
   // `runs` counts finished query runs: any run may change the tables.
-  databaseTables: (database: string, runs: number) => ["database-tables", database, runs] as const,
-  tableRows: (database: string, table: string, runs: number) =>
-    ["table-rows", database, table, runs] as const,
+  databaseTables: (extension: string, database: string, runs: number) =>
+    ["database-tables", extension, database, runs] as const,
+  tableRows: (extension: string, database: string, table: string, runs: number) =>
+    ["table-rows", extension, database, table, runs] as const,
 };
 
-/** The tables in the current database, refreshed after every run. */
-export function useDatabaseTablesQuery(database: string | null | undefined, runs: number) {
+/** The tables in the current database of `extension`'s server, refreshed after every run. */
+export function useDatabaseTablesQuery(
+  extension: string,
+  database: string | null | undefined,
+  runs: number,
+) {
   return useQuery({
-    queryKey: queryKeys.databaseTables(database ?? "", runs),
-    queryFn: listTables,
+    queryKey: queryKeys.databaseTables(extension, database ?? "", runs),
+    queryFn: () => listTables(extension),
     enabled: Boolean(database),
   });
 }
 
 /** A table's rows, read when its tab opens and again after every run. */
-export function useTableRowsQuery(database: string, table: string, runs: number) {
+export function useTableRowsQuery(
+  extension: string,
+  database: string,
+  table: string,
+  runs: number,
+) {
   return useQuery({
-    queryKey: queryKeys.tableRows(database, table, runs),
-    queryFn: () => tableRows(table),
+    queryKey: queryKeys.tableRows(extension, database, table, runs),
+    queryFn: () => tableRows(extension, table),
   });
 }
 
