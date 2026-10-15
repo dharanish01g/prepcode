@@ -8,7 +8,7 @@ import { ConsolePanel } from "@/components/console-panel";
 import { ResultsPanel } from "@/components/results-panel";
 import { GuestLogoutDialog } from "@/components/guest-logout-dialog";
 import { JobsScreen } from "@/components/jobs-screen";
-import { McqScreen } from "@/components/mcq-screen";
+import { McqScreen, startMcq } from "@/components/mcq-screen";
 import { PracticeScreen } from "@/components/practice-screen";
 import { QuestionsScreen } from "@/components/questions-screen";
 import { RepoSetupSteps } from "@/components/repo-setup";
@@ -71,6 +71,8 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
   const [practice, setPractice] = useState<{ category: Category; question: string | null } | null>(
     null,
   );
+  // Where the student is in MCQ, kept here so leaving MCQ and coming back carries on (see McqProgress).
+  const [mcq, setMcq] = useState(() => startMcq());
   // Practice, MCQ and Jobs use the whole main area, so the sidebar's second column
   // stays hidden there, and comes back as it was when leaving.
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -312,7 +314,7 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
             }}
           />
         ) : view === "MCQ" ? (
-          <McqScreen />
+          <McqScreen progress={mcq} onChange={setMcq} />
         ) : view === "Jobs" ? (
           // A guest logs in by logging out of the guest session.
           <JobsScreen guest={session.guest} onLogin={() => setGuestAction("log out")} />
