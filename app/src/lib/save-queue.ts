@@ -120,9 +120,18 @@ export function createEditorSaveCoordinator(saveFn: SaveFn) {
     }
   }
 
+  function discard(targetFilename?: string): void {
+    if (targetFilename) {
+      pendingByFile.delete(targetFilename);
+    } else {
+      pendingByFile.clear();
+    }
+  }
+
   return {
     recordEdit,
     flush,
     flushFile,
+    discard,
   };
 }

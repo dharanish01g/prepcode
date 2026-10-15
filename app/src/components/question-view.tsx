@@ -5,7 +5,7 @@ import { usePanelRef } from "react-resizable-panels";
 import { CircleCheckIcon, Maximize2Icon, Minimize2Icon, RotateCcwIcon } from "lucide-react";
 import { toast } from "sonner";
 import { CheckResults, passedCount, type CheckState } from "@/components/check-results";
-import { AUTOSAVE_DELAY_MS, type FlushRef } from "@/components/code-editor";
+import { AUTOSAVE_DELAY_MS, type DiscardRef, type FlushRef } from "@/components/code-editor";
 import { Markdown } from "@/components/markdown";
 import {
   AlertDialog,
@@ -77,6 +77,7 @@ export function QuestionView({
   question,
   language,
   flushRef,
+  discardRef,
   codeRef,
   check,
   languagePicker,
@@ -87,6 +88,8 @@ export function QuestionView({
   language: Language | null;
   /** Set to a function that saves pending edits (used before logout). */
   flushRef: FlushRef;
+  /** Set to a function that discards pending edits without saving. */
+  discardRef?: DiscardRef;
   /** Used by Run and Submit. */
   codeRef: CodeRef;
   /** The last Run or Submit for this question and language. */
@@ -201,6 +204,7 @@ export function QuestionView({
                           : "// This question isn't ready to solve yet.\n"
                       }
                       flushRef={flushRef}
+                      discardRef={discardRef}
                       codeRef={codeRef}
                       resetRef={resetRef}
                     />
@@ -285,6 +289,7 @@ function PracticeEditor({
   language,
   starter,
   flushRef,
+  discardRef,
   codeRef,
   resetRef,
 }: {
@@ -294,6 +299,7 @@ function PracticeEditor({
   /** The code to start from, before anything is saved. */
   starter: string;
   flushRef: FlushRef;
+  discardRef?: DiscardRef;
   codeRef: CodeRef;
   /** Set to a function that puts the starter code back. */
   resetRef: FlushRef;
@@ -347,6 +353,27 @@ function PracticeEditor({
     await whenSavesSettled();
   }, []);
 
+  const isDiscarded = useRef(false);
+
+  const discard = useCallback(() => {
+    clearTimeout(timer.current);
+    isDiscarded.current = true;
+    coordinator.current?.discard();
+  }, []);
+
+  useLayoutEffect(() => {
+    isDiscarded.current = false;
+  }, [fileKey]);
+
+  useLayoutEffect(() => {
+    if (discardRef) {
+      discardRef.current = discard;
+      return () => {
+        discardRef.current = () => {};
+      };
+    }
+  }, [discard, discardRef]);
+
   // Layout effects so the cleanups run synchronously: edits are saved when the
   // question or language changes, and when the editor unmounts.
   useLayoutEffect(() => {
@@ -370,7 +397,9 @@ function PracticeEditor({
       return content;
     };
     return () => {
-      void flush().catch(() => {});
+      if (!isDiscarded.current) {
+        void flush().catch(() => {});
+      }
       flushRef.current = () => {};
       codeRef.current = () => null;
       resetRef.current = () => {};
@@ -401,6 +430,7 @@ function PracticeEditor({
         blockClipboard(editor);
       }}
       onChange={(value) => {
+        isDiscarded.current = false;
         coordinator.current?.recordEdit(fileKey, value ?? "");
         clearTimeout(timer.current);
         timer.current = setTimeout(() => void flush().catch(() => {}), AUTOSAVE_DELAY_MS);

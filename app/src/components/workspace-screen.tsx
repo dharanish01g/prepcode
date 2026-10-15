@@ -112,6 +112,7 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
         }
       : null;
   const flushEditorRef = useRef<() => Promise<void> | void>(() => {});
+  const discardEditorRef = useRef<() => void>(() => {});
   const formatEditorRef = useRef<() => Promise<void>>(async () => {});
   const cursorLineRef = useRef<() => number | null>(() => null);
   const [formatting, setFormatting] = useState(false);
@@ -119,7 +120,7 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
   const [guestAction, setGuestAction] = useState<"log out" | "close" | null>(null);
   // Logging out or closing, held back by unsynced changes.
   const [unsyncedAction, setUnsyncedAction] = useState<"log out" | "close" | null>(null);
-  const [saveFailedLogout, setSaveFailedLogout] = useState(false);
+  const [saveFailedAction, setSaveFailedAction] = useState<"log out" | "close" | null>(null);
   const runner = useRunner();
   const queries = useQueryRunner();
   const syncStatus = useSyncStatusQuery(session.id, !session.guest);
@@ -175,6 +176,15 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
   const closeAfterSyncRef = useRef(() => {});
   useLayoutEffect(() => {
     closeAfterSyncRef.current = async () => {
+      try {
+        await flushAndSettle(flushEditorRef.current);
+      } catch (err) {
+        setSaveFailedAction("close");
+        toast.error("Could not save your changes before closing", {
+          description: err instanceof Error ? err.message : String(err),
+        });
+        return;
+      }
       const id = toast.loading("Saving your work to GitHub…");
       const synced = await backgroundSync();
       toast.dismiss(id);
@@ -213,12 +223,14 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
       try {
         await flushAndSettle(flushEditorRef.current);
       } catch (err) {
-        setSaveFailedLogout(true);
+        setSaveFailedAction("log out");
         toast.error("Could not save your changes before logging out", {
           description: err instanceof Error ? err.message : String(err),
         });
         return;
       }
+    } else {
+      discardEditorRef.current();
     }
     onLogout();
   }
@@ -339,6 +351,7 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
             selectedQuestion={selectedQuestion}
             onSelectQuestion={(slug) => setPractice({ ...practice, question: slug })}
             flushRef={flushEditorRef}
+            discardRef={discardEditorRef}
             onSubmitted={onSubmitted}
           />
         ) : view === "Practice" ? (
@@ -447,6 +460,7 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
                     filename={selectedFile}
                     readOnly={sync.syncing}
                     flushRef={flushEditorRef}
+                    discardRef={discardEditorRef}
                     formatRef={formatEditorRef}
                     cursorLineRef={cursorLineRef}
                   />
@@ -543,7 +557,7 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
         onProceed={() => {
           const action = unsyncedAction;
           setUnsyncedAction(null);
-          if (action === "log out") handleLogout();
+          if (action === "log out") void handleLogout();
           else closeWindow();
         }}
         onSyncAndProceed={async () => {
@@ -566,11 +580,17 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
         onConfirm={() => {
           const action = guestAction;
           setGuestAction(null);
-          if (action === "log out") void handleLogout();
-          else closeWindow();
+          if (action === "log out") void handleLogout(true);
+          else {
+            discardEditorRef.current();
+            closeWindow();
+          }
         }}
       />
-      <AlertDialog open={saveFailedLogout} onOpenChange={setSaveFailedLogout}>
+      <AlertDialog
+        open={saveFailedAction !== null}
+        onOpenChange={(open) => !open && setSaveFailedAction(null)}
+      >
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogMedia className="text-destructive">
@@ -578,22 +598,29 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
             </AlertDialogMedia>
             <AlertDialogTitle>Unsaved changes couldn't be saved</AlertDialogTitle>
             <AlertDialogDescription>
-              An error occurred while saving your latest edits to disk. If you log out now, your
-              unsaved edits will be lost permanently.
+              An error occurred while saving your latest edits to disk. If you{" "}
+              {saveFailedAction === "close" ? "close prepcode" : "log out"} now, your unsaved edits
+              will be lost permanently.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel onClick={() => setSaveFailedLogout(false)}>
+            <AlertDialogCancel onClick={() => setSaveFailedAction(null)}>
               Stay in workspace
             </AlertDialogCancel>
             <AlertDialogAction
               variant="destructive"
               onClick={() => {
-                setSaveFailedLogout(false);
-                void handleLogout(true);
+                const action = saveFailedAction;
+                setSaveFailedAction(null);
+                if (action === "log out") {
+                  void handleLogout(true);
+                } else {
+                  discardEditorRef.current();
+                  closeWindow();
+                }
               }}
             >
-              Discard and log out
+              Discard and {saveFailedAction === "close" ? "close" : "log out"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

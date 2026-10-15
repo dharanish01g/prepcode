@@ -401,3 +401,30 @@ test("integration: coordinator and filesystem saveQueue cooperation under failur
   await coordinator.flush();
   assert.equal(disk["critical.py"], "version_1");
 });
+
+test("coordinator: discard clears pending edits so subsequent flush does not save them", async () => {
+  const saved: string[] = [];
+  const coordinator = createEditorSaveCoordinator(async (edit) => {
+    saved.push(edit.filename);
+  });
+
+  coordinator.recordEdit("notes.txt", "some unsaved text");
+  coordinator.discard();
+
+  await coordinator.flush();
+  assert.deepEqual(saved, []);
+});
+
+test("coordinator: discard with target filename clears only that file's pending edits", async () => {
+  const saved: string[] = [];
+  const coordinator = createEditorSaveCoordinator(async (edit) => {
+    saved.push(edit.filename);
+  });
+
+  coordinator.recordEdit("a.py", "code a");
+  coordinator.recordEdit("b.py", "code b");
+  coordinator.discard("a.py");
+
+  await coordinator.flush();
+  assert.deepEqual(saved, ["b.py"]);
+});

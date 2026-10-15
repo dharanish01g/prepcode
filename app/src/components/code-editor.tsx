@@ -18,6 +18,7 @@ import { createEditorSaveCoordinator } from "@/lib/save-queue";
 export const AUTOSAVE_DELAY_MS = 500;
 
 export type FlushRef = React.RefObject<() => Promise<void> | void>;
+export type DiscardRef = React.RefObject<() => void>;
 export type FormatRef = React.RefObject<() => Promise<void>>;
 export type CursorLineRef = React.RefObject<() => number | null>;
 
@@ -28,6 +29,7 @@ export function CodeEditor({
   filename,
   readOnly,
   flushRef,
+  discardRef,
   formatRef,
   cursorLineRef,
 }: {
@@ -37,6 +39,8 @@ export function CodeEditor({
   readOnly: boolean;
   /** Set to a function that saves pending edits immediately (used before logout). */
   flushRef: FlushRef;
+  /** Set to a function that discards pending edits without saving. */
+  discardRef?: DiscardRef;
   /** Set to a function that formats the open file (used by the Format button). */
   formatRef: FormatRef;
   /** Set to a function that returns the cursor's line (used by Run line). */
@@ -50,6 +54,7 @@ export function CodeEditor({
       filename={filename}
       readOnly={readOnly}
       flushRef={flushRef}
+      discardRef={discardRef}
       formatRef={formatRef}
       cursorLineRef={cursorLineRef}
     />
@@ -61,6 +66,7 @@ function FileEditor({
   filename,
   readOnly,
   flushRef,
+  discardRef,
   formatRef,
   cursorLineRef,
 }: {
@@ -68,6 +74,7 @@ function FileEditor({
   filename: string;
   readOnly: boolean;
   flushRef: FlushRef;
+  discardRef?: DiscardRef;
   formatRef: FormatRef;
   cursorLineRef: CursorLineRef;
 }) {
@@ -95,19 +102,42 @@ function FileEditor({
     await whenSavesSettled();
   }, []);
 
+  const isDiscarded = useRef(false);
+
+  const discard = useCallback(() => {
+    clearTimeout(timer.current);
+    isDiscarded.current = true;
+    coordinator.current?.discard();
+  }, []);
+
+  useLayoutEffect(() => {
+    isDiscarded.current = false;
+  }, [filename]);
+
+  useLayoutEffect(() => {
+    if (discardRef) {
+      discardRef.current = discard;
+      return () => {
+        discardRef.current = () => {};
+      };
+    }
+  }, [discard, discardRef]);
+
   // Layout effects so the cleanups run synchronously: the previous file's edits
   // are saved on switch, and everything is saved when the editor unmounts.
   useLayoutEffect(() => {
     flushRef.current = flush;
     return () => {
-      void flush().catch(() => {});
+      if (!isDiscarded.current) {
+        void flush().catch(() => {});
+      }
       flushRef.current = () => {};
     };
   }, [flush, flushRef]);
 
   useLayoutEffect(
     () => () => {
-      if (coordinator.current) {
+      if (!isDiscarded.current && coordinator.current) {
         void coordinator.current.flushFile(filename).catch(() => {});
       }
     },
@@ -194,6 +224,7 @@ function FileEditor({
         });
       }}
       onChange={(value) => {
+        isDiscarded.current = false;
         coordinator.current?.recordEdit(filename, value ?? "");
         clearTimeout(timer.current);
         timer.current = setTimeout(() => void flush().catch(() => {}), AUTOSAVE_DELAY_MS);
