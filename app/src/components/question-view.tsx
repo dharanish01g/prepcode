@@ -5,7 +5,12 @@ import { usePanelRef } from "react-resizable-panels";
 import { CircleCheckIcon, Maximize2Icon, Minimize2Icon, RotateCcwIcon } from "lucide-react";
 import { toast } from "sonner";
 import { CheckResults, passedCount, type CheckState } from "@/components/check-results";
-import { AUTOSAVE_DELAY_MS, type DiscardRef, type FlushRef } from "@/components/code-editor";
+import {
+  AUTOSAVE_DELAY_MS,
+  type DiscardRef,
+  type FlushRef,
+  type HasUnsavedRef,
+} from "@/components/code-editor";
 import { Markdown } from "@/components/markdown";
 import {
   AlertDialog,
@@ -78,6 +83,8 @@ export function QuestionView({
   language,
   flushRef,
   discardRef,
+  hasUnsavedRef,
+  onDirtyChange,
   codeRef,
   check,
   languagePicker,
@@ -90,6 +97,10 @@ export function QuestionView({
   flushRef: FlushRef;
   /** Set to a function that discards pending edits without saving. */
   discardRef?: DiscardRef;
+  /** Set to a function that returns whether the editor has unsaved edits. */
+  hasUnsavedRef?: HasUnsavedRef;
+  /** Called when the dirty/unsaved state changes. */
+  onDirtyChange?: (dirty: boolean) => void;
   /** Used by Run and Submit. */
   codeRef: CodeRef;
   /** The last Run or Submit for this question and language. */
@@ -205,6 +216,8 @@ export function QuestionView({
                       }
                       flushRef={flushRef}
                       discardRef={discardRef}
+                      hasUnsavedRef={hasUnsavedRef}
+                      onDirtyChange={onDirtyChange}
                       codeRef={codeRef}
                       resetRef={resetRef}
                     />
@@ -290,6 +303,8 @@ function PracticeEditor({
   starter,
   flushRef,
   discardRef,
+  hasUnsavedRef,
+  onDirtyChange,
   codeRef,
   resetRef,
 }: {
@@ -300,6 +315,10 @@ function PracticeEditor({
   starter: string;
   flushRef: FlushRef;
   discardRef?: DiscardRef;
+  /** Set to a function that returns whether the editor has unsaved edits. */
+  hasUnsavedRef?: HasUnsavedRef;
+  /** Called when the dirty/unsaved state changes. */
+  onDirtyChange?: (dirty: boolean) => void;
   codeRef: CodeRef;
   /** Set to a function that puts the starter code back. */
   resetRef: FlushRef;
@@ -346,12 +365,26 @@ function PracticeEditor({
 
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
+  const onDirtyChangeRef = useRef(onDirtyChange);
+  useLayoutEffect(() => {
+    onDirtyChangeRef.current = onDirtyChange;
+  });
+
+  const notifyDirty = useCallback(() => {
+    const dirty = coordinator.current?.hasUnsaved() ?? false;
+    onDirtyChangeRef.current?.(dirty);
+  }, []);
+
   const flush = useCallback(async () => {
     clearTimeout(timer.current);
     if (!coordinator.current) return;
-    await coordinator.current.flush();
-    await whenSavesSettled();
-  }, []);
+    try {
+      await coordinator.current.flush();
+      await whenSavesSettled();
+    } finally {
+      notifyDirty();
+    }
+  }, [notifyDirty]);
 
   const isDiscarded = useRef(false);
 
@@ -359,7 +392,8 @@ function PracticeEditor({
     clearTimeout(timer.current);
     isDiscarded.current = true;
     coordinator.current?.discard();
-  }, []);
+    notifyDirty();
+  }, [notifyDirty]);
 
   useLayoutEffect(() => {
     isDiscarded.current = false;
@@ -373,6 +407,21 @@ function PracticeEditor({
       };
     }
   }, [discard, discardRef]);
+
+  useLayoutEffect(() => {
+    if (hasUnsavedRef) {
+      hasUnsavedRef.current = () => coordinator.current?.hasUnsaved() ?? false;
+      return () => {
+        hasUnsavedRef.current = () => false;
+      };
+    }
+  }, [hasUnsavedRef]);
+
+  useLayoutEffect(() => {
+    return () => {
+      onDirtyChangeRef.current?.(false);
+    };
+  }, []);
 
   // Layout effects so the cleanups run synchronously: edits are saved when the
   // question or language changes, and when the editor unmounts.
@@ -394,6 +443,7 @@ function PracticeEditor({
       const content = editorRef.current?.getValue();
       if (content === undefined) return null;
       coordinator.current?.recordEdit(fileKey, content);
+      notifyDirty();
       return content;
     };
     return () => {
@@ -404,7 +454,7 @@ function PracticeEditor({
       codeRef.current = () => null;
       resetRef.current = () => {};
     };
-  }, [flush, flushRef, codeRef, resetRef, starter, fileKey]);
+  }, [flush, flushRef, codeRef, resetRef, starter, fileKey, notifyDirty]);
 
   if (saved.isError) {
     return (
@@ -432,6 +482,7 @@ function PracticeEditor({
       onChange={(value) => {
         isDiscarded.current = false;
         coordinator.current?.recordEdit(fileKey, value ?? "");
+        notifyDirty();
         clearTimeout(timer.current);
         timer.current = setTimeout(() => void flush().catch(() => {}), AUTOSAVE_DELAY_MS);
       }}

@@ -62,8 +62,8 @@ import {
 import { Separator } from "@/components/ui/separator";
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { displayName, type Session } from "@/lib/auth";
-import { allowClose, isCloseBlocked, setCloseGuarded } from "@/lib/close-guard";
-import { exportGuestFiles, extensionOf, flushAndSettle } from "@/lib/files";
+import { allowClose, isCloseBlocked, registerCloseGuard, setCloseGuarded } from "@/lib/close-guard";
+import { exportGuestFiles, extensionOf, flushAndSettle, whenSavesSettled } from "@/lib/files";
 import { findLanguage, type Language } from "@/lib/languages";
 import { useFilesQuery, useSolvedQuery, useSyncStatusQuery } from "@/lib/queries";
 import type { Category } from "@/lib/practice";
@@ -113,9 +113,11 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
       : null;
   const flushEditorRef = useRef<() => Promise<void> | void>(() => {});
   const discardEditorRef = useRef<() => void>(() => {});
+  const hasUnsavedEditorRef = useRef<() => boolean>(() => false);
   const formatEditorRef = useRef<() => Promise<void>>(async () => {});
   const cursorLineRef = useRef<() => number | null>(() => null);
   const [formatting, setFormatting] = useState(false);
+  const [editorHasUnsaved, setEditorHasUnsaved] = useState(false);
   // Logging out or closing, held back to warn that a guest's files go.
   const [guestAction, setGuestAction] = useState<"log out" | "close" | null>(null);
   // Logging out or closing, held back by unsynced changes.
@@ -152,15 +154,18 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
     if (!session.guest) pull().then(() => setPulled(true));
   }, [session.guest, pull]);
 
-  // Closing the window asks first if that would lose anything: unsynced
-  // changes, or (since they're deleted) a guest's files.
+  // Closing the window asks first if that would lose anything: unsaved editor
+  // edits, unsynced changes, or (since they're deleted) a guest's files.
   useEffect(() => {
-    setCloseGuarded(session.guest ? guestFiles > 0 : unsynced > 0);
+    setCloseGuarded(session.guest ? guestFiles > 0 : unsynced > 0 || editorHasUnsaved);
     return () => setCloseGuarded(false);
-  }, [session.guest, guestFiles, unsynced]);
+  }, [session.guest, guestFiles, unsynced, editorHasUnsaved]);
+  useEffect(() => {
+    return registerCloseGuard(() => hasUnsavedEditorRef.current());
+  }, []);
   useEffect(() => {
     const listening = getCurrentWindow().onCloseRequested((event) => {
-      if (!isCloseBlocked()) return;
+      if (!isCloseBlocked() && !hasUnsavedEditorRef.current()) return;
       event.preventDefault();
       if (session.guest) setGuestAction("close");
       else closeAfterSyncRef.current();
@@ -231,6 +236,7 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
       }
     } else {
       discardEditorRef.current();
+      await whenSavesSettled();
     }
     onLogout();
   }
@@ -352,6 +358,8 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
             onSelectQuestion={(slug) => setPractice({ ...practice, question: slug })}
             flushRef={flushEditorRef}
             discardRef={discardEditorRef}
+            hasUnsavedRef={hasUnsavedEditorRef}
+            onDirtyChange={setEditorHasUnsaved}
             onSubmitted={onSubmitted}
           />
         ) : view === "Practice" ? (
@@ -461,6 +469,8 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
                     readOnly={sync.syncing}
                     flushRef={flushEditorRef}
                     discardRef={discardEditorRef}
+                    hasUnsavedRef={hasUnsavedEditorRef}
+                    onDirtyChange={setEditorHasUnsaved}
                     formatRef={formatEditorRef}
                     cursorLineRef={cursorLineRef}
                   />

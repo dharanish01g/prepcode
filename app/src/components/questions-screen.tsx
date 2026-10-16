@@ -2,7 +2,7 @@ import { Fragment, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { ChevronLeftIcon, ChevronRightIcon, PlayIcon, SendIcon, WifiOffIcon } from "lucide-react";
 import { passedCount, type CheckState } from "@/components/check-results";
-import type { DiscardRef, FlushRef } from "@/components/code-editor";
+import type { DiscardRef, FlushRef, HasUnsavedRef } from "@/components/code-editor";
 import { LanguagePicker } from "@/components/language-picker";
 import {
   Breadcrumb,
@@ -58,6 +58,8 @@ export function QuestionsScreen({
   onSelectQuestion,
   flushRef,
   discardRef,
+  hasUnsavedRef,
+  onDirtyChange,
   onSubmitted,
 }: {
   userId: string;
@@ -75,6 +77,10 @@ export function QuestionsScreen({
   flushRef: FlushRef;
   /** Set to a function that discards pending edits without saving. */
   discardRef?: DiscardRef;
+  /** Set to a function that returns whether the editor has unsaved edits. */
+  hasUnsavedRef?: HasUnsavedRef;
+  /** Called when the dirty/unsaved state changes. */
+  onDirtyChange?: (dirty: boolean) => void;
   /** After a Submit has run: e.g. sync the answer to GitHub. */
   onSubmitted?: (question: Question, language: Language) => void;
 }) {
@@ -265,6 +271,8 @@ export function QuestionsScreen({
           language={language}
           flushRef={flushRef}
           discardRef={discardRef}
+          hasUnsavedRef={hasUnsavedRef}
+          onDirtyChange={onDirtyChange}
           codeRef={codeRef}
           check={check}
           languagePicker={

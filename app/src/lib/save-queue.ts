@@ -139,10 +139,28 @@ export function createEditorSaveCoordinator(saveFn: SaveFn) {
     }
   }
 
+  function hasUnsaved(targetFilename?: string): boolean {
+    if (targetFilename) {
+      const rev = revisions.get(targetFilename) ?? 0;
+      const saved = savedRevisions.get(targetFilename) ?? 0;
+      const discarded = discardedRevisions.get(targetFilename) ?? 0;
+      return rev > saved && rev > discarded;
+    }
+    for (const [file, rev] of revisions.entries()) {
+      const saved = savedRevisions.get(file) ?? 0;
+      const discarded = discardedRevisions.get(file) ?? 0;
+      if (rev > saved && rev > discarded) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   return {
     recordEdit,
     flush,
     flushFile,
     discard,
+    hasUnsaved,
   };
 }
