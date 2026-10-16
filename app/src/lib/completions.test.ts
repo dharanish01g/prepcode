@@ -734,7 +734,10 @@ function javaSig(src: string): any {
 function javaHover(src: string, col: number, line = 1): any {
   const { mockMonaco, hoverProviders } = setupMockMonaco();
   registerJavaCompletions(mockMonaco);
-  return hoverProviders["java"].provideHover(createMockModel(src), { lineNumber: line, column: col });
+  return hoverProviders["java"].provideHover(createMockModel(src), {
+    lineNumber: line,
+    column: col,
+  });
 }
 
 test("Java: System members and System.out methods suggest correctly", () => {
@@ -751,21 +754,36 @@ test("Java: System members and System.out methods suggest correctly", () => {
 
 test("Java: Math and Arrays static methods suggest correctly", () => {
   const math = javaLabels("Math.");
-  assert.ok(math.includes("max") && math.includes("min") && math.includes("abs") && math.includes("PI"), "Math suggestions");
+  assert.ok(
+    math.includes("max") && math.includes("min") && math.includes("abs") && math.includes("PI"),
+    "Math suggestions",
+  );
 
   const arrays = javaLabels("Arrays.");
-  assert.ok(arrays.includes("sort") && arrays.includes("binarySearch") && arrays.includes("fill"), "Arrays suggestions");
+  assert.ok(
+    arrays.includes("sort") && arrays.includes("binarySearch") && arrays.includes("fill"),
+    "Arrays suggestions",
+  );
 });
 
 test("Java: Variable heuristics provide appropriate member suggestions", () => {
   const sc = javaLabels("Scanner sc = new Scanner(System.in);\nsc.");
-  assert.ok(sc.includes("nextInt") && sc.includes("nextLine"), "Scanner variable suggests Scanner methods");
+  assert.ok(
+    sc.includes("nextInt") && sc.includes("nextLine"),
+    "Scanner variable suggests Scanner methods",
+  );
 
-  const s = javaLabels("String s = \"hello\";\ns.");
-  assert.ok(s.includes("length") && s.includes("charAt") && s.includes("substring"), "String variable suggests String methods");
+  const s = javaLabels('String s = "hello";\ns.');
+  assert.ok(
+    s.includes("length") && s.includes("charAt") && s.includes("substring"),
+    "String variable suggests String methods",
+  );
 
   const list = javaLabels("List<Integer> nums = new ArrayList<>();\nnums.");
-  assert.ok(list.includes("add") && list.includes("get") && list.includes("size"), "List variable suggests List methods");
+  assert.ok(
+    list.includes("add") && list.includes("get") && list.includes("size"),
+    "List variable suggests List methods",
+  );
 });
 
 test("Java: Snippets and keywords are provided in un-dotted context", () => {
@@ -777,7 +795,8 @@ test("Java: Snippets and keywords are provided in un-dotted context", () => {
 });
 
 test("Java: Local variables and method parameters appear in completions", () => {
-  const src = "public class Solution {\n    public int solve(int maxLimit, String targetPrefix) {\n        int runningTotal = 0;\n        r";
+  const src =
+    "public class Solution {\n    public int solve(int maxLimit, String targetPrefix) {\n        int runningTotal = 0;\n        r";
   const labels = javaLabels(src);
   assert.ok(labels.includes("runningTotal"), "local variable runningTotal suggested");
   assert.ok(labels.includes("maxLimit"), "parameter maxLimit suggested");
@@ -799,4 +818,3 @@ test("Java: Hover documentation displays for qualified calls and types", () => {
   assert.ok(hover && hover.contents.length > 0, "Hover over Math.max returns doc content");
   assert.ok(hover.contents[0].value.includes("Math.max"), "Contains method signature in hover");
 });
-

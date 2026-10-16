@@ -46,14 +46,17 @@ const SYSTEM_MEMBERS: MethodItem[] = [
     kind: monacoDefault.languages.CompletionItemKind.Method,
     snippet: "nanoTime()",
     detail: "static long System.nanoTime()",
-    documentation: "Returns the current value of the running Java Virtual Machine's high-resolution time source, in nanoseconds.",
+    documentation:
+      "Returns the current value of the running Java Virtual Machine's high-resolution time source, in nanoseconds.",
   },
   {
     label: "arraycopy",
     kind: monacoDefault.languages.CompletionItemKind.Method,
     snippet: "arraycopy(${1:src}, ${2:srcPos}, ${3:dest}, ${4:destPos}, ${5:length});",
-    detail: "static void System.arraycopy(Object src, int srcPos, Object dest, int destPos, int length)",
-    documentation: "Copies an array from the specified source array to the specified destination array.",
+    detail:
+      "static void System.arraycopy(Object src, int srcPos, Object dest, int destPos, int length)",
+    documentation:
+      "Copies an array from the specified source array to the specified destination array.",
   },
   {
     label: "exit",
@@ -105,7 +108,8 @@ const PRINTSTREAM_MEMBERS: MethodItem[] = [
     kind: monacoDefault.languages.CompletionItemKind.Method,
     snippet: 'format("${1:%s}\\n", ${2:args});',
     detail: "PrintStream PrintStream.format(String format, Object... args)",
-    documentation: "Writes a formatted string to this output stream using the specified format string and arguments.",
+    documentation:
+      "Writes a formatted string to this output stream using the specified format string and arguments.",
   },
   {
     label: "flush",
@@ -153,7 +157,8 @@ const MATH_MEMBERS: MethodItem[] = [
     label: "pow",
     snippet: "pow(${1:a}, ${2:b})",
     detail: "static double Math.pow(double a, double b)",
-    documentation: "Returns the value of the first argument raised to the power of the second argument.",
+    documentation:
+      "Returns the value of the first argument raised to the power of the second argument.",
   },
   {
     label: "round",
@@ -165,19 +170,22 @@ const MATH_MEMBERS: MethodItem[] = [
     label: "floor",
     snippet: "floor(${1:a})",
     detail: "static double Math.floor(double a)",
-    documentation: "Returns the largest (closest to positive infinity) double value that is less than or equal to the argument and is equal to a mathematical integer.",
+    documentation:
+      "Returns the largest (closest to positive infinity) double value that is less than or equal to the argument and is equal to a mathematical integer.",
   },
   {
     label: "ceil",
     snippet: "ceil(${1:a})",
     detail: "static double Math.ceil(double a)",
-    documentation: "Returns the smallest (closest to negative infinity) double value that is greater than or equal to the argument and is equal to a mathematical integer.",
+    documentation:
+      "Returns the smallest (closest to negative infinity) double value that is greater than or equal to the argument and is equal to a mathematical integer.",
   },
   {
     label: "random",
     snippet: "random()",
     detail: "static double Math.random()",
-    documentation: "Returns a double value with a positive sign, greater than or equal to 0.0 and less than 1.0.",
+    documentation:
+      "Returns a double value with a positive sign, greater than or equal to 0.0 and less than 1.0.",
   },
   {
     label: "sin",
@@ -213,21 +221,24 @@ const MATH_MEMBERS: MethodItem[] = [
     label: "signum",
     snippet: "signum(${1:d})",
     detail: "static double Math.signum(double d)",
-    documentation: "Returns the signum function of the argument; zero if the argument is zero, 1.0 if the argument is greater than zero, -1.0 if the argument is less than zero.",
+    documentation:
+      "Returns the signum function of the argument; zero if the argument is zero, 1.0 if the argument is greater than zero, -1.0 if the argument is less than zero.",
   },
   {
     label: "PI",
     kind: monacoDefault.languages.CompletionItemKind.Field,
     snippet: "PI",
     detail: "static final double Math.PI = 3.141592653589793",
-    documentation: "The double value that is closer than any other to pi, the ratio of the circumference of a circle to its diameter.",
+    documentation:
+      "The double value that is closer than any other to pi, the ratio of the circumference of a circle to its diameter.",
   },
   {
     label: "E",
     kind: monacoDefault.languages.CompletionItemKind.Field,
     snippet: "E",
     detail: "static final double Math.E = 2.718281828459045",
-    documentation: "The double value that is closer than any other to e, the base of the natural logarithms.",
+    documentation:
+      "The double value that is closer than any other to e, the base of the natural logarithms.",
   },
 ];
 
@@ -244,7 +255,8 @@ const ARRAYS_MEMBERS: MethodItem[] = [
     label: "binarySearch",
     snippet: "binarySearch(${1:a}, ${2:key})",
     detail: "static int Arrays.binarySearch(int[] a, int key)",
-    documentation: "Searches the specified array for the specified value using the binary search algorithm.",
+    documentation:
+      "Searches the specified array for the specified value using the binary search algorithm.",
   },
   {
     label: "fill",
@@ -280,7 +292,8 @@ const ARRAYS_MEMBERS: MethodItem[] = [
     label: "copyOf",
     snippet: "copyOf(${1:original}, ${2:newLength})",
     detail: "static T[] Arrays.copyOf(T[] original, int newLength)",
-    documentation: "Copies the specified array, truncating or padding with zeros/nulls (if necessary) so the copy has the specified length.",
+    documentation:
+      "Copies the specified array, truncating or padding with zeros/nulls (if necessary) so the copy has the specified length.",
   },
   {
     label: "copyOfRange",
@@ -303,7 +316,8 @@ const COLLECTIONS_MEMBERS: MethodItem[] = [
     label: "sort",
     snippet: "sort(${1:list});",
     detail: "static <T extends Comparable<? super T>> void Collections.sort(List<T> list)",
-    documentation: "Sorts the specified list into ascending order, according to the natural ordering of its elements.",
+    documentation:
+      "Sorts the specified list into ascending order, according to the natural ordering of its elements.",
   },
   {
     label: "reverse",
@@ -320,20 +334,26 @@ const COLLECTIONS_MEMBERS: MethodItem[] = [
   {
     label: "min",
     snippet: "min(${1:coll})",
-    detail: "static <T extends Object & Comparable<? super T>> T Collections.min(Collection<? extends T> coll)",
-    documentation: "Returns the minimum element of the given collection, according to the natural ordering of its elements.",
+    detail:
+      "static <T extends Object & Comparable<? super T>> T Collections.min(Collection<? extends T> coll)",
+    documentation:
+      "Returns the minimum element of the given collection, according to the natural ordering of its elements.",
   },
   {
     label: "max",
     snippet: "max(${1:coll})",
-    detail: "static <T extends Object & Comparable<? super T>> T Collections.max(Collection<? extends T> coll)",
-    documentation: "Returns the maximum element of the given collection, according to the natural ordering of its elements.",
+    detail:
+      "static <T extends Object & Comparable<? super T>> T Collections.max(Collection<? extends T> coll)",
+    documentation:
+      "Returns the maximum element of the given collection, according to the natural ordering of its elements.",
   },
   {
     label: "binarySearch",
     snippet: "binarySearch(${1:list}, ${2:key})",
-    detail: "static <T> int Collections.binarySearch(List<? extends Comparable<? super T>> list, T key)",
-    documentation: "Searches the specified list for the specified object using the binary search algorithm.",
+    detail:
+      "static <T> int Collections.binarySearch(List<? extends Comparable<? super T>> list, T key)",
+    documentation:
+      "Searches the specified list for the specified object using the binary search algorithm.",
   },
   {
     label: "swap",
@@ -345,7 +365,8 @@ const COLLECTIONS_MEMBERS: MethodItem[] = [
     label: "frequency",
     snippet: "frequency(${1:c}, ${2:o})",
     detail: "static int Collections.frequency(Collection<?> c, Object o)",
-    documentation: "Returns the number of elements in the specified collection equal to the specified object.",
+    documentation:
+      "Returns the number of elements in the specified collection equal to the specified object.",
   },
   {
     label: "disjoint",
@@ -398,13 +419,15 @@ const INTEGER_STATIC_MEMBERS: MethodItem[] = [
     label: "toBinaryString",
     snippet: "toBinaryString(${1:i})",
     detail: "static String Integer.toBinaryString(int i)",
-    documentation: "Returns a string representation of the integer argument as an unsigned integer in base 2.",
+    documentation:
+      "Returns a string representation of the integer argument as an unsigned integer in base 2.",
   },
   {
     label: "toHexString",
     snippet: "toHexString(${1:i})",
     detail: "static String Integer.toHexString(int i)",
-    documentation: "Returns a string representation of the integer argument as an unsigned integer in base 16.",
+    documentation:
+      "Returns a string representation of the integer argument as an unsigned integer in base 16.",
   },
   {
     label: "compare",
@@ -428,7 +451,8 @@ const INTEGER_STATIC_MEMBERS: MethodItem[] = [
     label: "bitCount",
     snippet: "bitCount(${1:i})",
     detail: "static int Integer.bitCount(int i)",
-    documentation: "Returns the number of one-bits in the two's complement binary representation of the specified int value.",
+    documentation:
+      "Returns the number of one-bits in the two's complement binary representation of the specified int value.",
   },
   {
     label: "MAX_VALUE",
@@ -492,7 +516,8 @@ const DOUBLE_STATIC_MEMBERS: MethodItem[] = [
     label: "parseDouble",
     snippet: "parseDouble(${1:s})",
     detail: "static double Double.parseDouble(String s)",
-    documentation: "Returns a new double initialized to the value represented by the specified String.",
+    documentation:
+      "Returns a new double initialized to the value represented by the specified String.",
   },
   {
     label: "valueOf",
@@ -504,13 +529,15 @@ const DOUBLE_STATIC_MEMBERS: MethodItem[] = [
     label: "isNaN",
     snippet: "isNaN(${1:v})",
     detail: "static boolean Double.isNaN(double v)",
-    documentation: "Returns true if the specified number is a Not-a-Number (NaN) value, false otherwise.",
+    documentation:
+      "Returns true if the specified number is a Not-a-Number (NaN) value, false otherwise.",
   },
   {
     label: "isInfinite",
     snippet: "isInfinite(${1:v})",
     detail: "static boolean Double.isInfinite(double v)",
-    documentation: "Returns true if the specified number is infinitely large in magnitude, false otherwise.",
+    documentation:
+      "Returns true if the specified number is infinitely large in magnitude, false otherwise.",
   },
   {
     label: "compare",
@@ -561,13 +588,15 @@ const CHARACTER_STATIC_MEMBERS: MethodItem[] = [
     label: "toUpperCase",
     snippet: "toUpperCase(${1:ch})",
     detail: "static char Character.toUpperCase(char ch)",
-    documentation: "Converts the character argument to uppercase using case mapping information from the UnicodeData file.",
+    documentation:
+      "Converts the character argument to uppercase using case mapping information from the UnicodeData file.",
   },
   {
     label: "toLowerCase",
     snippet: "toLowerCase(${1:ch})",
     detail: "static char Character.toLowerCase(char ch)",
-    documentation: "Converts the character argument to lowercase using case mapping information from the UnicodeData file.",
+    documentation:
+      "Converts the character argument to lowercase using case mapping information from the UnicodeData file.",
   },
   {
     label: "toString",
@@ -608,19 +637,22 @@ const STRING_INSTANCE_MEMBERS: MethodItem[] = [
     label: "indexOf",
     snippet: "indexOf(${1:str})",
     detail: "int String.indexOf(String str / char ch)",
-    documentation: "Returns the index within this string of the first occurrence of the specified substring or character.",
+    documentation:
+      "Returns the index within this string of the first occurrence of the specified substring or character.",
   },
   {
     label: "lastIndexOf",
     snippet: "lastIndexOf(${1:str})",
     detail: "int String.lastIndexOf(String str / char ch)",
-    documentation: "Returns the index within this string of the last occurrence of the specified substring.",
+    documentation:
+      "Returns the index within this string of the last occurrence of the specified substring.",
   },
   {
     label: "contains",
     snippet: "contains(${1:s})",
     detail: "boolean String.contains(CharSequence s)",
-    documentation: "Returns true if and only if this string contains the specified sequence of char values.",
+    documentation:
+      "Returns true if and only if this string contains the specified sequence of char values.",
   },
   {
     label: "equals",
@@ -650,37 +682,43 @@ const STRING_INSTANCE_MEMBERS: MethodItem[] = [
     label: "toLowerCase",
     snippet: "toLowerCase()",
     detail: "String String.toLowerCase()",
-    documentation: "Converts all of the characters in this String to lower case using the rules of the default locale.",
+    documentation:
+      "Converts all of the characters in this String to lower case using the rules of the default locale.",
   },
   {
     label: "toUpperCase",
     snippet: "toUpperCase()",
     detail: "String String.toUpperCase()",
-    documentation: "Converts all of the characters in this String to upper case using the rules of the default locale.",
+    documentation:
+      "Converts all of the characters in this String to upper case using the rules of the default locale.",
   },
   {
     label: "trim",
     snippet: "trim()",
     detail: "String String.trim()",
-    documentation: "Returns a string whose value is this string, with all leading and trailing space removed.",
+    documentation:
+      "Returns a string whose value is this string, with all leading and trailing space removed.",
   },
   {
     label: "strip",
     snippet: "strip()",
     detail: "String String.strip()",
-    documentation: "Returns a string whose value is this string, with all leading and trailing white space removed.",
+    documentation:
+      "Returns a string whose value is this string, with all leading and trailing white space removed.",
   },
   {
     label: "replace",
     snippet: "replace(${1:target}, ${2:replacement})",
     detail: "String String.replace(CharSequence target, CharSequence replacement)",
-    documentation: "Replaces each substring of this string that matches the literal target sequence with the specified literal replacement sequence.",
+    documentation:
+      "Replaces each substring of this string that matches the literal target sequence with the specified literal replacement sequence.",
   },
   {
     label: "replaceAll",
     snippet: "replaceAll(${1:regex}, ${2:replacement})",
     detail: "String String.replaceAll(String regex, String replacement)",
-    documentation: "Replaces each substring of this string that matches the given regular expression with the given replacement.",
+    documentation:
+      "Replaces each substring of this string that matches the given regular expression with the given replacement.",
   },
   {
     label: "split",
@@ -716,19 +754,22 @@ const STRING_INSTANCE_MEMBERS: MethodItem[] = [
     label: "isBlank",
     snippet: "isBlank()",
     detail: "boolean String.isBlank()",
-    documentation: "Returns true if the string is empty or contains only white space codepoints, otherwise false.",
+    documentation:
+      "Returns true if the string is empty or contains only white space codepoints, otherwise false.",
   },
   {
     label: "repeat",
     snippet: "repeat(${1:count})",
     detail: "String String.repeat(int count)",
-    documentation: "Returns a string whose value is the concatenation of this string repeated count times.",
+    documentation:
+      "Returns a string whose value is the concatenation of this string repeated count times.",
   },
   {
     label: "join",
     snippet: 'join("${1:, }", ${2:elements})',
     detail: "static String String.join(CharSequence delimiter, CharSequence... elements)",
-    documentation: "Returns a new String composed of copies of the CharSequence elements joined together with a copy of the specified delimiter.",
+    documentation:
+      "Returns a new String composed of copies of the CharSequence elements joined together with a copy of the specified delimiter.",
   },
   {
     label: "valueOf",
@@ -751,7 +792,8 @@ const STRINGBUILDER_MEMBERS: MethodItem[] = [
     label: "insert",
     snippet: "insert(${1:offset}, ${2:str})",
     detail: "StringBuilder StringBuilder.insert(int offset, Object obj / String str)",
-    documentation: "Inserts the string representation of the argument into this character sequence.",
+    documentation:
+      "Inserts the string representation of the argument into this character sequence.",
   },
   {
     label: "delete",
@@ -769,7 +811,8 @@ const STRINGBUILDER_MEMBERS: MethodItem[] = [
     label: "replace",
     snippet: "replace(${1:start}, ${2:end}, ${3:str})",
     detail: "StringBuilder StringBuilder.replace(int start, int end, String str)",
-    documentation: "Replaces the characters in a substring of this sequence with characters in the specified String.",
+    documentation:
+      "Replaces the characters in a substring of this sequence with characters in the specified String.",
   },
   {
     label: "reverse",
@@ -799,7 +842,8 @@ const STRINGBUILDER_MEMBERS: MethodItem[] = [
     label: "substring",
     snippet: "substring(${1:start})",
     detail: "String StringBuilder.substring(int start [, int end])",
-    documentation: "Returns a new String that contains a subsequence of characters currently contained in this character sequence.",
+    documentation:
+      "Returns a new String that contains a subsequence of characters currently contained in this character sequence.",
   },
   {
     label: "toString",
@@ -840,7 +884,8 @@ const SCANNER_MEMBERS: MethodItem[] = [
     label: "nextLine",
     snippet: "nextLine()",
     detail: "String Scanner.nextLine()",
-    documentation: "Advances this scanner past the current line and returns the input that was skipped.",
+    documentation:
+      "Advances this scanner past the current line and returns the input that was skipped.",
   },
   {
     label: "hasNext",
@@ -852,7 +897,8 @@ const SCANNER_MEMBERS: MethodItem[] = [
     label: "hasNextInt",
     snippet: "hasNextInt()",
     detail: "boolean Scanner.hasNextInt()",
-    documentation: "Returns true if the next token in this scanner's input can be interpreted as an int value.",
+    documentation:
+      "Returns true if the next token in this scanner's input can be interpreted as an int value.",
   },
   {
     label: "hasNextLine",
@@ -887,7 +933,8 @@ const LIST_MEMBERS: MethodItem[] = [
     label: "set",
     snippet: "set(${1:index}, ${2:element})",
     detail: "E List.set(int index, E element)",
-    documentation: "Replaces the element at the specified position in this list with the specified element.",
+    documentation:
+      "Replaces the element at the specified position in this list with the specified element.",
   },
   {
     label: "remove",
@@ -917,7 +964,8 @@ const LIST_MEMBERS: MethodItem[] = [
     label: "indexOf",
     snippet: "indexOf(${1:o})",
     detail: "int List.indexOf(Object o)",
-    documentation: "Returns the index of the first occurrence of the specified element in this list, or -1 if not found.",
+    documentation:
+      "Returns the index of the first occurrence of the specified element in this list, or -1 if not found.",
   },
   {
     label: "clear",
@@ -929,13 +977,15 @@ const LIST_MEMBERS: MethodItem[] = [
     label: "toArray",
     snippet: "toArray()",
     detail: "Object[] List.toArray() / <T> T[] toArray(T[] a)",
-    documentation: "Returns an array containing all of the elements in this list in proper sequence.",
+    documentation:
+      "Returns an array containing all of the elements in this list in proper sequence.",
   },
   {
     label: "subList",
     snippet: "subList(${1:fromIndex}, ${2:toIndex})",
     detail: "List<E> List.subList(int fromIndex, int toIndex)",
-    documentation: "Returns a view of the portion of this list between the specified fromIndex, inclusive, and toIndex, exclusive.",
+    documentation:
+      "Returns a view of the portion of this list between the specified fromIndex, inclusive, and toIndex, exclusive.",
   },
 ];
 
@@ -950,13 +1000,15 @@ const MAP_MEMBERS: MethodItem[] = [
     label: "get",
     snippet: "get(${1:key})",
     detail: "V Map.get(Object key)",
-    documentation: "Returns the value to which the specified key is mapped, or null if this map contains no mapping for the key.",
+    documentation:
+      "Returns the value to which the specified key is mapped, or null if this map contains no mapping for the key.",
   },
   {
     label: "getOrDefault",
     snippet: "getOrDefault(${1:key}, ${2:defaultValue})",
     detail: "V Map.getOrDefault(Object key, V defaultValue)",
-    documentation: "Returns the value to which the specified key is mapped, or defaultValue if this map contains no mapping for the key.",
+    documentation:
+      "Returns the value to which the specified key is mapped, or defaultValue if this map contains no mapping for the key.",
   },
   {
     label: "containsKey",
@@ -1010,7 +1062,8 @@ const MAP_MEMBERS: MethodItem[] = [
     label: "putIfAbsent",
     snippet: "putIfAbsent(${1:key}, ${2:value})",
     detail: "V Map.putIfAbsent(K key, V value)",
-    documentation: "If the specified key is not already associated with a value associates it with the given value.",
+    documentation:
+      "If the specified key is not already associated with a value associates it with the given value.",
   },
   {
     label: "clear",
@@ -1064,25 +1117,29 @@ const QUEUE_MEMBERS: MethodItem[] = [
     label: "offer",
     snippet: "offer(${1:e})",
     detail: "boolean Queue.offer(E e)",
-    documentation: "Inserts the specified element into this queue if it is possible to do so immediately without violating capacity restrictions.",
+    documentation:
+      "Inserts the specified element into this queue if it is possible to do so immediately without violating capacity restrictions.",
   },
   {
     label: "poll",
     snippet: "poll()",
     detail: "E Queue.poll()",
-    documentation: "Retrieves and removes the head of this queue, or returns null if this queue is empty.",
+    documentation:
+      "Retrieves and removes the head of this queue, or returns null if this queue is empty.",
   },
   {
     label: "peek",
     snippet: "peek()",
     detail: "E Queue.peek()",
-    documentation: "Retrieves, but does not remove, the head of this queue, or returns null if this queue is empty.",
+    documentation:
+      "Retrieves, but does not remove, the head of this queue, or returns null if this queue is empty.",
   },
   {
     label: "add",
     snippet: "add(${1:e})",
     detail: "boolean Queue.add(E e)",
-    documentation: "Inserts the specified element into this queue if it is possible to do so immediately without violating capacity restrictions.",
+    documentation:
+      "Inserts the specified element into this queue if it is possible to do so immediately without violating capacity restrictions.",
   },
   {
     label: "remove",
@@ -1115,13 +1172,15 @@ const STACK_MEMBERS: MethodItem[] = [
     label: "pop",
     snippet: "pop()",
     detail: "E Stack.pop()",
-    documentation: "Removes the object at the top of this stack and returns that object as the value of this function.",
+    documentation:
+      "Removes the object at the top of this stack and returns that object as the value of this function.",
   },
   {
     label: "peek",
     snippet: "peek()",
     detail: "E Stack.peek()",
-    documentation: "Looks at the object at the top of this stack without removing it from the stack.",
+    documentation:
+      "Looks at the object at the top of this stack without removing it from the stack.",
   },
   {
     label: "empty",
@@ -1167,32 +1226,103 @@ const COMMON_INSTANCE_MEMBERS: MethodItem[] = [
 // --- Keywords & Types -----------------------------------------------------------------
 
 const JAVA_KEYWORDS = [
-  "abstract", "assert", "boolean", "break", "byte", "case", "catch", "char", "class",
-  "continue", "default", "do", "double", "else", "enum", "extends", "final", "finally",
-  "float", "for", "if", "implements", "import", "instanceof", "int", "interface",
-  "long", "native", "new", "package", "private", "protected", "public", "return",
-  "short", "static", "strictfp", "super", "switch", "synchronized", "this", "throw",
-  "throws", "transient", "try", "void", "volatile", "while", "record", "var", "yield",
-  "true", "false", "null",
+  "abstract",
+  "assert",
+  "boolean",
+  "break",
+  "byte",
+  "case",
+  "catch",
+  "char",
+  "class",
+  "continue",
+  "default",
+  "do",
+  "double",
+  "else",
+  "enum",
+  "extends",
+  "final",
+  "finally",
+  "float",
+  "for",
+  "if",
+  "implements",
+  "import",
+  "instanceof",
+  "int",
+  "interface",
+  "long",
+  "native",
+  "new",
+  "package",
+  "private",
+  "protected",
+  "public",
+  "return",
+  "short",
+  "static",
+  "strictfp",
+  "super",
+  "switch",
+  "synchronized",
+  "this",
+  "throw",
+  "throws",
+  "transient",
+  "try",
+  "void",
+  "volatile",
+  "while",
+  "record",
+  "var",
+  "yield",
+  "true",
+  "false",
+  "null",
 ];
 
 const JAVA_TYPES = [
   { name: "String", doc: "The String class represents character strings." },
-  { name: "Integer", doc: "The Integer class wraps a value of the primitive type int in an object." },
+  {
+    name: "Integer",
+    doc: "The Integer class wraps a value of the primitive type int in an object.",
+  },
   { name: "Long", doc: "The Long class wraps a value of the primitive type long in an object." },
-  { name: "Double", doc: "The Double class wraps a value of the primitive type double in an object." },
+  {
+    name: "Double",
+    doc: "The Double class wraps a value of the primitive type double in an object.",
+  },
   { name: "Float", doc: "The Float class wraps a value of the primitive type float in an object." },
-  { name: "Boolean", doc: "The Boolean class wraps a value of the primitive type boolean in an object." },
-  { name: "Character", doc: "The Character class wraps a value of the primitive type char in an object." },
+  {
+    name: "Boolean",
+    doc: "The Boolean class wraps a value of the primitive type boolean in an object.",
+  },
+  {
+    name: "Character",
+    doc: "The Character class wraps a value of the primitive type char in an object.",
+  },
   { name: "Byte", doc: "The Byte class wraps a value of the primitive type byte in an object." },
   { name: "Short", doc: "The Short class wraps a value of the primitive type short in an object." },
   { name: "Object", doc: "Class Object is the root of the class hierarchy." },
-  { name: "Scanner", doc: "A simple text scanner which can parse primitive types and strings using regular expressions." },
+  {
+    name: "Scanner",
+    doc: "A simple text scanner which can parse primitive types and strings using regular expressions.",
+  },
   { name: "Math", doc: "The class Math contains methods for performing basic numeric operations." },
-  { name: "Arrays", doc: "This class contains various methods for manipulating arrays (such as sorting and searching)." },
-  { name: "Collections", doc: "This class consists exclusively of static methods that operate on or return collections." },
+  {
+    name: "Arrays",
+    doc: "This class contains various methods for manipulating arrays (such as sorting and searching).",
+  },
+  {
+    name: "Collections",
+    doc: "This class consists exclusively of static methods that operate on or return collections.",
+  },
   { name: "ArrayList", doc: "Resizable-array implementation of the List interface." },
-  { name: "LinkedList", doc: "Doubly-linked list implementation of the List and Deque interfaces." },
+  {
+    name: "LinkedList",
+    doc: "Doubly-linked list implementation of the List and Deque interfaces.",
+  },
   { name: "List", doc: "An ordered collection (also known as a sequence)." },
   { name: "HashMap", doc: "Hash table based implementation of the Map interface." },
   { name: "TreeMap", doc: "A Red-Black tree based NavigableMap implementation." },
@@ -1201,15 +1331,30 @@ const JAVA_TYPES = [
   { name: "TreeSet", doc: "A NavigableSet implementation based on a TreeMap." },
   { name: "Set", doc: "A collection that contains no duplicate elements." },
   { name: "Queue", doc: "A collection designed for holding elements prior to processing." },
-  { name: "Deque", doc: "A linear collection that supports element insertion and removal at both ends." },
+  {
+    name: "Deque",
+    doc: "A linear collection that supports element insertion and removal at both ends.",
+  },
   { name: "PriorityQueue", doc: "An unbounded priority queue based on a priority heap." },
   { name: "Stack", doc: "The Stack class represents a last-in-first-out (LIFO) stack of objects." },
   { name: "StringBuilder", doc: "A mutable sequence of characters (not synchronized)." },
   { name: "StringBuffer", doc: "A thread-safe, mutable sequence of characters." },
-  { name: "BufferedReader", doc: "Reads text from a character-input stream, buffering characters for efficient reading." },
-  { name: "InputStreamReader", doc: "An InputStreamReader is a bridge from byte streams to character streams." },
-  { name: "PrintWriter", doc: "Prints formatted representations of objects to a text-output stream." },
-  { name: "Exception", doc: "The class Exception and its subclasses indicate conditions that a reasonable application might want to catch." },
+  {
+    name: "BufferedReader",
+    doc: "Reads text from a character-input stream, buffering characters for efficient reading.",
+  },
+  {
+    name: "InputStreamReader",
+    doc: "An InputStreamReader is a bridge from byte streams to character streams.",
+  },
+  {
+    name: "PrintWriter",
+    doc: "Prints formatted representations of objects to a text-output stream.",
+  },
+  {
+    name: "Exception",
+    doc: "The class Exception and its subclasses indicate conditions that a reasonable application might want to catch.",
+  },
 ];
 
 const COMMON_PACKAGES = [
@@ -1228,12 +1373,24 @@ const COMMON_PACKAGES = [
 const STATIC_TYPES = [
   { name: "Math", fullName: "java.lang.Math", doc: "Math utility methods and constants." },
   { name: "Arrays", fullName: "java.util.Arrays", doc: "Array manipulation utilities." },
-  { name: "Collections", fullName: "java.util.Collections", doc: "Collection manipulation utilities." },
+  {
+    name: "Collections",
+    fullName: "java.util.Collections",
+    doc: "Collection manipulation utilities.",
+  },
   { name: "System", fullName: "java.lang.System", doc: "System facilities and standard I/O." },
-  { name: "Integer", fullName: "java.lang.Integer", doc: "Integer parsing and conversion utilities." },
+  {
+    name: "Integer",
+    fullName: "java.lang.Integer",
+    doc: "Integer parsing and conversion utilities.",
+  },
   { name: "Long", fullName: "java.lang.Long", doc: "Long parsing and conversion utilities." },
   { name: "Double", fullName: "java.lang.Double", doc: "Double parsing and conversion utilities." },
-  { name: "Character", fullName: "java.lang.Character", doc: "Character classification and conversion." },
+  {
+    name: "Character",
+    fullName: "java.lang.Character",
+    doc: "Character classification and conversion.",
+  },
   { name: "String", fullName: "java.lang.String", doc: "String creation and static methods." },
 ];
 
@@ -1302,13 +1459,15 @@ const SNIPPETS = [
   },
   {
     label: "try",
-    insertText: "try {\n    ${1}\n} catch (${2:Exception} ${3:e}) {\n    ${4:e.printStackTrace();}\n}",
+    insertText:
+      "try {\n    ${1}\n} catch (${2:Exception} ${3:e}) {\n    ${4:e.printStackTrace();}\n}",
     detail: "try { ... } catch (Exception e) { ... }",
     documentation: "Try-catch exception handling block.",
   },
   {
     label: "class",
-    insertText: "public class ${1:Main} {\n    public static void main(String[] args) {\n        ${2}\n    }\n}",
+    insertText:
+      "public class ${1:Main} {\n    public static void main(String[] args) {\n        ${2}\n    }\n}",
     detail: "public class Main { ... }",
     documentation: "Basic public class declaration with main method.",
   },
@@ -1423,7 +1582,9 @@ function extractJavaDocumentSymbols(
     }
 
     // Method parameter in method header: `public int solve(int a, String b)`
-    const paramMatches = [...line.matchAll(/\b(?:[a-zA-Z_]\w*(?:<[^>]+>)?(?:\[\])*)\s+([a-zA-Z_]\w*)\s*(?:,|\))/g)];
+    const paramMatches = [
+      ...line.matchAll(/\b(?:[a-zA-Z_]\w*(?:<[^>]+>)?(?:\[\])*)\s+([a-zA-Z_]\w*)\s*(?:,|\))/g),
+    ];
     for (const pm of paramMatches) {
       const pName = pm[1];
       if (
@@ -1445,7 +1606,9 @@ function extractJavaDocumentSymbols(
     }
 
     // Method definition: `public int solve(...)`
-    const methodMatch = line.match(/\b(?:public|private|protected|static|final|\s)*\s*([a-zA-Z_]\w*(?:<[^>]+>)?(?:\[\])*)\s+([a-zA-Z_]\w*)\s*\(/);
+    const methodMatch = line.match(
+      /\b(?:public|private|protected|static|final|\s)*\s*([a-zA-Z_]\w*(?:<[^>]+>)?(?:\[\])*)\s+([a-zA-Z_]\w*)\s*\(/,
+    );
     if (methodMatch) {
       const mName = methodMatch[2];
       if (!seen.has(mName) && mName !== currentWord && !JAVA_KEYWORD_SET.has(mName)) {
@@ -1549,8 +1712,7 @@ export function registerJavaCompletions(mInstance?: Monaco) {
           lineContent.slice(0, position.column - 1),
         );
         const isImportPackageLine =
-          !isImportStaticLine &&
-          /^\s*import\s+/i.test(lineContent.slice(0, position.column - 1));
+          !isImportStaticLine && /^\s*import\s+/i.test(lineContent.slice(0, position.column - 1));
 
         // Find identifier chain before the dot (e.g. "System.out.")
         const doubleChainMatch = textBeforeWord.match(/([a-zA-Z_]\w*)\.([a-zA-Z_]\w*)\.$/);
@@ -1639,60 +1801,77 @@ export function registerJavaCompletions(mInstance?: Monaco) {
         // Member access on common variables by identifier name heuristic
         if (/^(?:sc|scanner|in|reader)$/i.test(target)) {
           return {
-            suggestions: deduplicateSuggestions(toCompletionItems([...SCANNER_MEMBERS, ...COMMON_INSTANCE_MEMBERS], range)),
+            suggestions: deduplicateSuggestions(
+              toCompletionItems([...SCANNER_MEMBERS, ...COMMON_INSTANCE_MEMBERS], range),
+            ),
           };
         }
         if (/^(?:sb|strbuild|builder)$/i.test(target)) {
           return {
-            suggestions: deduplicateSuggestions(toCompletionItems([...STRINGBUILDER_MEMBERS, ...COMMON_INSTANCE_MEMBERS], range)),
+            suggestions: deduplicateSuggestions(
+              toCompletionItems([...STRINGBUILDER_MEMBERS, ...COMMON_INSTANCE_MEMBERS], range),
+            ),
           };
         }
         if (/^(?:str|s|text|line|word|name|msg)$/i.test(target)) {
           return {
-            suggestions: deduplicateSuggestions(toCompletionItems([...STRING_INSTANCE_MEMBERS, ...COMMON_INSTANCE_MEMBERS], range)),
+            suggestions: deduplicateSuggestions(
+              toCompletionItems([...STRING_INSTANCE_MEMBERS, ...COMMON_INSTANCE_MEMBERS], range),
+            ),
           };
         }
         if (/^(?:list|arr|nums|items|values|res|result)$/i.test(target)) {
           return {
-            suggestions: deduplicateSuggestions(toCompletionItems([...LIST_MEMBERS, ...COMMON_INSTANCE_MEMBERS], range)),
+            suggestions: deduplicateSuggestions(
+              toCompletionItems([...LIST_MEMBERS, ...COMMON_INSTANCE_MEMBERS], range),
+            ),
           };
         }
         if (/^(?:map|dict|counts|freq|seen)$/i.test(target)) {
           return {
-            suggestions: deduplicateSuggestions(toCompletionItems([...MAP_MEMBERS, ...COMMON_INSTANCE_MEMBERS], range)),
+            suggestions: deduplicateSuggestions(
+              toCompletionItems([...MAP_MEMBERS, ...COMMON_INSTANCE_MEMBERS], range),
+            ),
           };
         }
         if (/^(?:set|unique|visited)$/i.test(target)) {
           return {
-            suggestions: deduplicateSuggestions(toCompletionItems([...SET_MEMBERS, ...COMMON_INSTANCE_MEMBERS], range)),
+            suggestions: deduplicateSuggestions(
+              toCompletionItems([...SET_MEMBERS, ...COMMON_INSTANCE_MEMBERS], range),
+            ),
           };
         }
         if (/^(?:q|queue|dq|deque)$/i.test(target)) {
           return {
-            suggestions: deduplicateSuggestions(toCompletionItems([...QUEUE_MEMBERS, ...COMMON_INSTANCE_MEMBERS], range)),
+            suggestions: deduplicateSuggestions(
+              toCompletionItems([...QUEUE_MEMBERS, ...COMMON_INSTANCE_MEMBERS], range),
+            ),
           };
         }
         if (/^(?:st|stack)$/i.test(target)) {
           return {
-            suggestions: deduplicateSuggestions(toCompletionItems([...STACK_MEMBERS, ...COMMON_INSTANCE_MEMBERS], range)),
+            suggestions: deduplicateSuggestions(
+              toCompletionItems([...STACK_MEMBERS, ...COMMON_INSTANCE_MEMBERS], range),
+            ),
           };
         }
 
         // Default instance member access for any other object
         return {
           suggestions: deduplicateSuggestions(
-            toCompletionItems([
-              ...STRING_INSTANCE_MEMBERS,
-              ...LIST_MEMBERS,
-              ...COMMON_INSTANCE_MEMBERS,
-            ], range),
+            toCompletionItems(
+              [...STRING_INSTANCE_MEMBERS, ...LIST_MEMBERS, ...COMMON_INSTANCE_MEMBERS],
+              range,
+            ),
           ),
         };
       }
 
       // Check if user is typing an `import static` directive
       const textBeforeCursor = lineContent.slice(0, position.column - 1);
-      const isImportStaticDirective = /^\s*import\s+static\s+([a-zA-Z_][\w.]*)?$/i.test(textBeforeCursor);
+      const isImportStaticDirective = /^\s*import\s+static\s+([a-zA-Z_][\w.]*)?$/i.test(
+        textBeforeCursor,
+      );
 
       const textBeforeCursorFull = model.getValueInRange({
         startLineNumber: 1,
@@ -1724,7 +1903,9 @@ export function registerJavaCompletions(mInstance?: Monaco) {
       }
 
       // Check if user is typing a standard `import` statement
-      const isImportDirective = /^\s*import\s+(?!static\b)([a-zA-Z_][\w.]*)?$/i.test(textBeforeCursor);
+      const isImportDirective = /^\s*import\s+(?!static\b)([a-zA-Z_][\w.]*)?$/i.test(
+        textBeforeCursor,
+      );
 
       let importPackages: monacoDefault.languages.CompletionItem[] = [];
       if (isImportDirective && !hasClassBefore) {
