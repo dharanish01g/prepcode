@@ -915,3 +915,55 @@ test("C++: Hover documentation displays for qualified and type symbols", () => {
   const typeHover = cppHover("vector<int> nums;", 3); // over 'vector'
   assert.ok(typeHover && typeHover.contents.length > 0, "Hover over vector returns doc");
 });
+
+test("C++: Enhanced STL algorithms, constants, and auto pair inference", () => {
+  const stds = cppLabels("std::");
+  assert.ok(stds.includes("min_element"), "std:: suggests min_element");
+  assert.ok(stds.includes("max_element"), "std:: suggests max_element");
+  assert.ok(stds.includes("count"), "std:: suggests count");
+  assert.ok(stds.includes("find"), "std:: suggests find");
+  assert.ok(stds.includes("unique"), "std:: suggests unique");
+
+  const un = cppLabels("INT_");
+  assert.ok(un.includes("INT_MAX"), "suggests INT_MAX constant");
+  assert.ok(un.includes("INT_MIN"), "suggests INT_MIN constant");
+
+  const autoPair = cppLabels("auto p = std::make_pair(10, 20);\np.");
+  assert.ok(autoPair.includes("first"), "auto make_pair suggests first");
+  assert.ok(autoPair.includes("second"), "auto make_pair suggests second");
+});
+
+test("C++: #include handles both with and without angle brackets", () => {
+  const { mockMonaco, completionProviders } = setupMockMonaco();
+  registerCppCompletions(mockMonaco);
+  const provider = completionProviders["cpp"];
+
+  // 1. User typed '#include <'
+  const res1 = provider.provideCompletionItems(createMockModel("#include <"), endOf("#include <"));
+  const vec1 = res1.suggestions.find((s: any) => s.label === "vector");
+  assert.equal(
+    vec1.insertText,
+    "vector>",
+    "insertText includes closing angle bracket when '<' typed",
+  );
+
+  // 2. User typed '#include '
+  const res2 = provider.provideCompletionItems(createMockModel("#include "), endOf("#include "));
+  const vec2 = res2.suggestions.find((s: any) => s.label === "vector");
+  assert.equal(
+    vec2.insertText,
+    "<vector>",
+    "insertText wraps in angle brackets when plain '#include ' typed",
+  );
+});
+
+test("C++: Pointer chained navigation and iterator member access", () => {
+  const chainedTree = cppLabels("TreeNode* root = nullptr;\nroot->left->");
+  assert.ok(chainedTree.includes("val"), "root->left-> suggests val");
+  assert.ok(chainedTree.includes("left"), "root->left-> suggests left");
+  assert.ok(chainedTree.includes("right"), "root->left-> suggests right");
+
+  const iter = cppLabels("for (auto it = mp.begin(); it != mp.end(); ++it) {\n    it->");
+  assert.ok(iter.includes("first"), "it-> suggests first");
+  assert.ok(iter.includes("second"), "it-> suggests second");
+});

@@ -934,6 +934,74 @@ export const STD_MEMBERS: CompletionItemDef[] = [
     documentation: "Clamps v to range [lo, hi] (C++17).",
     snippet: "clamp(${1:v}, ${2:lo}, ${3:hi})",
   },
+  {
+    label: "min_element",
+    kind: monacoDefault.languages.CompletionItemKind.Function,
+    detail: "ForwardIt std::min_element(ForwardIt first, ForwardIt last)",
+    documentation: "Finds the smallest element in the range [first, last).",
+    snippet: "min_element(${1:v}.begin(), ${1:v}.end())",
+  },
+  {
+    label: "max_element",
+    kind: monacoDefault.languages.CompletionItemKind.Function,
+    detail: "ForwardIt std::max_element(ForwardIt first, ForwardIt last)",
+    documentation: "Finds the largest element in the range [first, last).",
+    snippet: "max_element(${1:v}.begin(), ${1:v}.end())",
+  },
+  {
+    label: "find",
+    kind: monacoDefault.languages.CompletionItemKind.Function,
+    detail: "InputIt std::find(InputIt first, InputIt last, const T& value)",
+    documentation: "Finds the first element in [first, last) equal to value.",
+    snippet: "find(${1:v}.begin(), ${1:v}.end(), ${2:val})",
+  },
+  {
+    label: "count",
+    kind: monacoDefault.languages.CompletionItemKind.Function,
+    detail:
+      "typename iterator_traits<InputIt>::difference_type std::count(InputIt first, InputIt last, const T& value)",
+    documentation:
+      "Returns the number of elements in [first, last) that satisfy an equality check with value.",
+    snippet: "count(${1:v}.begin(), ${1:v}.end(), ${2:val})",
+  },
+  {
+    label: "unique",
+    kind: monacoDefault.languages.CompletionItemKind.Function,
+    detail: "ForwardIt std::unique(ForwardIt first, ForwardIt last)",
+    documentation: "Removes all consecutive duplicate elements from range [first, last).",
+    snippet: "unique(${1:v}.begin(), ${1:v}.end())",
+  },
+  {
+    label: "next_permutation",
+    kind: monacoDefault.languages.CompletionItemKind.Function,
+    detail: "bool std::next_permutation(BidirIt first, BidirIt last)",
+    documentation:
+      "Transforms range [first, last) into the next lexicographically greater permutation.",
+    snippet: "next_permutation(${1:v}.begin(), ${1:v}.end())",
+  },
+  {
+    label: "prev_permutation",
+    kind: monacoDefault.languages.CompletionItemKind.Function,
+    detail: "bool std::prev_permutation(BidirIt first, BidirIt last)",
+    documentation:
+      "Transforms range [first, last) into the previous lexicographically greater permutation.",
+    snippet: "prev_permutation(${1:v}.begin(), ${1:v}.end())",
+  },
+  {
+    label: "iota",
+    kind: monacoDefault.languages.CompletionItemKind.Function,
+    detail: "void std::iota(ForwardIt first, ForwardIt last, T value)",
+    documentation:
+      "Fills the range [first, last) with sequentially increasing values starting from value.",
+    snippet: "iota(${1:v}.begin(), ${1:v}.end(), ${2:0})",
+  },
+  {
+    label: "stod",
+    kind: monacoDefault.languages.CompletionItemKind.Function,
+    detail: "double std::stod(const string& str, size_t* pos = 0)",
+    documentation: "Converts string to floating point number (double).",
+    snippet: "stod(${1:str})",
+  },
 ];
 
 export const CPP_KEYWORDS = [
@@ -986,6 +1054,10 @@ export const CPP_KEYWORDS = [
   "unsigned",
   "signed",
   "short",
+  "INT_MAX",
+  "INT_MIN",
+  "LLONG_MAX",
+  "LLONG_MIN",
 ];
 
 export const CPP_TYPES: { name: string; doc: string }[] = [
@@ -1366,7 +1438,8 @@ export function inferCppType(
   // Common competitive programming / interview naming heuristics:
   if (operatorKind === "->") {
     if (/^(?:head|curr|tail|prev|next|node|dummy)$/i.test(varName)) return "ListNode";
-    if (/^(?:root|parent|child)$/i.test(varName)) return "TreeNode";
+    if (/^(?:root|parent|child|left|right)$/i.test(varName)) return "TreeNode";
+    if (/^(?:it|iter)$/i.test(varName)) return "pair";
   }
 
   // Scan backwards to find variable declaration
@@ -1440,6 +1513,7 @@ export function inferCppType(
           if (/(?:^|\b)(?:std::)?unordered_map\b/.test(rhs)) return "unordered_map";
           if (/(?:^|\b)(?:std::)?set\b/.test(rhs)) return "set";
           if (/(?:^|\b)(?:std::)?unordered_set\b/.test(rhs)) return "unordered_set";
+          if (/(?:^|\b)(?:std::)?(?:pair|make_pair)\b/.test(rhs)) return "pair";
           if (/^-?\d/.test(rhs) || /^(?:true|false)\b/.test(rhs)) return "primitive";
         }
       }
@@ -1694,6 +1768,11 @@ export function registerCppCompletions(mInstance?: Monaco) {
             suggestions: deduplicateSuggestions(toCompletionItems(TREENODE_MEMBERS, range)),
           };
         }
+        if (inferred === "pair") {
+          return {
+            suggestions: deduplicateSuggestions(toCompletionItems(PAIR_MEMBERS, range)),
+          };
+        }
         if (inferred === "string") {
           return {
             suggestions: deduplicateSuggestions(toCompletionItems(STRING_MEMBERS, range)),
@@ -1708,7 +1787,12 @@ export function registerCppCompletions(mInstance?: Monaco) {
         return {
           suggestions: deduplicateSuggestions(
             toCompletionItems(
-              [...LISTNODE_MEMBERS, ...TREENODE_MEMBERS, ...COMMON_CONTAINER_MEMBERS],
+              [
+                ...LISTNODE_MEMBERS,
+                ...TREENODE_MEMBERS,
+                ...PAIR_MEMBERS,
+                ...COMMON_CONTAINER_MEMBERS,
+              ],
               range,
             ),
           ),
@@ -1793,18 +1877,20 @@ export function registerCppCompletions(mInstance?: Monaco) {
         };
       }
 
-      // Check if user is typing `#include <` directive
+      // Check if user is typing `#include <` or `#include "` directive
       const textBeforeCursor = lineContent.slice(0, position.column - 1);
-      const isIncludeDirective = /^\s*#\s*include\s*[<"]([a-zA-Z0-9_/.]*)?$/i.test(
+      const isIncludeDirective = /^\s*#\s*include(?:\s+([<"]?)([a-zA-Z0-9_/.]*)?)?$/i.test(
         textBeforeCursor,
       );
       if (isIncludeDirective) {
+        const hasOpenAngle = /<\s*([a-zA-Z0-9_/.]*)?$/.test(textBeforeCursor);
+        const hasOpenQuote = /"\s*([a-zA-Z0-9_/.]*)?$/.test(textBeforeCursor);
         return {
           suggestions: deduplicateSuggestions(
             COMMON_HEADERS.map((h) => ({
               label: h,
               kind: m.languages.CompletionItemKind.Module,
-              insertText: `${h}>`,
+              insertText: hasOpenAngle ? `${h}>` : hasOpenQuote ? `${h}"` : `<${h}>`,
               detail: `header <${h}>`,
               range,
             })),
