@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { registerCSharpCompletions } from "./csharp-completions.ts";
+import { registerJavaCompletions } from "./java-completions.ts";
 import { registerPythonCompletions } from "./python-completions.ts";
 
 // Helper mock types
@@ -712,3 +713,90 @@ test("C# Issue 9: no made-up signature for keywords or unknown methods", () => {
     "WriteLine(object? value) has one parameter",
   );
 });
+
+// ==========================================
+// JAVA COMPLETION & SIGNATURE HELP TESTS
+// ==========================================
+
+function javaLabels(src: string): string[] {
+  const { mockMonaco, completionProviders } = setupMockMonaco();
+  registerJavaCompletions(mockMonaco);
+  const r = completionProviders["java"].provideCompletionItems(createMockModel(src), endOf(src));
+  return r.suggestions.map((s: any) => s.label);
+}
+
+function javaSig(src: string): any {
+  const { mockMonaco, sigHelpProviders } = setupMockMonaco();
+  registerJavaCompletions(mockMonaco);
+  return sigHelpProviders["java"].provideSignatureHelp(createMockModel(src), endOf(src));
+}
+
+function javaHover(src: string, col: number, line = 1): any {
+  const { mockMonaco, hoverProviders } = setupMockMonaco();
+  registerJavaCompletions(mockMonaco);
+  return hoverProviders["java"].provideHover(createMockModel(src), { lineNumber: line, column: col });
+}
+
+test("Java: System members and System.out methods suggest correctly", () => {
+  const sys = javaLabels("System.");
+  assert.ok(sys.includes("out"), "System. suggests out");
+  assert.ok(sys.includes("err"), "System. suggests err");
+  assert.ok(sys.includes("currentTimeMillis"), "System. suggests currentTimeMillis");
+
+  const sout = javaLabels("System.out.");
+  assert.ok(sout.includes("println"), "System.out. suggests println");
+  assert.ok(sout.includes("print"), "System.out. suggests print");
+  assert.ok(sout.includes("printf"), "System.out. suggests printf");
+});
+
+test("Java: Math and Arrays static methods suggest correctly", () => {
+  const math = javaLabels("Math.");
+  assert.ok(math.includes("max") && math.includes("min") && math.includes("abs") && math.includes("PI"), "Math suggestions");
+
+  const arrays = javaLabels("Arrays.");
+  assert.ok(arrays.includes("sort") && arrays.includes("binarySearch") && arrays.includes("fill"), "Arrays suggestions");
+});
+
+test("Java: Variable heuristics provide appropriate member suggestions", () => {
+  const sc = javaLabels("Scanner sc = new Scanner(System.in);\nsc.");
+  assert.ok(sc.includes("nextInt") && sc.includes("nextLine"), "Scanner variable suggests Scanner methods");
+
+  const s = javaLabels("String s = \"hello\";\ns.");
+  assert.ok(s.includes("length") && s.includes("charAt") && s.includes("substring"), "String variable suggests String methods");
+
+  const list = javaLabels("List<Integer> nums = new ArrayList<>();\nnums.");
+  assert.ok(list.includes("add") && list.includes("get") && list.includes("size"), "List variable suggests List methods");
+});
+
+test("Java: Snippets and keywords are provided in un-dotted context", () => {
+  const labels = javaLabels("s");
+  assert.ok(labels.includes("sout"), "suggests sout snippet");
+  assert.ok(labels.includes("psvm") || labels.includes("main"), "suggests main/psvm snippet");
+  assert.ok(labels.includes("String"), "suggests String type");
+  assert.ok(labels.includes("public"), "suggests public keyword");
+});
+
+test("Java: Local variables and method parameters appear in completions", () => {
+  const src = "public class Solution {\n    public int solve(int maxLimit, String targetPrefix) {\n        int runningTotal = 0;\n        r";
+  const labels = javaLabels(src);
+  assert.ok(labels.includes("runningTotal"), "local variable runningTotal suggested");
+  assert.ok(labels.includes("maxLimit"), "parameter maxLimit suggested");
+  assert.ok(labels.includes("targetPrefix"), "parameter targetPrefix suggested");
+});
+
+test("Java: Signature help correctly tracks parameters and depth", () => {
+  const sig1 = javaSig("System.out.println(");
+  assert.ok(sig1 && sig1.value.signatures.length > 0, "System.out.println( has signature help");
+
+  const sig2 = javaSig("Math.max(10, ");
+  assert.ok(sig2, "Math.max(10, has signature help");
+  assert.equal(sig2.value.activeParameter, 1, "activeParameter is 1 after comma");
+});
+
+test("Java: Hover documentation displays for qualified calls and types", () => {
+  const src = "Math.max(1, 2);";
+  const hover = javaHover(src, 7); // over 'max'
+  assert.ok(hover && hover.contents.length > 0, "Hover over Math.max returns doc content");
+  assert.ok(hover.contents[0].value.includes("Math.max"), "Contains method signature in hover");
+});
+
