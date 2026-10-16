@@ -157,7 +157,7 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
   // Closing the window asks first if that would lose anything: unsaved editor
   // edits, unsynced changes, or (since they're deleted) a guest's files.
   useEffect(() => {
-    setCloseGuarded(session.guest ? guestFiles > 0 : unsynced > 0 || editorHasUnsaved);
+    setCloseGuarded(editorHasUnsaved || (session.guest ? guestFiles > 0 : unsynced > 0));
     return () => setCloseGuarded(false);
   }, [session.guest, guestFiles, unsynced, editorHasUnsaved]);
   useEffect(() => {
@@ -193,7 +193,7 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
       const id = toast.loading("Saving your work to GitHub…");
       const synced = await backgroundSync();
       toast.dismiss(id);
-      if (synced) closeWindow();
+      if (synced) void closeWindow();
       else setUnsyncedAction("close");
     };
   });
@@ -215,7 +215,8 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
           `Submit ${question.title} (${language.name})`,
         );
 
-  function closeWindow() {
+  async function closeWindow() {
+    await whenSavesSettled();
     allowClose();
     getCurrentWindow().close();
   }
@@ -311,7 +312,7 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
         onLogout={
           session.guest
             ? () => setGuestAction("log out")
-            : unsynced > 0
+            : unsynced > 0 || editorHasUnsaved
               ? () => setUnsyncedAction("log out")
               : () => void handleLogout()
         }
@@ -568,7 +569,7 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
           const action = unsyncedAction;
           setUnsyncedAction(null);
           if (action === "log out") void handleLogout();
-          else closeWindow();
+          else void closeWindow();
         }}
         onSyncAndProceed={async () => {
           const action = unsyncedAction;
@@ -576,7 +577,7 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
           if (!(await sync.sync())) return;
           setUnsyncedAction(null);
           if (action === "log out") void handleLogout();
-          else closeWindow();
+          else void closeWindow();
         }}
       />
       <GuestLogoutDialog
@@ -593,7 +594,7 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
           if (action === "log out") void handleLogout(true);
           else {
             discardEditorRef.current();
-            closeWindow();
+            void closeWindow();
           }
         }}
       />
@@ -626,7 +627,7 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
                   void handleLogout(true);
                 } else {
                   discardEditorRef.current();
-                  closeWindow();
+                  void closeWindow();
                 }
               }}
             >
