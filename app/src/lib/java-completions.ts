@@ -309,6 +309,25 @@ const ARRAYS_MEMBERS: MethodItem[] = [
   },
 ];
 
+// --- Array Instance Members -----------------------------------------------------------
+
+const ARRAY_MEMBERS: MethodItem[] = [
+  {
+    label: "length",
+    kind: monacoDefault.languages.CompletionItemKind.Field,
+    snippet: "length",
+    detail: "final int [].length",
+    documentation: "The number of components (length) of the array.",
+  },
+  {
+    label: "clone",
+    kind: monacoDefault.languages.CompletionItemKind.Method,
+    snippet: "clone()",
+    detail: "Object [].clone()",
+    documentation: "Creates and returns a copy of this array.",
+  },
+];
+
 // --- Collections Members --------------------------------------------------------------
 
 const COLLECTIONS_MEMBERS: MethodItem[] = [
@@ -609,6 +628,78 @@ const CHARACTER_STATIC_MEMBERS: MethodItem[] = [
     snippet: "getNumericValue(${1:ch})",
     detail: "static int Character.getNumericValue(char ch)",
     documentation: "Returns the int value that the specified Unicode character represents.",
+  },
+];
+
+// --- Boolean Static Members -----------------------------------------------------------
+
+const BOOLEAN_STATIC_MEMBERS: MethodItem[] = [
+  {
+    label: "parseBoolean",
+    snippet: "parseBoolean(${1:s})",
+    detail: "static boolean Boolean.parseBoolean(String s)",
+    documentation: "Parses the string argument as a boolean.",
+  },
+  {
+    label: "valueOf",
+    snippet: "valueOf(${1:b})",
+    detail: "static Boolean Boolean.valueOf(boolean b)",
+    documentation: "Returns a Boolean instance representing the specified boolean value.",
+  },
+  {
+    label: "compare",
+    snippet: "compare(${1:x}, ${2:y})",
+    detail: "static int Boolean.compare(boolean x, boolean y)",
+    documentation: "Compares two boolean values.",
+  },
+  {
+    label: "TRUE",
+    kind: monacoDefault.languages.CompletionItemKind.Field,
+    snippet: "TRUE",
+    detail: "static final Boolean Boolean.TRUE",
+    documentation: "The Boolean object corresponding to the primitive value true.",
+  },
+  {
+    label: "FALSE",
+    kind: monacoDefault.languages.CompletionItemKind.Field,
+    snippet: "FALSE",
+    detail: "static final Boolean Boolean.FALSE",
+    documentation: "The Boolean object corresponding to the primitive value false.",
+  },
+];
+
+// --- Objects Static Members -----------------------------------------------------------
+
+const OBJECTS_MEMBERS: MethodItem[] = [
+  {
+    label: "equals",
+    snippet: "equals(${1:a}, ${2:b})",
+    detail: "static boolean Objects.equals(Object a, Object b)",
+    documentation: "Returns true if the arguments are equal to each other and false otherwise.",
+  },
+  {
+    label: "hashCode",
+    snippet: "hashCode(${1:o})",
+    detail: "static int Objects.hashCode(Object o)",
+    documentation: "Returns the hash code of a non-null argument and 0 for a null argument.",
+  },
+  {
+    label: "requireNonNull",
+    snippet: "requireNonNull(${1:obj})",
+    detail: "static <T> T Objects.requireNonNull(T obj)",
+    documentation: "Checks that the specified object reference is not null.",
+  },
+  {
+    label: "isNull",
+    snippet: "isNull(${1:obj})",
+    detail: "static boolean Objects.isNull(Object obj)",
+    documentation: "Returns true if the provided reference is null otherwise returns false.",
+  },
+  {
+    label: "nonNull",
+    snippet: "nonNull(${1:obj})",
+    detail: "static boolean Objects.nonNull(Object obj)",
+    documentation: "Returns true if the provided reference is non-null otherwise returns false.",
   },
 ];
 
@@ -1282,6 +1373,64 @@ const JAVA_KEYWORDS = [
   "null",
 ];
 
+const JAVA_KEYWORD_DOCS: Record<string, string> = {
+  abstract: "Declares that a class or method is abstract and must be implemented by subclasses.",
+  assert: "Tests an expression during execution to verify developer assumptions.",
+  boolean: "Primitive data type with only two possible values: true and false.",
+  break: "Terminates the current loop or switch statement.",
+  byte: "8-bit signed two's complement integer (-128 to 127).",
+  case: "Marks a branch in a switch statement.",
+  catch: "Declares a block of statements to handle exceptions thrown in a try block.",
+  char: "16-bit Unicode character (0 to 65,535).",
+  class: "Declares a class, the blueprint from which individual objects are created.",
+  continue: "Skips the remainder of the current loop iteration and proceeds to the next.",
+  default: "Specifies the default block in a switch, or default method in an interface.",
+  do: "Starts a do-while loop whose body executes at least once before testing condition.",
+  double: "Double-precision 64-bit IEEE 754 floating point number.",
+  else: "Executes statements when the boolean condition of an if statement is false.",
+  enum: "Declares an enumerated type (a fixed set of constants).",
+  extends: "Indicates that a class or interface inherits from a superclass or superinterface.",
+  final:
+    "Prevents a class from being subclassed, a method from being overridden, or a variable from being reassigned.",
+  finally: "Block executed after a try-catch block regardless of whether an exception occurred.",
+  float: "Single-precision 32-bit IEEE 754 floating point number.",
+  for: "Defines a loop with initialization, termination condition, and step increment.",
+  if: "Executes a block of code only if the specified condition is true.",
+  implements: "Declares that a class implements one or more interfaces.",
+  import: "Imports classes, packages, or static members from other packages.",
+  instanceof: "Tests whether an object is an instance of a specified class or interface.",
+  int: "32-bit signed two's complement integer (-2^31 to 2^31-1).",
+  interface: "Declares an interface, a reference type containing abstract methods and constants.",
+  long: "64-bit signed two's complement integer (-2^63 to 2^63-1).",
+  native: "Specifies that a method is implemented in native code using JNI.",
+  new: "Creates a new object instance or array and allocates memory on the heap.",
+  package: "Specifies the namespace/package to which the Java source file belongs.",
+  private: "Restricts access to members within the declaring class only.",
+  protected: "Allows access to members within the package and by subclasses.",
+  public: "Allows unrestricted access from any other class.",
+  return: "Exits from the current method, optionally returning a value.",
+  short: "16-bit signed two's complement integer (-32,768 to 32,767).",
+  static: "Specifies that a field or method belongs to the class itself rather than instances.",
+  strictfp: "Restricts floating-point calculations to ensure portability across hardware.",
+  super: "Refers to the superclass of the current object or constructor.",
+  switch: "Selects one of many code blocks to execute based on an expression value.",
+  synchronized: "Ensures thread-safe access to a block or method via object monitor lock.",
+  this: "Refers to the current object instance within an instance method or constructor.",
+  throw: "Explicitly throws an exception object.",
+  throws: "Declares exceptions that can be thrown by a method.",
+  transient: "Specifies that a field should not be serialized.",
+  try: "Defines a block of code to be tested for errors while being executed.",
+  void: "Specifies that a method does not return any value.",
+  volatile: "Indicates that a field's value may be modified asynchronously by multiple threads.",
+  while: "Repeats a statement block while a boolean condition remains true.",
+  record: "Declares a transparent, immutable data carrier class (Java 14+).",
+  var: "Infers the type of a local variable from its initializer expression (Java 10+).",
+  yield: "Yields a value from a switch expression (Java 14+).",
+  true: "Boolean literal representing truth.",
+  false: "Boolean literal representing falsehood.",
+  null: "Literal value representing a null reference pointing to no object.",
+};
+
 const JAVA_TYPES = [
   { name: "String", doc: "The String class represents character strings." },
   {
@@ -1392,6 +1541,8 @@ const STATIC_TYPES = [
     doc: "Character classification and conversion.",
   },
   { name: "String", fullName: "java.lang.String", doc: "String creation and static methods." },
+  { name: "Boolean", fullName: "java.lang.Boolean", doc: "Boolean parsing and constants." },
+  { name: "Objects", fullName: "java.util.Objects", doc: "Object utility methods." },
 ];
 
 // --- Snippets -------------------------------------------------------------------------
@@ -1410,6 +1561,12 @@ const SNIPPETS = [
     documentation: "Prints formatted text to standard output.",
   },
   {
+    label: "serr",
+    insertText: "System.err.println(${1});",
+    detail: "System.err.println(...);",
+    documentation: "Prints the value to standard error output followed by a newline.",
+  },
+  {
     label: "main",
     insertText: "public static void main(String[] args) {\n    ${1}\n}",
     detail: "public static void main(String[] args)",
@@ -1426,6 +1583,12 @@ const SNIPPETS = [
     insertText: "for (int ${1:i} = 0; ${1:i} < ${2:n}; ${1:i}++) {\n    ${3}\n}",
     detail: "for (int i = 0; i < n; i++)",
     documentation: "Standard indexed for loop.",
+  },
+  {
+    label: "forr",
+    insertText: "for (int ${1:i} = ${2:n} - 1; ${1:i} >= 0; ${1:i}--) {\n    ${3}\n}",
+    detail: "for (int i = n - 1; i >= 0; i--)",
+    documentation: "Reverse indexed for loop.",
   },
   {
     label: "foreach",
@@ -1511,6 +1674,379 @@ function toCompletionItems(
 
 const JAVA_KEYWORD_SET = new Set(JAVA_KEYWORDS);
 const JAVA_TYPE_SET = new Set(JAVA_TYPES.map((t) => t.name));
+const JAVA_NON_TYPE_KEYWORDS = new Set([
+  "abstract",
+  "assert",
+  "break",
+  "case",
+  "catch",
+  "class",
+  "continue",
+  "default",
+  "do",
+  "else",
+  "enum",
+  "extends",
+  "final",
+  "finally",
+  "for",
+  "if",
+  "implements",
+  "import",
+  "instanceof",
+  "interface",
+  "native",
+  "new",
+  "package",
+  "private",
+  "protected",
+  "public",
+  "record",
+  "return",
+  "static",
+  "strictfp",
+  "super",
+  "switch",
+  "synchronized",
+  "this",
+  "throw",
+  "throws",
+  "transient",
+  "try",
+  "void",
+  "volatile",
+  "while",
+  "yield",
+  "true",
+  "false",
+  "null",
+]);
+
+export type JavaCategory =
+  | "array"
+  | "primitive"
+  | "scanner"
+  | "stringbuilder"
+  | "string"
+  | "list"
+  | "map"
+  | "set"
+  | "queue"
+  | "stack"
+  | "other";
+
+export interface JavaVariableInfo {
+  name: string;
+  typeString: string;
+  category: JavaCategory;
+  elementType?: string;
+  elementCategory?: JavaCategory;
+  origin?: string;
+}
+
+export interface JavaMethodInfo {
+  name: string;
+  returnType: string;
+  parameters: { type: string; name: string }[];
+  signature: string;
+}
+
+function classifyJavaType(
+  rawType: string,
+  rhs?: string,
+): {
+  typeString: string;
+  category: JavaCategory;
+  elementType?: string;
+  elementCategory?: JavaCategory;
+} {
+  const typeStr = rawType.trim();
+
+  // If declared with `var`, inspect RHS initializer
+  if (typeStr === "var" && rhs) {
+    const trimmedRhs = rhs.trim();
+    if (/^new\s+[a-zA-Z_]\w*\s*\[/.test(trimmedRhs) || /^\{/.test(trimmedRhs)) {
+      return { typeString: "array", category: "array" };
+    }
+    if (/^new\s+Scanner\b/.test(trimmedRhs)) {
+      return { typeString: "Scanner", category: "scanner" };
+    }
+    if (/^new\s+StringBuilder\b/.test(trimmedRhs)) {
+      return { typeString: "StringBuilder", category: "stringbuilder" };
+    }
+    if (/^new\s+StringBuffer\b/.test(trimmedRhs)) {
+      return { typeString: "StringBuffer", category: "stringbuilder" };
+    }
+    if (
+      /^new\s+(?:Array|Linked)?List\b/.test(trimmedRhs) ||
+      /^List\s*\.\s*of\b/.test(trimmedRhs) ||
+      /^Arrays\s*\.\s*asList\b/.test(trimmedRhs)
+    ) {
+      return { typeString: "List", category: "list" };
+    }
+    if (
+      /^new\s+(?:Hash|Tree|LinkedHash)?Map\b/.test(trimmedRhs) ||
+      /^Map\s*\.\s*of\b/.test(trimmedRhs)
+    ) {
+      return { typeString: "Map", category: "map" };
+    }
+    if (
+      /^new\s+(?:Hash|Tree|LinkedHash)?Set\b/.test(trimmedRhs) ||
+      /^Set\s*\.\s*of\b/.test(trimmedRhs)
+    ) {
+      return { typeString: "Set", category: "set" };
+    }
+    if (/^new\s+(?:PriorityQueue|ArrayDeque|LinkedList)\b/.test(trimmedRhs)) {
+      return { typeString: "Queue", category: "queue" };
+    }
+    if (/^new\s+Stack\b/.test(trimmedRhs)) {
+      return { typeString: "Stack", category: "stack" };
+    }
+    if (trimmedRhs.startsWith('"') && trimmedRhs.endsWith('"')) {
+      return { typeString: "String", category: "string" };
+    }
+    if (/^(?:-?\d+(\.\d+)?[fFdDlL]?|true|false|'(\\.|[^'\\])')$/.test(trimmedRhs)) {
+      return { typeString: "primitive", category: "primitive" };
+    }
+  }
+
+  // Array check: int[], String[], List<Integer>[], Object[][]
+  if (typeStr.endsWith("[]")) {
+    const baseType = typeStr.slice(0, -2).trim();
+    const baseInfo = classifyJavaType(baseType);
+    return {
+      typeString: typeStr,
+      category: "array",
+      elementType: baseType,
+      elementCategory: baseInfo.category,
+    };
+  }
+
+  // Primitive types
+  if (/^(?:int|long|double|float|boolean|char|byte|short)$/.test(typeStr)) {
+    return { typeString: typeStr, category: "primitive" };
+  }
+
+  // String / CharSequence
+  if (/^(?:String|CharSequence)$/.test(typeStr)) {
+    return { typeString: typeStr, category: "string" };
+  }
+
+  // Scanner / BufferedReader
+  if (/^(?:Scanner|BufferedReader)$/.test(typeStr)) {
+    return { typeString: typeStr, category: "scanner" };
+  }
+
+  // StringBuilder / StringBuffer
+  if (/^(?:StringBuilder|StringBuffer)$/.test(typeStr)) {
+    return { typeString: typeStr, category: "stringbuilder" };
+  }
+
+  // List: List<T>, ArrayList<T>, LinkedList<T>, Vector<T>
+  const listMatch = typeStr.match(/^(?:List|ArrayList|LinkedList|Vector)(?:<(.+)>)?$/);
+  if (listMatch) {
+    const elemType = listMatch[1] ? listMatch[1].trim() : undefined;
+    const elemInfo = elemType ? classifyJavaType(elemType) : undefined;
+    return {
+      typeString: typeStr,
+      category: "list",
+      elementType: elemType,
+      elementCategory: elemInfo?.category,
+    };
+  }
+
+  // Map: Map<K, V>, HashMap<K, V>, TreeMap<K, V>, LinkedHashMap<K, V>
+  if (/^(?:Map|HashMap|TreeMap|LinkedHashMap|ConcurrentHashMap)(?:<.*>)?$/.test(typeStr)) {
+    return { typeString: typeStr, category: "map" };
+  }
+
+  // Set: Set<T>, HashSet<T>, TreeSet<T>, LinkedHashSet<T>
+  const setMatch = typeStr.match(/^(?:Set|HashSet|TreeSet|LinkedHashSet)(?:<(.+)>)?$/);
+  if (setMatch) {
+    const elemType = setMatch[1] ? setMatch[1].trim() : undefined;
+    const elemInfo = elemType ? classifyJavaType(elemType) : undefined;
+    return {
+      typeString: typeStr,
+      category: "set",
+      elementType: elemType,
+      elementCategory: elemInfo?.category,
+    };
+  }
+
+  // Queue / Deque
+  const queueMatch = typeStr.match(/^(?:Queue|Deque|ArrayDeque|PriorityQueue)(?:<(.+)>)?$/);
+  if (queueMatch) {
+    const elemType = queueMatch[1] ? queueMatch[1].trim() : undefined;
+    const elemInfo = elemType ? classifyJavaType(elemType) : undefined;
+    return {
+      typeString: typeStr,
+      category: "queue",
+      elementType: elemType,
+      elementCategory: elemInfo?.category,
+    };
+  }
+
+  // Stack
+  const stackMatch = typeStr.match(/^Stack(?:<(.+)>)?$/);
+  if (stackMatch) {
+    const elemType = stackMatch[1] ? stackMatch[1].trim() : undefined;
+    const elemInfo = elemType ? classifyJavaType(elemType) : undefined;
+    return {
+      typeString: typeStr,
+      category: "stack",
+      elementType: elemType,
+      elementCategory: elemInfo?.category,
+    };
+  }
+
+  return { typeString: typeStr, category: "other" };
+}
+
+function inferJavaVariablesAndTypes(
+  model: monacoDefault.editor.ITextModel,
+): Map<string, JavaVariableInfo> {
+  const vars = new Map<string, JavaVariableInfo>();
+  const lineCount = model.getLineCount();
+
+  for (let ln = 1; ln <= lineCount; ln++) {
+    const rawLine = model.getLineContent(ln);
+    const line = rawLine.split("//")[0].trim();
+    if (!line) continue;
+
+    // 1. Foreach variable: `for (int x : nums)` or `for (String item : list)`
+    const foreachMatch = line.match(
+      /\bfor\s*\(\s*(?:final\s+)?([a-zA-Z_]\w*(?:<[^>]+>)?(?:\[\])*)\s+([a-zA-Z_]\w*)\s*:/,
+    );
+    if (foreachMatch) {
+      const typeStr = foreachMatch[1];
+      const name = foreachMatch[2];
+      if (!JAVA_KEYWORD_SET.has(name) && !JAVA_TYPE_SET.has(name)) {
+        const classified = classifyJavaType(typeStr);
+        vars.set(name, {
+          name,
+          typeString: typeStr,
+          category: classified.category,
+          elementType: classified.elementType,
+          elementCategory: classified.elementCategory,
+          origin: "foreach variable",
+        });
+      }
+    }
+
+    // 2. Method parameters: `public int solve(int[] nums, int target)`
+    const methodParamMatch = line.match(
+      /\b(?:public|private|protected|static|final|\s)*\s*[a-zA-Z_]\w*(?:<[^>]+>)?(?:\[\])*\s+[a-zA-Z_]\w*\s*\(([^)]*)\)/,
+    );
+    if (methodParamMatch && methodParamMatch[1].trim()) {
+      const paramsRaw = methodParamMatch[1].trim();
+      const pTokens = paramsRaw.split(",");
+      for (const pt of pTokens) {
+        const pm = pt
+          .trim()
+          .match(/^(?:final\s+)?([a-zA-Z_]\w*(?:<[^>]+>)?(?:\[\])*)\s+([a-zA-Z_]\w*)(\[\])?$/);
+        if (pm) {
+          let pType = pm[1];
+          const pName = pm[2];
+          if (pm[3]) pType += "[]";
+          if (!JAVA_KEYWORD_SET.has(pName) && !JAVA_TYPE_SET.has(pName)) {
+            const classified = classifyJavaType(pType);
+            vars.set(pName, {
+              name: pName,
+              typeString: pType,
+              category: classified.category,
+              elementType: classified.elementType,
+              elementCategory: classified.elementCategory,
+              origin: "parameter",
+            });
+          }
+        }
+      }
+    }
+
+    // 3. Local variables and fields:
+    const varDeclMatch = line.match(
+      /^(?:public\s+|private\s+|protected\s+|static\s+|final\s+|transient\s+|volatile\s+)*([a-zA-Z_]\w*(?:<[^>]+>)?(?:\[\])*)\s+([a-zA-Z_]\w*(?:\s*\[\])?(?:\s*=\s*[^,;]+)?(?:\s*,\s*[a-zA-Z_]\w*(?:\s*\[\])?(?:\s*=\s*[^,;]+)?)*)\s*[;,]/,
+    );
+    if (varDeclMatch) {
+      const baseType = varDeclMatch[1];
+      if (!JAVA_NON_TYPE_KEYWORDS.has(baseType)) {
+        const rest = varDeclMatch[2];
+        const entries = rest.split(",");
+        for (const entry of entries) {
+          const m = entry.trim().match(/^([a-zA-Z_]\w*)(\s*\[\])?(?:\s*=\s*(.+))?$/);
+          if (m) {
+            const name = m[1];
+            const hasCArray = Boolean(m[2]);
+            const rhs = m[3] ? m[3].trim() : undefined;
+            let fullType = baseType;
+            if (hasCArray) fullType += "[]";
+            if (!JAVA_KEYWORD_SET.has(name) && !JAVA_TYPE_SET.has(name)) {
+              const classified = classifyJavaType(fullType, rhs);
+              vars.set(name, {
+                name,
+                typeString: fullType,
+                category: classified.category,
+                elementType: classified.elementType,
+                elementCategory: classified.elementCategory,
+                origin: "local variable",
+              });
+            }
+          }
+        }
+      }
+    }
+  }
+
+  return vars;
+}
+
+function extractJavaDocumentMethods(
+  model: monacoDefault.editor.ITextModel,
+): Map<string, JavaMethodInfo> {
+  const methods = new Map<string, JavaMethodInfo>();
+  const lineCount = model.getLineCount();
+
+  for (let ln = 1; ln <= lineCount; ln++) {
+    const rawLine = model.getLineContent(ln);
+    const line = rawLine.split("//")[0].trim();
+    if (!line) continue;
+
+    const methodMatch = line.match(
+      /\b(?:public|private|protected|static|final|\s)*\s*([a-zA-Z_]\w*(?:<[^>]+>)?(?:\[\])*)\s+([a-zA-Z_]\w*)\s*\(([^)]*)\)/,
+    );
+    if (methodMatch) {
+      const returnType = methodMatch[1];
+      const name = methodMatch[2];
+      const paramsRaw = methodMatch[3].trim();
+
+      if (!JAVA_KEYWORD_SET.has(name) && !JAVA_TYPE_SET.has(name)) {
+        const paramList: { type: string; name: string }[] = [];
+        if (paramsRaw) {
+          for (const p of paramsRaw.split(",")) {
+            const pm = p
+              .trim()
+              .match(/^(?:final\s+)?([a-zA-Z_]\w*(?:<[^>]+>)?(?:\[\])*)\s+([a-zA-Z_]\w*)(\[\])?$/);
+            if (pm) {
+              paramList.push({
+                type: pm[3] ? `${pm[1]}[]` : pm[1],
+                name: pm[2],
+              });
+            }
+          }
+        }
+        const sig = `${returnType} ${name}(${paramList.map((p) => `${p.type} ${p.name}`).join(", ")})`;
+        methods.set(name, {
+          name,
+          returnType,
+          parameters: paramList,
+          signature: sig,
+        });
+      }
+    }
+  }
+
+  return methods;
+}
 
 /**
  * Scans the current Java document for user-defined variables, methods,
@@ -1522,109 +2058,49 @@ function extractJavaDocumentSymbols(
   range: monacoDefault.IRange,
   monaco: Monaco,
 ): monacoDefault.languages.CompletionItem[] {
-  const lineCount = model.getLineCount();
   const currentWord = model.getWordUntilPosition(position).word;
-
   const seen = new Set<string>();
   const items: monacoDefault.languages.CompletionItem[] = [];
 
+  // 1. Inferred variables and parameters
+  const varsMap = inferJavaVariablesAndTypes(model);
+  for (const [name, info] of varsMap) {
+    if (!seen.has(name) && name !== currentWord) {
+      seen.add(name);
+      items.push({
+        label: name,
+        kind: monaco.languages.CompletionItemKind.Variable,
+        insertText: name,
+        detail: `${info.typeString} ${name} (${info.origin ?? "local"})`,
+        range,
+        sortText: `0_${name}`,
+      });
+    }
+  }
+
+  // 2. User-defined methods
+  const docMethods = extractJavaDocumentMethods(model);
+  for (const [name, info] of docMethods) {
+    if (!seen.has(name) && name !== currentWord) {
+      seen.add(name);
+      items.push({
+        label: name,
+        kind: monaco.languages.CompletionItemKind.Method,
+        insertText: `${name}()`,
+        detail: info.signature,
+        range,
+        sortText: `0_${name}`,
+      });
+    }
+  }
+
+  // 3. User-defined classes: `class Solution`
+  const lineCount = model.getLineCount();
   for (let ln = 1; ln <= lineCount; ln++) {
     const rawLine = model.getLineContent(ln);
     const line = rawLine.split("//")[0].trim();
     if (!line) continue;
 
-    // Variable declaration: `int count = 0;` or `String s;` or `var list = new ArrayList<>();`
-    const varMatch = line.match(
-      /\b(?:var|[a-zA-Z_]\w*(?:<[^>]+>)?(?:\[\])*)\s+([a-zA-Z_]\w*)\s*(?:=|;|,|\))/,
-    );
-    if (varMatch) {
-      const name = varMatch[1];
-      if (
-        !seen.has(name) &&
-        name !== currentWord &&
-        !JAVA_KEYWORD_SET.has(name) &&
-        !JAVA_TYPE_SET.has(name)
-      ) {
-        seen.add(name);
-        items.push({
-          label: name,
-          kind: monaco.languages.CompletionItemKind.Variable,
-          insertText: name,
-          detail: `variable ${name} (local)`,
-          range,
-          sortText: `0_${name}`,
-        });
-      }
-    }
-
-    // Foreach variable: `for (int x : nums)` or `for (String item : list)`
-    const foreachMatch = line.match(
-      /\bfor\s*\(\s*(?:var|[a-zA-Z_]\w*(?:<[^>]+>)?(?:\[\])*)\s+([a-zA-Z_]\w*)\s*:/,
-    );
-    if (foreachMatch) {
-      const name = foreachMatch[1];
-      if (
-        !seen.has(name) &&
-        name !== currentWord &&
-        !JAVA_KEYWORD_SET.has(name) &&
-        !JAVA_TYPE_SET.has(name)
-      ) {
-        seen.add(name);
-        items.push({
-          label: name,
-          kind: monaco.languages.CompletionItemKind.Variable,
-          insertText: name,
-          detail: `variable ${name} (foreach)`,
-          range,
-          sortText: `0_${name}`,
-        });
-      }
-    }
-
-    // Method parameter in method header: `public int solve(int a, String b)`
-    const paramMatches = [
-      ...line.matchAll(/\b(?:[a-zA-Z_]\w*(?:<[^>]+>)?(?:\[\])*)\s+([a-zA-Z_]\w*)\s*(?:,|\))/g),
-    ];
-    for (const pm of paramMatches) {
-      const pName = pm[1];
-      if (
-        !seen.has(pName) &&
-        pName !== currentWord &&
-        !JAVA_KEYWORD_SET.has(pName) &&
-        !JAVA_TYPE_SET.has(pName)
-      ) {
-        seen.add(pName);
-        items.push({
-          label: pName,
-          kind: monaco.languages.CompletionItemKind.Variable,
-          insertText: pName,
-          detail: `parameter ${pName}`,
-          range,
-          sortText: `0_${pName}`,
-        });
-      }
-    }
-
-    // Method definition: `public int solve(...)`
-    const methodMatch = line.match(
-      /\b(?:public|private|protected|static|final|\s)*\s*([a-zA-Z_]\w*(?:<[^>]+>)?(?:\[\])*)\s+([a-zA-Z_]\w*)\s*\(/,
-    );
-    if (methodMatch) {
-      const mName = methodMatch[2];
-      if (!seen.has(mName) && mName !== currentWord && !JAVA_KEYWORD_SET.has(mName)) {
-        seen.add(mName);
-        items.push({
-          label: mName,
-          kind: monaco.languages.CompletionItemKind.Method,
-          insertText: `${mName}()`,
-          detail: `method ${mName}`,
-          range,
-          sortText: `0_${mName}`,
-        });
-      }
-    }
-
-    // Class definition: `class Solution`
     const classMatch = line.match(/\bclass\s+([a-zA-Z_]\w*)/);
     if (classMatch) {
       const name = classMatch[1];
@@ -1642,7 +2118,7 @@ function extractJavaDocumentSymbols(
     }
   }
 
-  // General identifier extraction from document (comments & strings stripped)
+  // 4. General identifier extraction from document (comments & strings stripped)
   const fullText = model.getValue();
   const codeWithoutCommentsAndStrings = fullText
     .replace(/\/\*[\s\S]*?\*\//g, " ")
@@ -1714,7 +2190,92 @@ export function registerJavaCompletions(mInstance?: Monaco) {
         const isImportPackageLine =
           !isImportStaticLine && /^\s*import\s+/i.test(lineContent.slice(0, position.column - 1));
 
-        // Find identifier chain before the dot (e.g. "System.out.")
+        // Subscript access: e.g. `words[0].` or `nums[i].` or `matrix[0].`
+        const subMatch = textBeforeWord.match(/([a-zA-Z_]\w*)\[[^\]]*\]\.$/);
+        if (subMatch) {
+          const baseVar = subMatch[1];
+          const varsMap = inferJavaVariablesAndTypes(model);
+          const varInfo = varsMap.get(baseVar);
+          if (varInfo) {
+            if (varInfo.category === "array") {
+              if (varInfo.elementCategory === "primitive") {
+                // Primitive element of array (e.g. int[] nums; nums[0].) cannot be dereferenced
+                return { suggestions: [] };
+              }
+              if (varInfo.elementCategory === "string") {
+                return {
+                  suggestions: deduplicateSuggestions(
+                    toCompletionItems(
+                      [...STRING_INSTANCE_MEMBERS, ...COMMON_INSTANCE_MEMBERS],
+                      range,
+                    ),
+                  ),
+                };
+              }
+              if (varInfo.elementCategory === "array") {
+                return {
+                  suggestions: deduplicateSuggestions(
+                    toCompletionItems([...ARRAY_MEMBERS, ...COMMON_INSTANCE_MEMBERS], range),
+                  ),
+                };
+              }
+              if (varInfo.elementCategory === "list") {
+                return {
+                  suggestions: deduplicateSuggestions(
+                    toCompletionItems([...LIST_MEMBERS, ...COMMON_INSTANCE_MEMBERS], range),
+                  ),
+                };
+              }
+            } else if (varInfo.category === "list") {
+              if (varInfo.elementCategory === "string") {
+                return {
+                  suggestions: deduplicateSuggestions(
+                    toCompletionItems(
+                      [...STRING_INSTANCE_MEMBERS, ...COMMON_INSTANCE_MEMBERS],
+                      range,
+                    ),
+                  ),
+                };
+              }
+            }
+          }
+          return {
+            suggestions: deduplicateSuggestions(toCompletionItems(COMMON_INSTANCE_MEMBERS, range)),
+          };
+        }
+
+        // String literal access: e.g. `"hello".`
+        if (/"(?:\\.|[^"\\])*"\.$/.test(textBeforeWord)) {
+          return {
+            suggestions: deduplicateSuggestions(
+              toCompletionItems([...STRING_INSTANCE_MEMBERS, ...COMMON_INSTANCE_MEMBERS], range),
+            ),
+          };
+        }
+
+        // Chained string return: e.g. `.toString().`, `.nextLine().`, `.substring(...).`
+        if (
+          /\.(?:toString|nextLine|next|substring|trim|toLowerCase|toUpperCase)\s*\([^)]*\)\.$/.test(
+            textBeforeWord,
+          )
+        ) {
+          return {
+            suggestions: deduplicateSuggestions(
+              toCompletionItems([...STRING_INSTANCE_MEMBERS, ...COMMON_INSTANCE_MEMBERS], range),
+            ),
+          };
+        }
+
+        // Chained array return: e.g. `.toArray().`
+        if (/\.toArray\s*\([^)]*\)\.$/.test(textBeforeWord)) {
+          return {
+            suggestions: deduplicateSuggestions(
+              toCompletionItems([...ARRAY_MEMBERS, ...COMMON_INSTANCE_MEMBERS], range),
+            ),
+          };
+        }
+
+        // Double chain before dot: e.g. "System.out." or "System.err."
         const doubleChainMatch = textBeforeWord.match(/([a-zA-Z_]\w*)\.([a-zA-Z_]\w*)\.$/);
         if (doubleChainMatch) {
           const prefix = doubleChainMatch[1].toLowerCase();
@@ -1731,49 +2292,61 @@ export function registerJavaCompletions(mInstance?: Monaco) {
           return { suggestions: [] };
         }
 
-        const target = singleMatch[1].toLowerCase();
+        const target = singleMatch[1];
+        const lowerTarget = target.toLowerCase();
 
-        if (target === "system") {
+        // Standard library static classes
+        if (lowerTarget === "system") {
           return {
             suggestions: deduplicateSuggestions(toCompletionItems(SYSTEM_MEMBERS, range)),
           };
         }
-        if (target === "math") {
+        if (lowerTarget === "math") {
           return {
             suggestions: deduplicateSuggestions(toCompletionItems(MATH_MEMBERS, range)),
           };
         }
-        if (target === "arrays") {
+        if (lowerTarget === "arrays") {
           return {
             suggestions: deduplicateSuggestions(toCompletionItems(ARRAYS_MEMBERS, range)),
           };
         }
-        if (target === "collections") {
+        if (lowerTarget === "collections") {
           return {
             suggestions: deduplicateSuggestions(toCompletionItems(COLLECTIONS_MEMBERS, range)),
           };
         }
-        if (target === "integer") {
+        if (lowerTarget === "integer") {
           return {
             suggestions: deduplicateSuggestions(toCompletionItems(INTEGER_STATIC_MEMBERS, range)),
           };
         }
-        if (target === "long") {
+        if (lowerTarget === "long") {
           return {
             suggestions: deduplicateSuggestions(toCompletionItems(LONG_STATIC_MEMBERS, range)),
           };
         }
-        if (target === "double") {
+        if (lowerTarget === "double") {
           return {
             suggestions: deduplicateSuggestions(toCompletionItems(DOUBLE_STATIC_MEMBERS, range)),
           };
         }
-        if (target === "character") {
+        if (lowerTarget === "character") {
           return {
             suggestions: deduplicateSuggestions(toCompletionItems(CHARACTER_STATIC_MEMBERS, range)),
           };
         }
-        if (target === "string") {
+        if (lowerTarget === "boolean") {
+          return {
+            suggestions: deduplicateSuggestions(toCompletionItems(BOOLEAN_STATIC_MEMBERS, range)),
+          };
+        }
+        if (lowerTarget === "objects") {
+          return {
+            suggestions: deduplicateSuggestions(toCompletionItems(OBJECTS_MEMBERS, range)),
+          };
+        }
+        if (lowerTarget === "string") {
           const stringStaticAndInstance = [...STRING_INSTANCE_MEMBERS, ...COMMON_INSTANCE_MEMBERS];
           return {
             suggestions: deduplicateSuggestions(toCompletionItems(stringStaticAndInstance, range)),
@@ -1781,7 +2354,7 @@ export function registerJavaCompletions(mInstance?: Monaco) {
         }
 
         // Handle `import java.`
-        if (target === "java" && isImportPackageLine) {
+        if (lowerTarget === "java" && isImportPackageLine) {
           const subPackages = COMMON_PACKAGES.filter((p) => p.startsWith("java.")).map((p) =>
             p.slice("java.".length),
           );
@@ -1798,57 +2371,141 @@ export function registerJavaCompletions(mInstance?: Monaco) {
           };
         }
 
-        // Member access on common variables by identifier name heuristic
-        if (/^(?:sc|scanner|in|reader)$/i.test(target)) {
+        // Inferred variable type from the current Java document
+        const varsMap = inferJavaVariablesAndTypes(model);
+        const inferredVar = varsMap.get(target);
+
+        if (inferredVar) {
+          if (inferredVar.category === "primitive") {
+            // Primitive types in Java cannot be dereferenced (e.g. `int count; count.`)
+            return { suggestions: [] };
+          }
+          if (inferredVar.category === "array") {
+            return {
+              suggestions: deduplicateSuggestions(
+                toCompletionItems([...ARRAY_MEMBERS, ...COMMON_INSTANCE_MEMBERS], range),
+              ),
+            };
+          }
+          if (inferredVar.category === "scanner") {
+            return {
+              suggestions: deduplicateSuggestions(
+                toCompletionItems([...SCANNER_MEMBERS, ...COMMON_INSTANCE_MEMBERS], range),
+              ),
+            };
+          }
+          if (inferredVar.category === "stringbuilder") {
+            return {
+              suggestions: deduplicateSuggestions(
+                toCompletionItems([...STRINGBUILDER_MEMBERS, ...COMMON_INSTANCE_MEMBERS], range),
+              ),
+            };
+          }
+          if (inferredVar.category === "string") {
+            return {
+              suggestions: deduplicateSuggestions(
+                toCompletionItems([...STRING_INSTANCE_MEMBERS, ...COMMON_INSTANCE_MEMBERS], range),
+              ),
+            };
+          }
+          if (inferredVar.category === "list") {
+            return {
+              suggestions: deduplicateSuggestions(
+                toCompletionItems([...LIST_MEMBERS, ...COMMON_INSTANCE_MEMBERS], range),
+              ),
+            };
+          }
+          if (inferredVar.category === "map") {
+            return {
+              suggestions: deduplicateSuggestions(
+                toCompletionItems([...MAP_MEMBERS, ...COMMON_INSTANCE_MEMBERS], range),
+              ),
+            };
+          }
+          if (inferredVar.category === "set") {
+            return {
+              suggestions: deduplicateSuggestions(
+                toCompletionItems([...SET_MEMBERS, ...COMMON_INSTANCE_MEMBERS], range),
+              ),
+            };
+          }
+          if (inferredVar.category === "queue") {
+            return {
+              suggestions: deduplicateSuggestions(
+                toCompletionItems([...QUEUE_MEMBERS, ...COMMON_INSTANCE_MEMBERS], range),
+              ),
+            };
+          }
+          if (inferredVar.category === "stack") {
+            return {
+              suggestions: deduplicateSuggestions(
+                toCompletionItems([...STACK_MEMBERS, ...COMMON_INSTANCE_MEMBERS], range),
+              ),
+            };
+          }
+          return {
+            suggestions: deduplicateSuggestions(toCompletionItems(COMMON_INSTANCE_MEMBERS, range)),
+          };
+        }
+
+        // Fallback: identifier name heuristic when declaration is undeclared or outside scope
+        if (/^(?:sc|scanner|in|reader)$/i.test(lowerTarget)) {
           return {
             suggestions: deduplicateSuggestions(
               toCompletionItems([...SCANNER_MEMBERS, ...COMMON_INSTANCE_MEMBERS], range),
             ),
           };
         }
-        if (/^(?:sb|strbuild|builder)$/i.test(target)) {
+        if (/^(?:sb|strbuild|builder)$/i.test(lowerTarget)) {
           return {
             suggestions: deduplicateSuggestions(
               toCompletionItems([...STRINGBUILDER_MEMBERS, ...COMMON_INSTANCE_MEMBERS], range),
             ),
           };
         }
-        if (/^(?:str|s|text|line|word|name|msg)$/i.test(target)) {
+        if (/^(?:str|s|text|line|word|name|msg)$/i.test(lowerTarget)) {
           return {
             suggestions: deduplicateSuggestions(
               toCompletionItems([...STRING_INSTANCE_MEMBERS, ...COMMON_INSTANCE_MEMBERS], range),
             ),
           };
         }
-        if (/^(?:list|arr|nums|items|values|res|result)$/i.test(target)) {
+        if (/^(?:arr|nums)$/i.test(lowerTarget)) {
+          return {
+            suggestions: deduplicateSuggestions(
+              toCompletionItems([...ARRAY_MEMBERS, ...COMMON_INSTANCE_MEMBERS], range),
+            ),
+          };
+        }
+        if (/^(?:list|items|values|res|result)$/i.test(lowerTarget)) {
           return {
             suggestions: deduplicateSuggestions(
               toCompletionItems([...LIST_MEMBERS, ...COMMON_INSTANCE_MEMBERS], range),
             ),
           };
         }
-        if (/^(?:map|dict|counts|freq|seen)$/i.test(target)) {
+        if (/^(?:map|dict|counts|freq|seen)$/i.test(lowerTarget)) {
           return {
             suggestions: deduplicateSuggestions(
               toCompletionItems([...MAP_MEMBERS, ...COMMON_INSTANCE_MEMBERS], range),
             ),
           };
         }
-        if (/^(?:set|unique|visited)$/i.test(target)) {
+        if (/^(?:set|unique|visited)$/i.test(lowerTarget)) {
           return {
             suggestions: deduplicateSuggestions(
               toCompletionItems([...SET_MEMBERS, ...COMMON_INSTANCE_MEMBERS], range),
             ),
           };
         }
-        if (/^(?:q|queue|dq|deque)$/i.test(target)) {
+        if (/^(?:q|queue|dq|deque)$/i.test(lowerTarget)) {
           return {
             suggestions: deduplicateSuggestions(
               toCompletionItems([...QUEUE_MEMBERS, ...COMMON_INSTANCE_MEMBERS], range),
             ),
           };
         }
-        if (/^(?:st|stack)$/i.test(target)) {
+        if (/^(?:st|stack)$/i.test(lowerTarget)) {
           return {
             suggestions: deduplicateSuggestions(
               toCompletionItems([...STACK_MEMBERS, ...COMMON_INSTANCE_MEMBERS], range),
@@ -1936,15 +2593,36 @@ export function registerJavaCompletions(mInstance?: Monaco) {
         range,
       }));
 
-      const snippetItems: monacoDefault.languages.CompletionItem[] = SNIPPETS.map((s) => ({
-        label: s.label,
-        kind: m.languages.CompletionItemKind.Snippet,
-        insertText: s.insertText,
-        insertTextRules: m.languages.CompletionItemInsertTextRule.InsertAsSnippet,
-        detail: s.detail,
-        documentation: s.documentation,
-        range,
-      }));
+      const snippetItems: monacoDefault.languages.CompletionItem[] = SNIPPETS.map((s) => {
+        let insertText = s.insertText;
+
+        // Context-aware adjustment for "main" / "psvm" snippet:
+        // If user already typed "public static void", "static void", "public static", "public", or "void",
+        // avoid duplicating keywords.
+        if (s.label === "main" || s.label === "psvm") {
+          if (/(?:^|\s)public\s+static\s+void$/.test(textBeforeWord)) {
+            insertText = "main(String[] args) {\n    ${1}\n}";
+          } else if (/(?:^|\s)public\s+static$/.test(textBeforeWord)) {
+            insertText = "void main(String[] args) {\n    ${1}\n}";
+          } else if (/(?:^|\s)static\s+void$/.test(textBeforeWord)) {
+            insertText = "main(String[] args) {\n    ${1}\n}";
+          } else if (/(?:^|\s)public$/.test(textBeforeWord)) {
+            insertText = "static void main(String[] args) {\n    ${1}\n}";
+          } else if (/(?:^|\s)void$/.test(textBeforeWord)) {
+            insertText = "main(String[] args) {\n    ${1}\n}";
+          }
+        }
+
+        return {
+          label: s.label,
+          kind: m.languages.CompletionItemKind.Snippet,
+          insertText,
+          insertTextRules: m.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+          detail: s.detail,
+          documentation: s.documentation,
+          range,
+        };
+      });
 
       const localSymbols = extractJavaDocumentSymbols(model, position, range, m);
 
@@ -1960,7 +2638,7 @@ export function registerJavaCompletions(mInstance?: Monaco) {
     },
   });
 
-  // 2. Hover Provider: displays method signatures and docs on mouse hover
+  // 2. Hover Provider: displays method signatures, variable types, and keyword docs on mouse hover
   m.languages.registerHoverProvider("java", {
     provideHover(model, position) {
       const word = model.getWordAtPosition(position);
@@ -1968,6 +2646,7 @@ export function registerJavaCompletions(mInstance?: Monaco) {
 
       const lineContent = model.getLineContent(position.lineNumber);
       const textBefore = lineContent.slice(0, word.startColumn - 1).trimEnd();
+      const name = word.word;
 
       // Check qualification before the word
       let qualifier: string | null = null;
@@ -1987,29 +2666,76 @@ export function registerJavaCompletions(mInstance?: Monaco) {
       let match: MethodItem | undefined;
 
       if (qualifier === "system.out" || qualifier === "system.err") {
-        match = findInList(PRINTSTREAM_MEMBERS, word.word);
+        match = findInList(PRINTSTREAM_MEMBERS, name);
       } else if (qualifier === "system") {
-        match = findInList(SYSTEM_MEMBERS, word.word);
+        match = findInList(SYSTEM_MEMBERS, name);
       } else if (qualifier === "math") {
-        match = findInList(MATH_MEMBERS, word.word);
+        match = findInList(MATH_MEMBERS, name);
       } else if (qualifier === "arrays") {
-        match = findInList(ARRAYS_MEMBERS, word.word);
+        match = findInList(ARRAYS_MEMBERS, name);
       } else if (qualifier === "collections") {
-        match = findInList(COLLECTIONS_MEMBERS, word.word);
+        match = findInList(COLLECTIONS_MEMBERS, name);
       } else if (qualifier === "integer") {
-        match = findInList(INTEGER_STATIC_MEMBERS, word.word);
+        match = findInList(INTEGER_STATIC_MEMBERS, name);
       } else if (qualifier === "long") {
-        match = findInList(LONG_STATIC_MEMBERS, word.word);
+        match = findInList(LONG_STATIC_MEMBERS, name);
       } else if (qualifier === "double") {
-        match = findInList(DOUBLE_STATIC_MEMBERS, word.word);
+        match = findInList(DOUBLE_STATIC_MEMBERS, name);
       } else if (qualifier === "character") {
-        match = findInList(CHARACTER_STATIC_MEMBERS, word.word);
+        match = findInList(CHARACTER_STATIC_MEMBERS, name);
+      } else if (qualifier === "boolean") {
+        match = findInList(BOOLEAN_STATIC_MEMBERS, name);
+      } else if (qualifier === "objects") {
+        match = findInList(OBJECTS_MEMBERS, name);
       } else if (qualifier === "string") {
-        match = findInList(STRING_INSTANCE_MEMBERS, word.word);
+        match = findInList(STRING_INSTANCE_MEMBERS, name);
+      } else if (qualifier) {
+        // Check inferred variable types from the document
+        const varsMap = inferJavaVariablesAndTypes(model);
+        const v = varsMap.get(qualifier);
+        if (v) {
+          if (v.category === "array") match = findInList(ARRAY_MEMBERS, name);
+          else if (v.category === "string") match = findInList(STRING_INSTANCE_MEMBERS, name);
+          else if (v.category === "stringbuilder") match = findInList(STRINGBUILDER_MEMBERS, name);
+          else if (v.category === "scanner") match = findInList(SCANNER_MEMBERS, name);
+          else if (v.category === "list") match = findInList(LIST_MEMBERS, name);
+          else if (v.category === "map") match = findInList(MAP_MEMBERS, name);
+          else if (v.category === "set") match = findInList(SET_MEMBERS, name);
+          else if (v.category === "queue") match = findInList(QUEUE_MEMBERS, name);
+          else if (v.category === "stack") match = findInList(STACK_MEMBERS, name);
+        }
+        // Fallback to name heuristics
+        if (!match) {
+          if (/^(?:sc|scanner|in|reader)$/i.test(qualifier))
+            match = findInList(SCANNER_MEMBERS, name);
+          else if (/^(?:sb|strbuild|builder)$/i.test(qualifier))
+            match = findInList(STRINGBUILDER_MEMBERS, name);
+          else if (/^(?:str|s|text|line|word|name|msg)$/i.test(qualifier))
+            match = findInList(STRING_INSTANCE_MEMBERS, name);
+          else if (/^(?:arr|nums)$/i.test(qualifier)) match = findInList(ARRAY_MEMBERS, name);
+          else if (/^(?:list|items|values|res|result)$/i.test(qualifier))
+            match = findInList(LIST_MEMBERS, name);
+          else if (/^(?:map|dict|counts|freq|seen)$/i.test(qualifier))
+            match = findInList(MAP_MEMBERS, name);
+          else if (/^(?:set|unique|visited)$/i.test(qualifier))
+            match = findInList(SET_MEMBERS, name);
+          else if (/^(?:q|queue|dq|deque)$/i.test(qualifier))
+            match = findInList(QUEUE_MEMBERS, name);
+          else if (/^(?:st|stack)$/i.test(qualifier)) match = findInList(STACK_MEMBERS, name);
+        }
+        if (!match) {
+          match = findInList(COMMON_INSTANCE_MEMBERS, name);
+        }
       }
 
       if (match) {
         return {
+          range: new m.Range(
+            position.lineNumber,
+            word.startColumn,
+            position.lineNumber,
+            word.endColumn,
+          ),
           contents: [
             { value: `\`\`\`java\n${match.detail ?? match.label}\n\`\`\`` },
             { value: match.documentation ?? "" },
@@ -2017,15 +2743,74 @@ export function registerJavaCompletions(mInstance?: Monaco) {
         };
       }
 
-      // Standalone Hover: Types
-      const typeMatch = JAVA_TYPES.find((t) => t.name === word.word);
-      if (typeMatch && !qualifier) {
-        return {
-          contents: [
-            { value: `\`\`\`java\nclass ${typeMatch.name}\n\`\`\`` },
-            { value: typeMatch.doc },
-          ],
-        };
+      // Standalone hover without qualifier
+      if (!qualifier) {
+        // 1. User-defined local variable / parameter
+        const varsMap = inferJavaVariablesAndTypes(model);
+        const v = varsMap.get(name);
+        if (v) {
+          return {
+            range: new m.Range(
+              position.lineNumber,
+              word.startColumn,
+              position.lineNumber,
+              word.endColumn,
+            ),
+            contents: [
+              { value: `\`\`\`java\n${v.typeString} ${v.name}\n\`\`\`` },
+              { value: `*${v.origin ?? "Local variable"}*` },
+            ],
+          };
+        }
+
+        // 2. User-defined method in document
+        const docMethods = extractJavaDocumentMethods(model);
+        const dm = docMethods.get(name);
+        if (dm) {
+          return {
+            range: new m.Range(
+              position.lineNumber,
+              word.startColumn,
+              position.lineNumber,
+              word.endColumn,
+            ),
+            contents: [
+              { value: `\`\`\`java\n${dm.signature}\n\`\`\`` },
+              { value: `*Method declared in current file.*` },
+            ],
+          };
+        }
+
+        // 3. Types
+        const typeMatch = JAVA_TYPES.find((t) => t.name === name);
+        if (typeMatch) {
+          return {
+            range: new m.Range(
+              position.lineNumber,
+              word.startColumn,
+              position.lineNumber,
+              word.endColumn,
+            ),
+            contents: [
+              { value: `\`\`\`java\nclass ${typeMatch.name}\n\`\`\`` },
+              { value: typeMatch.doc },
+            ],
+          };
+        }
+
+        // 4. Keywords
+        const kwDoc = JAVA_KEYWORD_DOCS[name];
+        if (kwDoc) {
+          return {
+            range: new m.Range(
+              position.lineNumber,
+              word.startColumn,
+              position.lineNumber,
+              word.endColumn,
+            ),
+            contents: [{ value: `\`\`\`java\nkeyword ${name}\n\`\`\`` }, { value: kwDoc }],
+          };
+        }
       }
 
       return null;
@@ -2133,7 +2918,85 @@ export function registerJavaCompletions(mInstance?: Monaco) {
       const methodName = callParts[callParts.length - 1];
       const qualifier = callParts.slice(0, -1).join(".").toLowerCase();
 
-      // Look up signature definition
+      // 1. If keyword and no qualifier, return null immediately (e.g. `if (`, `while (`)
+      if (!qualifier && JAVA_KEYWORD_SET.has(methodName)) {
+        return null;
+      }
+
+      // Helper function to build signature result
+      const buildSigResult = (item: MethodItem, argCount: number) => {
+        if (!item.detail) return null;
+        const paramMatch = item.detail.match(/\(([^)]*)\)/);
+        const paramsRaw = paramMatch ? paramMatch[1].trim() : "";
+        const paramList = paramsRaw ? paramsRaw.split(/\s*,\s*/) : [];
+
+        return {
+          value: {
+            signatures: [
+              {
+                label: item.detail,
+                documentation: item.documentation,
+                parameters: paramList.map((p) => ({ label: p })),
+              },
+            ],
+            activeSignature: 0,
+            activeParameter: Math.min(argCount, Math.max(0, paramList.length - 1)),
+          },
+          dispose: () => {},
+        };
+      };
+
+      // 2. Unqualified call (e.g. `solve(`, `max(`)
+      if (!qualifier) {
+        // Check document-defined methods
+        const docMethods = extractJavaDocumentMethods(model);
+        const docMethod = docMethods.get(methodName);
+        if (docMethod) {
+          return {
+            value: {
+              signatures: [
+                {
+                  label: docMethod.signature,
+                  documentation: "Method declared in current file.",
+                  parameters: docMethod.parameters.map((p) => ({
+                    label: `${p.type} ${p.name}`,
+                  })),
+                },
+              ],
+              activeSignature: 0,
+              activeParameter: Math.min(top.argCount, Math.max(0, docMethod.parameters.length - 1)),
+            },
+            dispose: () => {},
+          };
+        }
+
+        // Check statically imported Math methods
+        const fullDoc = model.getValue();
+        if (
+          /import\s+static\s+java\.lang\.Math\s*\.\s*(?:\*|max|min|abs|sqrt|pow|round|floor|ceil)\s*;/i.test(
+            fullDoc,
+          )
+        ) {
+          const mathFound = MATH_MEMBERS.find((mItem) => mItem.label === methodName);
+          if (mathFound) return buildSigResult(mathFound, top.argCount);
+        }
+
+        // Check statically imported Arrays methods
+        if (
+          /import\s+static\s+java\.util\.Arrays\s*\.\s*(?:\*|sort|binarySearch|fill)\s*;/i.test(
+            fullDoc,
+          )
+        ) {
+          const arrFound = ARRAYS_MEMBERS.find((aItem) => aItem.label === methodName);
+          if (arrFound) return buildSigResult(arrFound, top.argCount);
+        }
+
+        // Unqualified calls that are NOT user methods or statically imported:
+        // Do NOT match instance methods (like List.add or String.charAt)
+        return null;
+      }
+
+      // 3. Qualified call: look up signature definition
       const ALL_LISTS: { qual?: string; items: MethodItem[] }[] = [
         { qual: "system.out", items: PRINTSTREAM_MEMBERS },
         { qual: "system.err", items: PRINTSTREAM_MEMBERS },
@@ -2145,39 +3008,68 @@ export function registerJavaCompletions(mInstance?: Monaco) {
         { qual: "long", items: LONG_STATIC_MEMBERS },
         { qual: "double", items: DOUBLE_STATIC_MEMBERS },
         { qual: "character", items: CHARACTER_STATIC_MEMBERS },
-        { items: STRING_INSTANCE_MEMBERS },
-        { items: STRINGBUILDER_MEMBERS },
-        { items: LIST_MEMBERS },
-        { items: MAP_MEMBERS },
-        { items: SET_MEMBERS },
-        { items: QUEUE_MEMBERS },
-        { items: STACK_MEMBERS },
+        { qual: "boolean", items: BOOLEAN_STATIC_MEMBERS },
+        { qual: "objects", items: OBJECTS_MEMBERS },
       ];
 
       for (const entry of ALL_LISTS) {
-        if (entry.qual && qualifier !== entry.qual) continue;
-        const found = entry.items.find((item) => item.label === methodName);
-        if (found && found.detail) {
-          // Parse parameter names from detail, e.g. "void PrintStream.println(Object x)"
-          const paramMatch = found.detail.match(/\(([^)]*)\)/);
-          const paramsRaw = paramMatch ? paramMatch[1].trim() : "";
-          const paramList = paramsRaw ? paramsRaw.split(/\s*,\s*/) : [];
-
-          return {
-            value: {
-              signatures: [
-                {
-                  label: found.detail,
-                  documentation: found.documentation,
-                  parameters: paramList.map((p) => ({ label: p })),
-                },
-              ],
-              activeSignature: 0,
-              activeParameter: Math.min(top.argCount, Math.max(0, paramList.length - 1)),
-            },
-            dispose: () => {},
-          };
+        if (entry.qual === qualifier) {
+          const found = entry.items.find((item) => item.label === methodName);
+          if (found) return buildSigResult(found, top.argCount);
         }
+      }
+
+      // Check inferred variable types from document
+      const varsMap = inferJavaVariablesAndTypes(model);
+      const varInfo = varsMap.get(qualifier);
+      let targetList: MethodItem[] | null = null;
+
+      if (varInfo) {
+        if (varInfo.category === "string") targetList = STRING_INSTANCE_MEMBERS;
+        else if (varInfo.category === "stringbuilder") targetList = STRINGBUILDER_MEMBERS;
+        else if (varInfo.category === "scanner") targetList = SCANNER_MEMBERS;
+        else if (varInfo.category === "list") targetList = LIST_MEMBERS;
+        else if (varInfo.category === "map") targetList = MAP_MEMBERS;
+        else if (varInfo.category === "set") targetList = SET_MEMBERS;
+        else if (varInfo.category === "queue") targetList = QUEUE_MEMBERS;
+        else if (varInfo.category === "stack") targetList = STACK_MEMBERS;
+        else if (varInfo.category === "array") targetList = ARRAY_MEMBERS;
+      }
+
+      // Name heuristics fallback
+      if (!targetList) {
+        if (/^(?:sc|scanner|in|reader)$/i.test(qualifier)) targetList = SCANNER_MEMBERS;
+        else if (/^(?:sb|strbuild|builder)$/i.test(qualifier)) targetList = STRINGBUILDER_MEMBERS;
+        else if (/^(?:str|s|text|line|word|name|msg)$/i.test(qualifier))
+          targetList = STRING_INSTANCE_MEMBERS;
+        else if (/^(?:list|items|values|res|result)$/i.test(qualifier)) targetList = LIST_MEMBERS;
+        else if (/^(?:arr|nums)$/i.test(qualifier)) targetList = ARRAY_MEMBERS;
+        else if (/^(?:map|dict|counts|freq|seen)$/i.test(qualifier)) targetList = MAP_MEMBERS;
+        else if (/^(?:set|unique|visited)$/i.test(qualifier)) targetList = SET_MEMBERS;
+        else if (/^(?:q|queue|dq|deque)$/i.test(qualifier)) targetList = QUEUE_MEMBERS;
+        else if (/^(?:st|stack)$/i.test(qualifier)) targetList = STACK_MEMBERS;
+      }
+
+      if (targetList) {
+        const found = targetList.find((item) => item.label === methodName);
+        if (found) return buildSigResult(found, top.argCount);
+      }
+
+      // General fallback across instance method lists for the method name
+      const GENERAL_INSTANCE_LISTS = [
+        STRING_INSTANCE_MEMBERS,
+        STRINGBUILDER_MEMBERS,
+        SCANNER_MEMBERS,
+        LIST_MEMBERS,
+        MAP_MEMBERS,
+        SET_MEMBERS,
+        QUEUE_MEMBERS,
+        STACK_MEMBERS,
+        ARRAY_MEMBERS,
+      ];
+      for (const list of GENERAL_INSTANCE_LISTS) {
+        const found = list.find((item) => item.label === methodName);
+        if (found) return buildSigResult(found, top.argCount);
       }
 
       return null;

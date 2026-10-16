@@ -818,3 +818,194 @@ test("Java: Hover documentation displays for qualified calls and types", () => {
   assert.ok(hover && hover.contents.length > 0, "Hover over Math.max returns doc content");
   assert.ok(hover.contents[0].value.includes("Math.max"), "Contains method signature in hover");
 });
+
+test("Java Issue 1: Arrays suggest length and clone, NOT List methods (add, size, get)", () => {
+  // Explicit array declaration
+  const arrLabels = javaLabels("int[] arr = new int[10];\narr.");
+  assert.ok(arrLabels.includes("length"), "arr. suggests length field");
+  assert.ok(arrLabels.includes("clone"), "arr. suggests clone method");
+  assert.ok(!arrLabels.includes("add"), "arr. must not suggest List.add");
+  assert.ok(!arrLabels.includes("size"), "arr. must not suggest List.size");
+  assert.ok(!arrLabels.includes("get"), "arr. must not suggest List.get");
+
+  // Untyped heuristic fallback for 'arr'
+  const fallbackArr = javaLabels("arr.");
+  assert.ok(
+    fallbackArr.includes("length") && fallbackArr.includes("clone"),
+    "untyped arr suggests array members",
+  );
+  assert.ok(!fallbackArr.includes("add"), "untyped arr must not suggest List.add");
+
+  // Array of Strings
+  const wordsLabels = javaLabels("String[] words = new String[5];\nwords.");
+  assert.ok(
+    wordsLabels.includes("length") && !wordsLabels.includes("add"),
+    "words array suggests length, not add",
+  );
+});
+
+test("Java Issue 2: Primitive types (int, long, double, boolean) yield empty member suggestions", () => {
+  assert.equal(
+    javaLabels("int count = 5;\ncount.").length,
+    0,
+    "int count. must yield 0 suggestions (primitive cannot be dereferenced)",
+  );
+  assert.equal(
+    javaLabels("double total = 10.5;\ntotal.").length,
+    0,
+    "double total. must yield 0 suggestions",
+  );
+  assert.equal(
+    javaLabels("boolean isValid = true;\nisValid.").length,
+    0,
+    "boolean isValid. must yield 0 suggestions",
+  );
+});
+
+test("Java Issue 3: No made-up signature help for keywords or unqualified method calls", () => {
+  const { mockMonaco, sigHelpProviders } = setupMockMonaco();
+  registerJavaCompletions(mockMonaco);
+  const provider = sigHelpProviders["java"];
+
+  // Keywords and unqualified non-existent methods must return null
+  for (const line of [
+    "    if (",
+    "    while (x < ",
+    "    for (int i = 0; ",
+    "    Add(1, ",
+    "    get(0",
+    "    size(",
+  ]) {
+    const src = `class A {\n  void M() {\n${line}`;
+    assert.equal(provider.provideSignatureHelp(createMockModel(src), endOf(src)), null, line);
+  }
+
+  // Statically imported Math.max returns signature help even without 'Math.'
+  const staticMathSrc = "import static java.lang.Math.*;\nclass A {\n  void M() {\n    max(10, ";
+  const sigStatic = provider.provideSignatureHelp(
+    createMockModel(staticMathSrc),
+    endOf(staticMathSrc),
+  );
+  assert.ok(sigStatic, "Statically imported Math.max returns signature help");
+  assert.equal(sigStatic.value.activeParameter, 1, "Active parameter is 1 after comma");
+
+  // User-defined method in file returns its real declared signature
+  const userMethodSrc =
+    "class Solution {\n    public int customSum(int a, int b) {\n        return a + b;\n    }\n    void run() {\n        customSum(1, ";
+  const sigUser = provider.provideSignatureHelp(
+    createMockModel(userMethodSrc),
+    endOf(userMethodSrc),
+  );
+  assert.ok(sigUser, "User method in file returns signature help");
+  assert.ok(
+    sigUser.value.signatures[0].label.includes("customSum"),
+    "Contains user method signature",
+  );
+  assert.equal(sigUser.value.activeParameter, 1, "Active parameter is 1 after comma");
+});
+
+test("Java Issue 4: Context-aware main and psvm snippets prevent duplicate keywords", () => {
+  const { mockMonaco, completionProviders } = setupMockMonaco();
+  registerJavaCompletions(mockMonaco);
+  const provider = completionProviders["java"];
+
+  const getSnippetInsert = (src: string, label: string) => {
+    const res = provider.provideCompletionItems(createMockModel(src), endOf(src));
+    const item = res.suggestions.find((s: any) => s.label === label);
+    return item ? item.insertText : null;
+  };
+
+  // On empty line: full declaration
+  const full = getSnippetInsert("    ", "main");
+  assert.ok(full.startsWith("public static void main"), "Empty line suggests full signature");
+
+  // After 'public static void ': trimmed to prevent keyword duplication
+  const trimmed1 = getSnippetInsert("public static void ", "main");
+  assert.ok(
+    trimmed1.startsWith("main(String[] args)"),
+    "After 'public static void ', insertText is just main(...)",
+  );
+
+  // After 'public static ': trimmed
+  const trimmed2 = getSnippetInsert("public static ", "psvm");
+  assert.ok(
+    trimmed2.startsWith("void main(String[] args)"),
+    "After 'public static ', insertText is void main(...)",
+  );
+
+  // After 'static void ': trimmed
+  const trimmed3 = getSnippetInsert("static void ", "main");
+  assert.ok(
+    trimmed3.startsWith("main(String[] args)"),
+    "After 'static void ', insertText is main(...)",
+  );
+});
+
+test("Java Issue 5: Variable type inference and hover displays variable types and keyword docs", () => {
+  // Local variable hover: int[] nums
+  const src = "public class Solution {\n    int[] nums = new int[5];\n}";
+  const hoverNums = javaHover(src, 11, 2); // over 'nums'
+  assert.ok(
+    hoverNums && hoverNums.contents[0].value.includes("int[] nums"),
+    "Hover over nums displays int[] nums",
+  );
+
+  // Local variable hover: Scanner sc
+  const srcSc = "Scanner sc = new Scanner(System.in);";
+  const hoverSc = javaHover(srcSc, 9); // over 'sc'
+  assert.ok(
+    hoverSc && hoverSc.contents[0].value.includes("Scanner sc"),
+    "Hover over sc displays Scanner sc",
+  );
+
+  // Keyword hover: int
+  const srcKw = "int x = 10;";
+  const hoverKw = javaHover(srcKw, 2); // over 'int'
+  assert.ok(
+    hoverKw && hoverKw.contents[0].value.includes("keyword int"),
+    "Hover over keyword int displays docs",
+  );
+
+  // Array length hover
+  const srcLen = "arr.length";
+  const hoverLen = javaHover(srcLen, 6); // over 'length'
+  assert.ok(
+    hoverLen && hoverLen.contents[0].value.includes("length"),
+    "Hover over arr.length displays array length doc",
+  );
+});
+
+test("Java Issue 6: Subscript access (words[0]., nums[i]., matrix[0].) infers element types", () => {
+  // String array element
+  const strElem = javaLabels("String[] words = new String[5];\nwords[0].");
+  assert.ok(
+    strElem.includes("charAt") && strElem.includes("substring") && strElem.includes("length"),
+    "words[0]. suggests String methods",
+  );
+
+  // Primitive array element (int) cannot be dereferenced
+  const primElem = javaLabels("int[] nums = new int[5];\nnums[i].");
+  assert.equal(primElem.length, 0, "nums[i]. yields 0 suggestions for primitive int");
+
+  // 2D array element is an array
+  const matElem = javaLabels("int[][] matrix = new int[5][5];\nmatrix[0].");
+  assert.ok(
+    matElem.includes("length") && matElem.includes("clone"),
+    "matrix[0]. suggests array members",
+  );
+  assert.ok(!matElem.includes("add"), "matrix[0]. must not suggest List.add");
+});
+
+test("Java Issue 7: Chained method returns (.toString()., .nextLine().)", () => {
+  const sbStr = javaLabels("StringBuilder sb = new StringBuilder();\nsb.toString().");
+  assert.ok(
+    sbStr.includes("charAt") && sbStr.includes("substring"),
+    "sb.toString(). suggests String methods",
+  );
+
+  const scStr = javaLabels("Scanner sc = new Scanner(System.in);\nsc.nextLine().");
+  assert.ok(
+    scStr.includes("trim") && scStr.includes("split"),
+    "sc.nextLine(). suggests String methods",
+  );
+});
