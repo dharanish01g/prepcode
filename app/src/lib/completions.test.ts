@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { registerCppCompletions } from "./cpp-completions.ts";
 import { registerCSharpCompletions } from "./csharp-completions.ts";
 import { registerPythonCompletions } from "./python-completions.ts";
 
@@ -711,4 +712,206 @@ test("C# Issue 9: no made-up signature for keywords or unknown methods", () => {
     1,
     "WriteLine(object? value) has one parameter",
   );
+});
+
+// ==========================================
+// C++ AUTOCOMPLETE & SIGNATURE HELP TESTS
+// ==========================================
+
+function cppLabels(src: string): string[] {
+  const { mockMonaco, completionProviders } = setupMockMonaco();
+  registerCppCompletions(mockMonaco);
+  const r = completionProviders["cpp"].provideCompletionItems(createMockModel(src), endOf(src));
+  return r.suggestions.map((s: any) => s.label);
+}
+
+function cppSig(src: string): any {
+  const { mockMonaco, sigHelpProviders } = setupMockMonaco();
+  registerCppCompletions(mockMonaco);
+  return sigHelpProviders["cpp"].provideSignatureHelp(createMockModel(src), endOf(src));
+}
+
+function cppHover(src: string, col: number, line = 1): any {
+  const { mockMonaco, hoverProviders } = setupMockMonaco();
+  registerCppCompletions(mockMonaco);
+  return hoverProviders["cpp"].provideHover(createMockModel(src), {
+    lineNumber: line,
+    column: col,
+  });
+}
+
+test("C++: std:: scope resolution suggests standard library members", () => {
+  const labels = cppLabels("std::");
+  assert.ok(labels.includes("cout"), "suggests cout");
+  assert.ok(labels.includes("cin"), "suggests cin");
+  assert.ok(labels.includes("endl"), "suggests endl");
+  assert.ok(labels.includes("vector"), "suggests vector");
+  assert.ok(labels.includes("string"), "suggests string");
+  assert.ok(labels.includes("sort"), "suggests sort");
+  assert.ok(labels.includes("min"), "suggests min");
+  assert.ok(labels.includes("max"), "suggests max");
+});
+
+test("C++: #include and using namespace suggest appropriate headers and std", () => {
+  const headers = cppLabels("#include <");
+  assert.ok(headers.includes("iostream"), "suggests iostream header");
+  assert.ok(headers.includes("vector"), "suggests vector header");
+  assert.ok(headers.includes("algorithm"), "suggests algorithm header");
+
+  const un = cppLabels("using namespace ");
+  assert.ok(un.includes("std"), "suggests std namespace");
+});
+
+test("C++: Type-aware dot member access suggests container-specific methods", () => {
+  const vec = cppLabels("std::vector<int> nums;\nnums.");
+  assert.ok(vec.includes("push_back"), "vector suggests push_back");
+  assert.ok(vec.includes("pop_back"), "vector suggests pop_back");
+  assert.ok(vec.includes("size"), "vector suggests size");
+  assert.ok(!vec.includes("substr"), "vector does not suggest string substr");
+
+  const str = cppLabels('std::string s = "hello";\ns.');
+  assert.ok(str.includes("substr"), "string suggests substr");
+  assert.ok(str.includes("length"), "string suggests length");
+  assert.ok(str.includes("c_str"), "string suggests c_str");
+
+  const mp = cppLabels("std::map<string, int> counts;\ncounts.");
+  assert.ok(mp.includes("insert"), "map suggests insert");
+  assert.ok(mp.includes("count"), "map suggests count");
+  assert.ok(mp.includes("find"), "map suggests find");
+  assert.ok(!mp.includes("push_back"), "map does not suggest push_back");
+
+  const q = cppLabels("std::queue<int> q;\nq.");
+  assert.ok(q.includes("front") && q.includes("pop") && q.includes("push"), "queue methods");
+
+  const st = cppLabels("std::stack<int> s;\ns.");
+  assert.ok(st.includes("top") && st.includes("pop") && st.includes("push"), "stack methods");
+});
+
+test("C++: Pointer member access (->) suggests ListNode and TreeNode fields", () => {
+  const node = cppLabels("ListNode* head = nullptr;\nhead->");
+  assert.ok(node.includes("val"), "ListNode suggests val");
+  assert.ok(node.includes("next"), "ListNode suggests next");
+
+  const tree = cppLabels("TreeNode* root = nullptr;\nroot->");
+  assert.ok(tree.includes("val"), "TreeNode suggests val");
+  assert.ok(tree.includes("left"), "TreeNode suggests left");
+  assert.ok(tree.includes("right"), "TreeNode suggests right");
+});
+
+test("C++: Numeric literals and primitives suppress container methods", () => {
+  const num = cppLabels("5.");
+  assert.equal(num.length, 0, "5. gives no member suggestions");
+
+  const prim = cppLabels("int count = 0;\ncount.");
+  assert.equal(prim.length, 0, "int primitive gives no member suggestions");
+});
+
+test("C++: Local variables and function parameters are in scope without leaking across functions", () => {
+  // 1. Cursor at 'r' inside solve() with another function helper() preceding it
+  const src = `void helper(int otherParam) {
+    int helperLocal = 10;
+}
+
+class Solution {
+public:
+    int solve(int maxLimit, std::vector<int>& items) {
+        int runningTotal = 0;
+        r`;
+  const labels = cppLabels(src);
+  assert.ok(labels.includes("runningTotal"), "runningTotal is suggested in solve()");
+  assert.ok(labels.includes("maxLimit"), "parameter maxLimit is suggested in solve()");
+  assert.ok(labels.includes("items"), "parameter items is suggested in solve()");
+  assert.ok(!labels.includes("otherParam"), "otherParam from helper() does not leak into solve()");
+  assert.ok(
+    !labels.includes("helperLocal"),
+    "helperLocal from helper() does not leak into solve()",
+  );
+
+  // 2. Cursor inside solve() with helper() following it
+  const full = `class Solution {
+public:
+    int solve(int maxLimit, std::vector<int>& items) {
+        int runningTotal = 0;
+        r
+    }
+
+    void helper(int otherParam) {
+        int helperLocal = 10;
+    }
+};`;
+  const { mockMonaco, completionProviders } = setupMockMonaco();
+  registerCppCompletions(mockMonaco);
+  const r = completionProviders["cpp"].provideCompletionItems(createMockModel(full), {
+    lineNumber: 5,
+    column: 10,
+  });
+  const fullLabels = r.suggestions.map((s: any) => s.label);
+  assert.ok(fullLabels.includes("runningTotal"), "runningTotal suggested in solve()");
+  assert.ok(fullLabels.includes("maxLimit"), "maxLimit suggested in solve()");
+  assert.ok(
+    !fullLabels.includes("otherParam"),
+    "following helper's parameter does not leak into solve()",
+  );
+  assert.ok(
+    !fullLabels.includes("helperLocal"),
+    "following helper's local does not leak into solve()",
+  );
+});
+
+test("C++: Words after '.', '->', or '::' do not leak into document variable suggestions", () => {
+  const src = `
+void run() {
+    std::cout << "test";
+    nums.push_back(10);
+    s
+`;
+  const labels = cppLabels(src);
+  assert.ok(!labels.includes("push_back"), "push_back is not suggested as a document variable");
+});
+
+test("C++: Signature help tracks parameters, depth, and generic commas", () => {
+  const sig1 = cppSig("std::min(10, ");
+  assert.ok(sig1 && sig1.value.signatures.length > 0, "min has signature help");
+  assert.equal(sig1.value.activeParameter, 1, "activeParameter is 1 after comma");
+
+  // Generic template with comma must not count as a top-level parameter
+  const sig2 = cppSig("std::pair<int, int> p = std::make_pair(1, ");
+  assert.ok(sig2, "make_pair has signature help");
+  assert.equal(sig2.value.activeParameter, 1, "activeParameter is 1 after make_pair comma");
+});
+
+test("C++: Comments do not corrupt signature help or paren matching", () => {
+  const src = `
+// min(1, 2) inside comment
+std::min(10, 
+`;
+  const sig = cppSig(src);
+  assert.ok(sig, "signature help works despite preceding comment with parens");
+  assert.equal(sig.value.activeParameter, 1, "activeParameter correctly set to 1");
+});
+
+test("C++: No made-up signatures for language keywords or unknown calls", () => {
+  const { mockMonaco, sigHelpProviders } = setupMockMonaco();
+  registerCppCompletions(mockMonaco);
+  const provider = sigHelpProviders["cpp"];
+
+  for (const line of [
+    "    if (",
+    "    while (x < ",
+    "    for (int i = 0; ",
+    "    unknownFunc(1, ",
+  ]) {
+    const src = `void test() {\n${line}`;
+    assert.equal(provider.provideSignatureHelp(createMockModel(src), endOf(src)), null, line);
+  }
+});
+
+test("C++: Hover documentation displays for qualified and type symbols", () => {
+  const src = "std::cout << 1;";
+  const hover = cppHover(src, 7); // over 'cout'
+  assert.ok(hover && hover.contents.length > 0, "Hover over std::cout returns doc");
+  assert.ok(hover.contents[0].value.includes("cout"), "Hover contains cout signature");
+
+  const typeHover = cppHover("vector<int> nums;", 3); // over 'vector'
+  assert.ok(typeHover && typeHover.contents.length > 0, "Hover over vector returns doc");
 });
