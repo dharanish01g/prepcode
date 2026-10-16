@@ -967,3 +967,64 @@ test("C++: Pointer chained navigation and iterator member access", () => {
   assert.ok(iter.includes("first"), "it-> suggests first");
   assert.ok(iter.includes("second"), "it-> suggests second");
 });
+
+test("C++: Type inference correctly handles const qualifiers and direct pointer/reference syntax", () => {
+  // ListNode* with pointer attached to type
+  const ptrLabels = cppLabels("void test() {\n    ListNode* myCustomNode = nullptr;\n    myCustomNode->");
+  assert.ok(ptrLabels.includes("val"), "myCustomNode-> suggests val");
+  assert.ok(ptrLabels.includes("next"), "myCustomNode-> suggests next");
+
+  // const vector<int>& reference
+  const vecLabels = cppLabels("void test() {\n    const vector<int>& myNums = arr;\n    myNums.");
+  assert.ok(vecLabels.includes("push_back"), "const vector<int>& suggests push_back");
+  assert.ok(vecLabels.includes("size"), "const vector<int>& suggests size");
+  assert.ok(!vecLabels.includes("substr"), "const vector<int>& does not suggest string methods");
+
+  // const string& reference
+  const strLabels = cppLabels("void test() {\n    const string& myStr = text;\n    myStr.");
+  assert.ok(strLabels.includes("substr"), "const string& suggests substr");
+  assert.ok(!strLabels.includes("push_front"), "const string& does not suggest deque methods");
+});
+
+test("C++: Structured bindings and range-for loops extract variables", () => {
+  const bindings = cppLabels("void test() {\n    auto [source, dest] = edge;\n    ");
+  assert.ok(bindings.includes("source"), "extracts structured binding 'source'");
+  assert.ok(bindings.includes("dest"), "extracts structured binding 'dest'");
+
+  const loopBindings = cppLabels("void test() {\n    for (auto [key, val] : mp) {\n        ");
+  assert.ok(loopBindings.includes("key"), "extracts loop structured binding 'key'");
+  assert.ok(loopBindings.includes("val"), "extracts loop structured binding 'val'");
+});
+
+test("C++: GCC builtins and competitive programming snippets are available", () => {
+  const builtins = cppLabels("__builtin_");
+  assert.ok(builtins.includes("__builtin_popcount"), "suggests __builtin_popcount");
+  assert.ok(builtins.includes("__builtin_popcountll"), "suggests __builtin_popcountll");
+  assert.ok(builtins.includes("__builtin_clz"), "suggests __builtin_clz");
+  assert.ok(builtins.includes("__builtin_ctz"), "suggests __builtin_ctz");
+
+  const snippets = cppLabels("bsearch");
+  assert.ok(snippets.includes("bsearch"), "suggests bsearch snippet");
+
+  const minpq = cppLabels("minpq");
+  assert.ok(minpq.includes("minpq"), "suggests minpq snippet");
+
+  const graphSnippets = cppLabels("bfs");
+  assert.ok(graphSnippets.includes("bfs"), "suggests bfs snippet");
+});
+
+test("C++: Document-defined function signature help and hover documentation", () => {
+  const src = "bool checkSubtree(TreeNode* root, int target, vector<int>& path) {\n    return true;\n}\n\nint main() {\n    checkSubtree(root, ";
+  const sig = cppSig(src);
+  assert.ok(sig !== null, "Signature help is provided for user-defined function");
+  assert.equal(sig.value.activeParameter, 1, "Second parameter (target) is active after first comma");
+  assert.equal(sig.value.signatures[0].parameters.length, 3, "Parsed 3 parameters from checkSubtree");
+
+  // Hover over user-defined function
+  const hoverSrc = "void helperFunction(int x) {}\n\nint main() {\n    helperFunction(5);\n}";
+  const hover = cppHover(hoverSrc, 7, 4); // column over helperFunction on line 4
+  assert.ok(hover !== null, "Hover on user-defined function returns documentation");
+  assert.ok(hover.contents[0].value.includes("helperFunction"), "Hover shows function signature");
+  assert.ok(hover.contents[1].value.includes("User-defined function"), "Hover notes it is a user-defined function");
+});
+

@@ -1002,6 +1002,34 @@ export const STD_MEMBERS: CompletionItemDef[] = [
     documentation: "Converts string to floating point number (double).",
     snippet: "stod(${1:str})",
   },
+  {
+    label: "__builtin_popcount",
+    kind: monacoDefault.languages.CompletionItemKind.Function,
+    detail: "int __builtin_popcount(unsigned int x)",
+    documentation: "Counts the number of 1-bits (set bits) in an integer.",
+    snippet: "__builtin_popcount(${1:x})",
+  },
+  {
+    label: "__builtin_popcountll",
+    kind: monacoDefault.languages.CompletionItemKind.Function,
+    detail: "int __builtin_popcountll(unsigned long long x)",
+    documentation: "Counts the number of 1-bits (set bits) in a 64-bit integer.",
+    snippet: "__builtin_popcountll(${1:x})",
+  },
+  {
+    label: "__builtin_clz",
+    kind: monacoDefault.languages.CompletionItemKind.Function,
+    detail: "int __builtin_clz(unsigned int x)",
+    documentation: "Counts the number of leading zeros in a 32-bit integer.",
+    snippet: "__builtin_clz(${1:x})",
+  },
+  {
+    label: "__builtin_ctz",
+    kind: monacoDefault.languages.CompletionItemKind.Function,
+    detail: "int __builtin_ctz(unsigned int x)",
+    documentation: "Counts the number of trailing zeros in a 32-bit integer.",
+    snippet: "__builtin_ctz(${1:x})",
+  },
 ];
 
 export const CPP_KEYWORDS = [
@@ -1181,6 +1209,34 @@ export const SNIPPETS = [
       "class Solution {\npublic:\n    ${1:int} ${2:solve}(${3}) {\n        ${4}\n    }\n};",
     detail: "class Solution { solve(...) }",
     documentation: "Interview problem solution class skeleton.",
+  },
+  {
+    label: "minpq",
+    insertText:
+      "std::priority_queue<${1:int}, std::vector<${1:int}>, std::greater<${1:int}>> ${2:min_pq};",
+    detail: "priority_queue<T, vector<T>, greater<T>> min_pq;",
+    documentation: "Min-heap priority queue declaration.",
+  },
+  {
+    label: "bsearch",
+    insertText:
+      "int low = 0, high = ${1:n} - 1;\nwhile (low <= high) {\n    int mid = low + (high - low) / 2;\n    if (${2:nums}[mid] == ${3:target}) {\n        ${4:return mid;}\n    } else if (${2:nums}[mid] < ${3:target}) {\n        low = mid + 1;\n    } else {\n        high = mid - 1;\n    }\n}",
+    detail: "while (low <= high) { ... }",
+    documentation: "Binary search standard loop template.",
+  },
+  {
+    label: "bfs",
+    insertText:
+      "std::queue<${1:int}> q;\nq.push(${2:start});\nstd::vector<bool> visited(${3:n}, false);\nvisited[${2:start}] = true;\n\nwhile (!q.empty()) {\n    auto curr = q.front();\n    q.pop();\n    ${4}\n}",
+    detail: "queue<int> q; while (!q.empty()) { ... }",
+    documentation: "Breadth-First Search (BFS) graph traversal skeleton.",
+  },
+  {
+    label: "dfs",
+    insertText:
+      "std::function<void(int)> dfs = [&](int u) {\n    visited[u] = true;\n    for (int v : ${1:adj}[u]) {\n        if (!visited[v]) {\n            dfs(v);\n        }\n    }\n};",
+    detail: "auto dfs = [&](int u) { ... };",
+    documentation: "Recursive Depth-First Search (DFS) lambda skeleton.",
   },
 ];
 
@@ -1453,7 +1509,7 @@ export function inferCppType(
     // Check function parameters if active function header
     if (scopes.activeFuncLine > 0 && ln === scopes.activeFuncLine) {
       const paramRegex = new RegExp(
-        `\\b([a-zA-Z_]\\w*(?:::[a-zA-Z_]\\w*)?(?:<[^>]+>)?)\\s*(?:&|\\*)?\\s*${varName}\\b`,
+        `\\b(?:const\\s+)?([a-zA-Z_]\\w*(?:::[a-zA-Z_]\\w*)?(?:<[^>]+>)?)(?:\\s+|\\s*(?:&|\\*)\\s*)${varName}\\b`,
       );
       const pMatch = line.match(paramRegex);
       if (pMatch) {
@@ -1479,7 +1535,7 @@ export function inferCppType(
     // Check local / member declaration
     const declMatch = line.match(
       new RegExp(
-        `\\b([a-zA-Z_]\\w*(?:::[a-zA-Z_]\\w*)?(?:<[^>]+>)?)\\s+(?:&|\\*)?${varName}\\s*(?:=|;|,|\\(|\\{)`,
+        `\\b(?:const\\s+)?([a-zA-Z_]\\w*(?:::[a-zA-Z_]\\w*)?(?:<[^>]+>)?)(?:\\s+|\\s*(?:&|\\*)\\s*)${varName}\\s*(?:=|;|,|\\(|\\{)`,
       ),
     );
     if (declMatch) {
@@ -1629,12 +1685,12 @@ export function extractCppDocumentSymbols(
 
     // Check local variables: only visible if in scope
     if (isLineVisible(scopes, ln)) {
-      // Variable declaration: `int count = 0;` or `vector<int> nums;` or `auto x = 5;`
+      // Variable declaration: `int count = 0;` or `vector<int> nums;` or `auto x = 5;` or `ListNode* node;`
       const varMatch = line.match(
-        /\b(?:[a-zA-Z_]\w*(?:::[a-zA-Z_]\w*)?(?:<[^>]+>)?)\s+(?:&|\*)?([a-zA-Z_]\w*)\s*(?:=|;|,|\(|\{)/,
+        /\b(?:const\s+)?([a-zA-Z_]\w*(?:::[a-zA-Z_]\w*)?(?:<[^>]+>)?)(?:\s+|\s*(?:&|\*)\s*)([a-zA-Z_]\w*)\s*(?:=|;|,|\(|\{)/,
       );
       if (varMatch) {
-        const name = varMatch[1];
+        const name = varMatch[2];
         if (
           !seen.has(name) &&
           name !== currentWord &&
@@ -1677,6 +1733,32 @@ export function extractCppDocumentSymbols(
             range,
             sortText: `0_${name}`,
           });
+        }
+      }
+
+      // Structured binding: `auto [u, v] = ...` or `for (auto [k, v] : ...)`
+      const structMatch = line.match(/\bauto(?:\s*&)?\s*\[([^\]]+)\]/);
+      if (structMatch) {
+        const bindings = structMatch[1].split(",");
+        for (const b of bindings) {
+          const bName = b.trim();
+          if (
+            bName &&
+            !seen.has(bName) &&
+            bName !== currentWord &&
+            !CPP_KEYWORD_SET.has(bName) &&
+            !CPP_TYPE_SET.has(bName)
+          ) {
+            seen.add(bName);
+            items.push({
+              label: bName,
+              kind: monaco.languages.CompletionItemKind.Variable,
+              insertText: bName,
+              detail: `variable ${bName} (structured binding)`,
+              range,
+              sortText: `0_${bName}`,
+            });
+          }
         }
       }
     }
@@ -2088,6 +2170,30 @@ export function registerCppCompletions(mInstance?: Monaco) {
         };
       }
 
+      // Standalone hover: check user-defined function in document
+      for (let ln = 1; ln <= model.getLineCount(); ln++) {
+        const line = stripCppComment(model.getLineContent(ln)).trim();
+        if (!line || line.startsWith("#")) continue;
+        const funcRegex = new RegExp(
+          `\\b([a-zA-Z_]\\w*(?:::[a-zA-Z_]\\w*)?(?:<[^>]+>)?(?:\\*|&)*\\s+${word.word}\\s*\\([^;)]*\\))`,
+        );
+        const fMatch = line.match(funcRegex);
+        if (fMatch && !/^\s*(?:if|while|for|switch|catch)\b/.test(line)) {
+          return {
+            range: new m.Range(
+              position.lineNumber,
+              word.startColumn,
+              position.lineNumber,
+              word.endColumn,
+            ),
+            contents: [
+              { value: `\`\`\`cpp\n${fMatch[1].trim()}\n\`\`\`` },
+              { value: `User-defined function (line ${ln})` },
+            ],
+          };
+        }
+      }
+
       return null;
     },
   });
@@ -2228,6 +2334,27 @@ export function registerCppCompletions(mInstance?: Monaco) {
           ...DEQUE_MEMBERS,
         ];
         found = ALL_METHODS.find((item) => item.label === methodName);
+      }
+
+      // If not in standard library or container methods, check document-defined functions
+      if (!found) {
+        for (let ln = 1; ln <= model.getLineCount(); ln++) {
+          const rawLine = model.getLineContent(ln);
+          const line = stripCppComment(rawLine).trim();
+          if (!line || line.startsWith("#")) continue;
+          const funcRegex = new RegExp(
+            `\\b([a-zA-Z_]\\w*(?:::[a-zA-Z_]\\w*)?(?:<[^>]+>)?(?:\\*|&)*\\s+${methodName}\\s*\\(([^;)]*)\\))`,
+          );
+          const fMatch = line.match(funcRegex);
+          if (fMatch && !/^\s*(?:if|while|for|switch|catch)\b/.test(line)) {
+            found = {
+              label: methodName,
+              detail: fMatch[1].trim(),
+              documentation: `User-defined function (line ${ln})`,
+            };
+            break;
+          }
+        }
       }
 
       if (found && found.detail) {
