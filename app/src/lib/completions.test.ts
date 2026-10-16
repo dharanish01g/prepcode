@@ -731,6 +731,11 @@ function javaSig(src: string): any {
   return sigHelpProviders["java"].provideSignatureHelp(createMockModel(src), endOf(src));
 }
 
+function javaSigParam(src: string): number | null {
+  const s = javaSig(src);
+  return s ? s.value.activeParameter : null;
+}
+
 function javaHover(src: string, col: number, line = 1): any {
   const { mockMonaco, hoverProviders } = setupMockMonaco();
   registerJavaCompletions(mockMonaco);
@@ -1007,5 +1012,112 @@ test("Java Issue 7: Chained method returns (.toString()., .nextLine().)", () => 
   assert.ok(
     scStr.includes("trim") && scStr.includes("split"),
     "sc.nextLine(). suggests String methods",
+  );
+});
+
+test("Java Issue 8: Scope tracking - another method's locals and parameters do not leak", () => {
+  // Method a's local variable must not show up in method b
+  const code1 = `class Solution {
+    void a() {
+        int onlyInA = 1;
+    }
+    void b() {
+        only_`;
+  assert.ok(
+    !javaLabels(code1).includes("onlyInA"),
+    "onlyInA must not leak from method a to method b",
+  );
+
+  // Method a's parameter must not show up in method b
+  const code2 = `class Solution {
+    void a(int paramA) {
+    }
+    void b(int paramB) {
+        param`;
+  const labels2 = javaLabels(code2);
+  assert.ok(labels2.includes("paramB"), "paramB must be visible inside method b");
+  assert.ok(!labels2.includes("paramA"), "paramA must not leak from method a to method b");
+
+  // Class fields must be visible inside methods
+  const code3 = `class Solution {
+    int maxLimit = 100;
+    void a() {
+        max`;
+  assert.ok(javaLabels(code3).includes("maxLimit"), "Class field must be visible inside method");
+
+  // Method locals must not leak to class level
+  const code4 = `class Solution {
+    void a() {
+        int methodLocal = 5;
+    }
+    `;
+  assert.ok(!javaLabels(code4).includes("methodLocal"), "methodLocal must not leak to class level");
+});
+
+test("Java Issue 9: Signature help comment shielding", () => {
+  // Apostrophe in earlier line comment must not break signature help
+  assert.equal(
+    javaSigParam("// don't forget\nMath.max(1, "),
+    1,
+    "Apostrophe in line comment does not corrupt parser",
+  );
+
+  // Parenthesis in earlier line comment must not break signature help
+  assert.equal(
+    javaSigParam("// see Math.min(1, 2)\nMath.max(1, "),
+    1,
+    "Paren in line comment does not corrupt parser",
+  );
+
+  // Block comment with paren and quotes must not break signature help
+  assert.equal(
+    javaSigParam("/* see Math.min(1, 2) don't forget 'x' */\nMath.max(1, "),
+    1,
+    "Block comment contents do not corrupt parser",
+  );
+
+  // Multiline block comment
+  assert.equal(
+    javaSigParam("/*\n * note: don't call Math.min(a, b)\n */\nMath.max(1, "),
+    1,
+    "Multiline block comment does not corrupt parser",
+  );
+});
+
+test("Java Issue 10: Dot-preceded words (.clone, .length, .println) are not extracted as standalone identifiers", () => {
+  const src = `class Solution {
+    void a() {
+        int[] arr = new int[5];
+        arr.clone();
+        System.out.println();
+        ar`;
+  const labels = javaLabels(src);
+  assert.ok(labels.includes("arr"), "Variable arr must be suggested");
+  assert.ok(!labels.includes("clone"), ".clone() must not be extracted as standalone variable");
+  assert.ok(!labels.includes("println"), ".println() must not be extracted as standalone variable");
+});
+
+test("Java Issue 11: Trailing digits on variable names (nums2., arr1., list2.) receive member completions", () => {
+  // Declared variable with digits
+  const dec1 = javaLabels("int[] nums2 = new int[5];\nnums2.");
+  assert.ok(dec1.includes("length") && dec1.includes("clone"), "nums2. suggests array members");
+
+  const dec2 = javaLabels("List<String> list2 = new ArrayList<>();\nlist2.");
+  assert.ok(dec2.includes("add") && dec2.includes("size"), "list2. suggests list members");
+
+  // Undeclared / heuristic fallback with digits
+  const h1 = javaLabels("nums1.");
+  assert.ok(
+    h1.includes("length") && h1.includes("clone"),
+    "nums1. heuristic suggests array members",
+  );
+
+  const h2 = javaLabels("list1.");
+  assert.ok(h2.includes("add") && h2.includes("size"), "list1. heuristic suggests list members");
+
+  const h3 = javaLabels("s1.");
+  assert.ok(
+    h3.includes("charAt") && h3.includes("substring"),
+    "s1. heuristic suggests string members",
   );
 });

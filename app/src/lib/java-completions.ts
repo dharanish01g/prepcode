@@ -1902,13 +1902,380 @@ function classifyJavaType(
   return { typeString: typeStr, category: "other" };
 }
 
+/**
+ * Masks single-line (// ...) and block (/* ... * /) comments with space characters,
+ * preserving exact string length and line/column indices so delimiter tracking
+ * is not corrupted by apostrophes or parens inside comments.
+ */
+export function maskJavaComments(text: string): string {
+  let result = "";
+  let inString = false;
+  let inChar = false;
+  let inLineComment = false;
+  let inBlockComment = false;
+  let isEscaped = false;
+
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    const next = i + 1 < text.length ? text[i + 1] : "";
+
+    if (inLineComment) {
+      if (ch === "\n") {
+        inLineComment = false;
+        result += "\n";
+      } else {
+        result += " ";
+      }
+      continue;
+    }
+
+    if (inBlockComment) {
+      if (ch === "*" && next === "/") {
+        inBlockComment = false;
+        result += "  ";
+        i++;
+      } else if (ch === "\n") {
+        result += "\n";
+      } else {
+        result += " ";
+      }
+      continue;
+    }
+
+    if (inString) {
+      result += ch;
+      if (isEscaped) {
+        isEscaped = false;
+      } else if (ch === "\\") {
+        isEscaped = true;
+      } else if (ch === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (inChar) {
+      result += ch;
+      if (isEscaped) {
+        isEscaped = false;
+      } else if (ch === "\\") {
+        isEscaped = true;
+      } else if (ch === "'") {
+        inChar = false;
+      }
+      continue;
+    }
+
+    if (ch === "/" && next === "/") {
+      inLineComment = true;
+      result += "  ";
+      i++;
+      continue;
+    }
+    if (ch === "/" && next === "*") {
+      inBlockComment = true;
+      result += "  ";
+      i++;
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+      result += ch;
+      continue;
+    }
+    if (ch === "'") {
+      inChar = true;
+      result += ch;
+      continue;
+    }
+
+    result += ch;
+  }
+
+  return result;
+}
+
+/**
+ * Masks comments, string literals, and char literals with spaces, preserving
+ * newlines. Used for brace parsing so braces inside strings or comments are ignored.
+ */
+export function maskJavaCommentsAndStrings(text: string): string {
+  let result = "";
+  let inString = false;
+  let inChar = false;
+  let inLineComment = false;
+  let inBlockComment = false;
+  let isEscaped = false;
+
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    const next = i + 1 < text.length ? text[i + 1] : "";
+
+    if (inLineComment) {
+      if (ch === "\n") {
+        inLineComment = false;
+        result += "\n";
+      } else {
+        result += " ";
+      }
+      continue;
+    }
+
+    if (inBlockComment) {
+      if (ch === "*" && next === "/") {
+        inBlockComment = false;
+        result += "  ";
+        i++;
+      } else if (ch === "\n") {
+        result += "\n";
+      } else {
+        result += " ";
+      }
+      continue;
+    }
+
+    if (inString) {
+      if (isEscaped) {
+        isEscaped = false;
+        result += " ";
+      } else if (ch === "\\") {
+        isEscaped = true;
+        result += " ";
+      } else if (ch === '"') {
+        inString = false;
+        result += " ";
+      } else if (ch === "\n") {
+        result += "\n";
+      } else {
+        result += " ";
+      }
+      continue;
+    }
+
+    if (inChar) {
+      if (isEscaped) {
+        isEscaped = false;
+        result += " ";
+      } else if (ch === "\\") {
+        isEscaped = true;
+        result += " ";
+      } else if (ch === "'") {
+        inChar = false;
+        result += " ";
+      } else if (ch === "\n") {
+        result += "\n";
+      } else {
+        result += " ";
+      }
+      continue;
+    }
+
+    if (ch === "/" && next === "/") {
+      inLineComment = true;
+      result += "  ";
+      i++;
+      continue;
+    }
+    if (ch === "/" && next === "*") {
+      inBlockComment = true;
+      result += "  ";
+      i++;
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+      result += " ";
+      continue;
+    }
+    if (ch === "'") {
+      inChar = true;
+      result += " ";
+      continue;
+    }
+
+    result += ch;
+  }
+
+  return result;
+}
+
+export interface JavaScopes {
+  /** owner[ln] = scope ID of the innermost scope containing line ln (0 = top-level / package). */
+  owner: number[];
+  /** Scope IDs visible from the cursor line. */
+  visible: Set<number>;
+  /** Map from scope ID to kind: "class" | "method" | "block". */
+  kind: Map<number, "class" | "method" | "block">;
+  /** Map from method header line number to its method scope ID. */
+  methodScopeByHeaderLine: Map<number, number>;
+  /** Map from method header line number to its declaring/enclosing class scope ID. */
+  methodEnclosingClassScope: Map<number, number>;
+  /** Map from class header line number to its class scope ID. */
+  classScopeByHeaderLine: Map<number, number>;
+}
+
+const CONTROL_FLOW_KEYWORDS = new Set([
+  "if",
+  "else",
+  "for",
+  "while",
+  "do",
+  "switch",
+  "try",
+  "catch",
+  "finally",
+  "synchronized",
+  "static",
+  "new",
+  "return",
+]);
+
+/**
+ * Computes Java block scopes based on curly brace blocks and method/class declarations.
+ * Isolates local variables and parameters inside methods from leaking into other methods
+ * or outer class scopes.
+ */
+export function computeJavaScopes(
+  model: monacoDefault.editor.ITextModel,
+  cursorLine: number,
+): JavaScopes {
+  const lineCount = model.getLineCount();
+  const owner: number[] = new Array(lineCount + 2).fill(0);
+  const parent = new Map<number, number>();
+  const kind = new Map<number, "class" | "method" | "block">();
+  const methodScopeByHeaderLine = new Map<number, number>();
+  const methodEnclosingClassScope = new Map<number, number>();
+  const classScopeByHeaderLine = new Map<number, number>();
+
+  const fullText = model.getValue();
+  const maskedText = maskJavaCommentsAndStrings(fullText);
+  const lines = maskedText.split("\n");
+
+  const stack: { id: number; kind: "class" | "method" | "block"; headerLine: number }[] = [];
+  let nextScopeId = 1;
+
+  let pendingHeader: { kind: "class" | "method"; startLine: number; headerLines: number[] } | null =
+    null;
+
+  for (let ln = 1; ln <= lineCount; ln++) {
+    const line = lines[ln - 1] ?? "";
+    const trimmed = line.trim();
+
+    // Check if line starts a class declaration
+    const classMatch = line.match(/\b(?:class|interface|enum|record)\s+([a-zA-Z_]\w*)/);
+    if (classMatch && !trimmed.endsWith(";")) {
+      pendingHeader = { kind: "class", startLine: ln, headerLines: [ln] };
+    } else {
+      // Check if line looks like a method or constructor declaration
+      const methodMatch = line.match(
+        /\b(?:public|private|protected|static|final|synchronized|abstract|default|native|\s)*\s*([a-zA-Z_]\w*(?:<[^>]+>)?(?:\[\])*)\s+([a-zA-Z_]\w*)\s*\(/,
+      );
+      if (methodMatch && !trimmed.endsWith(";")) {
+        const name = methodMatch[2];
+        if (!CONTROL_FLOW_KEYWORDS.has(name)) {
+          pendingHeader = { kind: "method", startLine: ln, headerLines: [ln] };
+        }
+      } else if (pendingHeader) {
+        pendingHeader.headerLines.push(ln);
+      }
+    }
+
+    const startTop = stack.length ? stack[stack.length - 1].id : 0;
+
+    for (let c = 0; c < line.length; c++) {
+      const ch = line[c];
+      if (ch === "{") {
+        const currentTop = stack.length ? stack[stack.length - 1].id : 0;
+        let scopeKind: "class" | "method" | "block" = "block";
+        let hLines = [ln];
+
+        if (pendingHeader) {
+          scopeKind = pendingHeader.kind;
+          hLines = pendingHeader.headerLines;
+          pendingHeader = null;
+        }
+
+        const scopeId = nextScopeId++;
+        parent.set(scopeId, currentTop);
+        kind.set(scopeId, scopeKind);
+
+        if (scopeKind === "method") {
+          for (const hl of hLines) {
+            methodScopeByHeaderLine.set(hl, scopeId);
+            methodEnclosingClassScope.set(hl, currentTop);
+          }
+        } else if (scopeKind === "class") {
+          for (const hl of hLines) {
+            classScopeByHeaderLine.set(hl, scopeId);
+          }
+        }
+
+        stack.push({ id: scopeId, kind: scopeKind, headerLine: hLines[0] });
+      } else if (ch === "}") {
+        if (stack.length > 0) {
+          stack.pop();
+        }
+      }
+    }
+
+    const endTop = stack.length ? stack[stack.length - 1].id : 0;
+    owner[ln] = endTop !== 0 ? endTop : startTop;
+  }
+
+  // Work out which scopes are visible from cursorLine
+  let cursorScope = owner[cursorLine] ?? 0;
+  const headerMethodScope = methodScopeByHeaderLine.get(cursorLine);
+  if (headerMethodScope !== undefined) {
+    cursorScope = headerMethodScope;
+  }
+  const headerClassScope = classScopeByHeaderLine.get(cursorLine);
+  if (headerClassScope !== undefined) {
+    cursorScope = headerClassScope;
+  }
+
+  const visible = new Set<number>();
+  for (let c = cursorScope; c !== 0; c = parent.get(c) ?? 0) {
+    visible.add(c);
+  }
+
+  return {
+    owner,
+    visible,
+    kind,
+    methodScopeByHeaderLine,
+    methodEnclosingClassScope,
+    classScopeByHeaderLine,
+  };
+}
+
+export function isLineVisible(scopes: JavaScopes, ln: number): boolean {
+  const methodScope = scopes.methodScopeByHeaderLine.get(ln);
+  if (methodScope !== undefined) {
+    return scopes.visible.has(methodScope);
+  }
+
+  const classScope = scopes.classScopeByHeaderLine.get(ln);
+  if (classScope !== undefined) {
+    return scopes.visible.has(classScope);
+  }
+
+  const o = scopes.owner[ln] ?? 0;
+  return o === 0 || scopes.visible.has(o);
+}
+
 function inferJavaVariablesAndTypes(
   model: monacoDefault.editor.ITextModel,
+  cursorLine?: number,
 ): Map<string, JavaVariableInfo> {
   const vars = new Map<string, JavaVariableInfo>();
   const lineCount = model.getLineCount();
+  const scopes = cursorLine !== undefined ? computeJavaScopes(model, cursorLine) : null;
 
   for (let ln = 1; ln <= lineCount; ln++) {
+    if (scopes && !isLineVisible(scopes, ln)) {
+      continue;
+    }
+
     const rawLine = model.getLineContent(ln);
     const line = rawLine.split("//")[0].trim();
     if (!line) continue;
@@ -2002,11 +2369,20 @@ function inferJavaVariablesAndTypes(
 
 function extractJavaDocumentMethods(
   model: monacoDefault.editor.ITextModel,
+  cursorLine?: number,
 ): Map<string, JavaMethodInfo> {
   const methods = new Map<string, JavaMethodInfo>();
   const lineCount = model.getLineCount();
+  const scopes = cursorLine !== undefined ? computeJavaScopes(model, cursorLine) : null;
 
   for (let ln = 1; ln <= lineCount; ln++) {
+    if (scopes) {
+      const classScope = scopes.methodEnclosingClassScope.get(ln) ?? scopes.owner[ln] ?? 0;
+      if (classScope !== 0 && !scopes.visible.has(classScope)) {
+        continue;
+      }
+    }
+
     const rawLine = model.getLineContent(ln);
     const line = rawLine.split("//")[0].trim();
     if (!line) continue;
@@ -2061,9 +2437,10 @@ function extractJavaDocumentSymbols(
   const currentWord = model.getWordUntilPosition(position).word;
   const seen = new Set<string>();
   const items: monacoDefault.languages.CompletionItem[] = [];
+  const scopes = computeJavaScopes(model, position.lineNumber);
 
   // 1. Inferred variables and parameters
-  const varsMap = inferJavaVariablesAndTypes(model);
+  const varsMap = inferJavaVariablesAndTypes(model, position.lineNumber);
   for (const [name, info] of varsMap) {
     if (!seen.has(name) && name !== currentWord) {
       seen.add(name);
@@ -2078,8 +2455,8 @@ function extractJavaDocumentSymbols(
     }
   }
 
-  // 2. User-defined methods
-  const docMethods = extractJavaDocumentMethods(model);
+  // 2. User-defined methods in enclosing class
+  const docMethods = extractJavaDocumentMethods(model, position.lineNumber);
   for (const [name, info] of docMethods) {
     if (!seen.has(name) && name !== currentWord) {
       seen.add(name);
@@ -2118,7 +2495,7 @@ function extractJavaDocumentSymbols(
     }
   }
 
-  // 4. General identifier extraction from document (comments & strings stripped)
+  // 4. General identifier extraction from visible document lines (comments & strings stripped)
   const fullText = model.getValue();
   const codeWithoutCommentsAndStrings = fullText
     .replace(/\/\*[\s\S]*?\*\//g, " ")
@@ -2126,25 +2503,30 @@ function extractJavaDocumentSymbols(
     .replace(/"(?:\\.|[^"\\])*"/g, " ")
     .replace(/'(?:\\.|[^'\\])*'/g, " ");
 
-  const wordRegex = /\b([a-zA-Z_]\w{1,})\b/g;
-  let wMatch: RegExpExecArray | null;
-  while ((wMatch = wordRegex.exec(codeWithoutCommentsAndStrings)) !== null) {
-    const word = wMatch[1];
-    if (
-      !seen.has(word) &&
-      word !== currentWord &&
-      !JAVA_KEYWORD_SET.has(word) &&
-      !JAVA_TYPE_SET.has(word)
-    ) {
-      seen.add(word);
-      items.push({
-        label: word,
-        kind: monaco.languages.CompletionItemKind.Variable,
-        insertText: word,
-        detail: `identifier (document)`,
-        range,
-        sortText: `1_${word}`,
-      });
+  const lines = codeWithoutCommentsAndStrings.split("\n");
+  for (let ln = 1; ln <= lines.length; ln++) {
+    if (!isLineVisible(scopes, ln)) continue;
+    const cleanLine = lines[ln - 1];
+    let wMatch: RegExpExecArray | null;
+    const lineWordRegex = /(?:^|[^.])\b([a-zA-Z_]\w{1,})\b/g;
+    while ((wMatch = lineWordRegex.exec(cleanLine)) !== null) {
+      const word = wMatch[1];
+      if (
+        !seen.has(word) &&
+        word !== currentWord &&
+        !JAVA_KEYWORD_SET.has(word) &&
+        !JAVA_TYPE_SET.has(word)
+      ) {
+        seen.add(word);
+        items.push({
+          label: word,
+          kind: monaco.languages.CompletionItemKind.Variable,
+          insertText: word,
+          detail: `identifier (in scope)`,
+          range,
+          sortText: `1_${word}`,
+        });
+      }
     }
   }
 
@@ -2194,7 +2576,7 @@ export function registerJavaCompletions(mInstance?: Monaco) {
         const subMatch = textBeforeWord.match(/([a-zA-Z_]\w*)\[[^\]]*\]\.$/);
         if (subMatch) {
           const baseVar = subMatch[1];
-          const varsMap = inferJavaVariablesAndTypes(model);
+          const varsMap = inferJavaVariablesAndTypes(model, position.lineNumber);
           const varInfo = varsMap.get(baseVar);
           if (varInfo) {
             if (varInfo.category === "array") {
@@ -2371,8 +2753,8 @@ export function registerJavaCompletions(mInstance?: Monaco) {
           };
         }
 
-        // Inferred variable type from the current Java document
-        const varsMap = inferJavaVariablesAndTypes(model);
+        // Inferred variable type from the current Java document in visible scope
+        const varsMap = inferJavaVariablesAndTypes(model, position.lineNumber);
         const inferredVar = varsMap.get(target);
 
         if (inferredVar) {
@@ -2449,63 +2831,63 @@ export function registerJavaCompletions(mInstance?: Monaco) {
         }
 
         // Fallback: identifier name heuristic when declaration is undeclared or outside scope
-        if (/^(?:sc|scanner|in|reader)$/i.test(lowerTarget)) {
+        if (/^(?:sc|scanner|in|reader)\d*$/i.test(lowerTarget)) {
           return {
             suggestions: deduplicateSuggestions(
               toCompletionItems([...SCANNER_MEMBERS, ...COMMON_INSTANCE_MEMBERS], range),
             ),
           };
         }
-        if (/^(?:sb|strbuild|builder)$/i.test(lowerTarget)) {
+        if (/^(?:sb|strbuild|builder)\d*$/i.test(lowerTarget)) {
           return {
             suggestions: deduplicateSuggestions(
               toCompletionItems([...STRINGBUILDER_MEMBERS, ...COMMON_INSTANCE_MEMBERS], range),
             ),
           };
         }
-        if (/^(?:str|s|text|line|word|name|msg)$/i.test(lowerTarget)) {
+        if (/^(?:str|s|text|line|word|name|msg)\d*$/i.test(lowerTarget)) {
           return {
             suggestions: deduplicateSuggestions(
               toCompletionItems([...STRING_INSTANCE_MEMBERS, ...COMMON_INSTANCE_MEMBERS], range),
             ),
           };
         }
-        if (/^(?:arr|nums)$/i.test(lowerTarget)) {
+        if (/^(?:arr|nums)\d*$/i.test(lowerTarget)) {
           return {
             suggestions: deduplicateSuggestions(
               toCompletionItems([...ARRAY_MEMBERS, ...COMMON_INSTANCE_MEMBERS], range),
             ),
           };
         }
-        if (/^(?:list|items|values|res|result)$/i.test(lowerTarget)) {
+        if (/^(?:list|items|values|res|result)\d*$/i.test(lowerTarget)) {
           return {
             suggestions: deduplicateSuggestions(
               toCompletionItems([...LIST_MEMBERS, ...COMMON_INSTANCE_MEMBERS], range),
             ),
           };
         }
-        if (/^(?:map|dict|counts|freq|seen)$/i.test(lowerTarget)) {
+        if (/^(?:map|dict|counts|freq|seen)\d*$/i.test(lowerTarget)) {
           return {
             suggestions: deduplicateSuggestions(
               toCompletionItems([...MAP_MEMBERS, ...COMMON_INSTANCE_MEMBERS], range),
             ),
           };
         }
-        if (/^(?:set|unique|visited)$/i.test(lowerTarget)) {
+        if (/^(?:set|unique|visited)\d*$/i.test(lowerTarget)) {
           return {
             suggestions: deduplicateSuggestions(
               toCompletionItems([...SET_MEMBERS, ...COMMON_INSTANCE_MEMBERS], range),
             ),
           };
         }
-        if (/^(?:q|queue|dq|deque)$/i.test(lowerTarget)) {
+        if (/^(?:q|queue|dq|deque)\d*$/i.test(lowerTarget)) {
           return {
             suggestions: deduplicateSuggestions(
               toCompletionItems([...QUEUE_MEMBERS, ...COMMON_INSTANCE_MEMBERS], range),
             ),
           };
         }
-        if (/^(?:st|stack)$/i.test(lowerTarget)) {
+        if (/^(?:st|stack)\d*$/i.test(lowerTarget)) {
           return {
             suggestions: deduplicateSuggestions(
               toCompletionItems([...STACK_MEMBERS, ...COMMON_INSTANCE_MEMBERS], range),
@@ -2650,13 +3032,16 @@ export function registerJavaCompletions(mInstance?: Monaco) {
 
       // Check qualification before the word
       let qualifier: string | null = null;
+      let rawQualifier: string | null = null;
       const doubleMatch = textBefore.match(/([a-zA-Z_]\w*)\.([a-zA-Z_]\w*)\.$/);
       if (doubleMatch) {
-        qualifier = `${doubleMatch[1]}.${doubleMatch[2]}`.toLowerCase();
+        rawQualifier = `${doubleMatch[1]}.${doubleMatch[2]}`;
+        qualifier = rawQualifier.toLowerCase();
       } else {
         const singleMatch = textBefore.match(/([a-zA-Z_]\w*)\.$/);
         if (singleMatch) {
-          qualifier = singleMatch[1].toLowerCase();
+          rawQualifier = singleMatch[1];
+          qualifier = rawQualifier.toLowerCase();
         }
       }
 
@@ -2690,9 +3075,9 @@ export function registerJavaCompletions(mInstance?: Monaco) {
       } else if (qualifier === "string") {
         match = findInList(STRING_INSTANCE_MEMBERS, name);
       } else if (qualifier) {
-        // Check inferred variable types from the document
-        const varsMap = inferJavaVariablesAndTypes(model);
-        const v = varsMap.get(qualifier);
+        // Check inferred variable types from the document in visible scope
+        const varsMap = inferJavaVariablesAndTypes(model, position.lineNumber);
+        const v = varsMap.get(rawQualifier ?? qualifier) ?? varsMap.get(qualifier);
         if (v) {
           if (v.category === "array") match = findInList(ARRAY_MEMBERS, name);
           else if (v.category === "string") match = findInList(STRING_INSTANCE_MEMBERS, name);
@@ -2706,22 +3091,22 @@ export function registerJavaCompletions(mInstance?: Monaco) {
         }
         // Fallback to name heuristics
         if (!match) {
-          if (/^(?:sc|scanner|in|reader)$/i.test(qualifier))
+          if (/^(?:sc|scanner|in|reader)\d*$/i.test(qualifier))
             match = findInList(SCANNER_MEMBERS, name);
-          else if (/^(?:sb|strbuild|builder)$/i.test(qualifier))
+          else if (/^(?:sb|strbuild|builder)\d*$/i.test(qualifier))
             match = findInList(STRINGBUILDER_MEMBERS, name);
-          else if (/^(?:str|s|text|line|word|name|msg)$/i.test(qualifier))
+          else if (/^(?:str|s|text|line|word|name|msg)\d*$/i.test(qualifier))
             match = findInList(STRING_INSTANCE_MEMBERS, name);
-          else if (/^(?:arr|nums)$/i.test(qualifier)) match = findInList(ARRAY_MEMBERS, name);
-          else if (/^(?:list|items|values|res|result)$/i.test(qualifier))
+          else if (/^(?:arr|nums)\d*$/i.test(qualifier)) match = findInList(ARRAY_MEMBERS, name);
+          else if (/^(?:list|items|values|res|result)\d*$/i.test(qualifier))
             match = findInList(LIST_MEMBERS, name);
-          else if (/^(?:map|dict|counts|freq|seen)$/i.test(qualifier))
+          else if (/^(?:map|dict|counts|freq|seen)\d*$/i.test(qualifier))
             match = findInList(MAP_MEMBERS, name);
-          else if (/^(?:set|unique|visited)$/i.test(qualifier))
+          else if (/^(?:set|unique|visited)\d*$/i.test(qualifier))
             match = findInList(SET_MEMBERS, name);
-          else if (/^(?:q|queue|dq|deque)$/i.test(qualifier))
+          else if (/^(?:q|queue|dq|deque)\d*$/i.test(qualifier))
             match = findInList(QUEUE_MEMBERS, name);
-          else if (/^(?:st|stack)$/i.test(qualifier)) match = findInList(STACK_MEMBERS, name);
+          else if (/^(?:st|stack)\d*$/i.test(qualifier)) match = findInList(STACK_MEMBERS, name);
         }
         if (!match) {
           match = findInList(COMMON_INSTANCE_MEMBERS, name);
@@ -2745,8 +3130,8 @@ export function registerJavaCompletions(mInstance?: Monaco) {
 
       // Standalone hover without qualifier
       if (!qualifier) {
-        // 1. User-defined local variable / parameter
-        const varsMap = inferJavaVariablesAndTypes(model);
+        // 1. User-defined local variable / parameter in visible scope
+        const varsMap = inferJavaVariablesAndTypes(model, position.lineNumber);
         const v = varsMap.get(name);
         if (v) {
           return {
@@ -2764,7 +3149,7 @@ export function registerJavaCompletions(mInstance?: Monaco) {
         }
 
         // 2. User-defined method in document
-        const docMethods = extractJavaDocumentMethods(model);
+        const docMethods = extractJavaDocumentMethods(model, position.lineNumber);
         const dm = docMethods.get(name);
         if (dm) {
           return {
@@ -2829,12 +3214,16 @@ export function registerJavaCompletions(mInstance?: Monaco) {
         endColumn: position.column,
       });
 
+      // Mask comments before scanning delimiters to prevent comment contents
+      // (like apostrophes or parens) from corrupting the string or block parser
+      const cleanedText = maskJavaComments(textBefore);
+
       const blockStack: { char: string; openIdx: number; argCount: number }[] = [];
       let inQuote: string | null = null;
       let isEscaped = false;
 
-      for (let i = 0; i < textBefore.length; i++) {
-        const ch = textBefore[i];
+      for (let i = 0; i < cleanedText.length; i++) {
+        const ch = cleanedText[i];
 
         if (inQuote !== null) {
           if (ch === inQuote && !isEscaped) {
@@ -2869,14 +3258,14 @@ export function registerJavaCompletions(mInstance?: Monaco) {
             blockStack.pop();
         } else if (ch === "<") {
           // Check if this '<' starts a generic type argument list (e.g. ArrayList<String>)
-          const textPrior = textBefore.slice(0, i).trimEnd();
+          const textPrior = cleanedText.slice(0, i).trimEnd();
           const isPrecededByIdentifier = /[a-zA-Z_]\w*$/.test(textPrior);
           if (isPrecededByIdentifier) {
             let tempDepth = 1;
             let isValidGeneric = true;
             let closeIdx = -1;
-            for (let j = i + 1; j < textBefore.length; j++) {
-              const cj = textBefore[j];
+            for (let j = i + 1; j < cleanedText.length; j++) {
+              const cj = cleanedText[j];
               if (cj === "<") {
                 tempDepth++;
               } else if (cj === ">") {
@@ -2909,14 +3298,15 @@ export function registerJavaCompletions(mInstance?: Monaco) {
       if (top.char !== "(") return null;
 
       // Extract the call text preceding '('
-      const callPrefix = textBefore.slice(0, top.openIdx).trimEnd();
+      const callPrefix = cleanedText.slice(0, top.openIdx).trimEnd();
       const callMatch = callPrefix.match(/([a-zA-Z_]\w*(?:\.[a-zA-Z_]\w*)*)$/);
       if (!callMatch) return null;
 
       const callText = callMatch[1];
       const callParts = callText.split(".");
       const methodName = callParts[callParts.length - 1];
-      const qualifier = callParts.slice(0, -1).join(".").toLowerCase();
+      const rawQualifier = callParts.slice(0, -1).join(".");
+      const qualifier = rawQualifier.toLowerCase();
 
       // 1. If keyword and no qualifier, return null immediately (e.g. `if (`, `while (`)
       if (!qualifier && JAVA_KEYWORD_SET.has(methodName)) {
@@ -2948,8 +3338,8 @@ export function registerJavaCompletions(mInstance?: Monaco) {
 
       // 2. Unqualified call (e.g. `solve(`, `max(`)
       if (!qualifier) {
-        // Check document-defined methods
-        const docMethods = extractJavaDocumentMethods(model);
+        // Check document-defined methods in scope
+        const docMethods = extractJavaDocumentMethods(model, position.lineNumber);
         const docMethod = docMethods.get(methodName);
         if (docMethod) {
           return {
@@ -3019,9 +3409,9 @@ export function registerJavaCompletions(mInstance?: Monaco) {
         }
       }
 
-      // Check inferred variable types from document
-      const varsMap = inferJavaVariablesAndTypes(model);
-      const varInfo = varsMap.get(qualifier);
+      // Check inferred variable types from document in visible scope
+      const varsMap = inferJavaVariablesAndTypes(model, position.lineNumber);
+      const varInfo = varsMap.get(rawQualifier) ?? varsMap.get(qualifier);
       let targetList: MethodItem[] | null = null;
 
       if (varInfo) {
@@ -3038,16 +3428,18 @@ export function registerJavaCompletions(mInstance?: Monaco) {
 
       // Name heuristics fallback
       if (!targetList) {
-        if (/^(?:sc|scanner|in|reader)$/i.test(qualifier)) targetList = SCANNER_MEMBERS;
-        else if (/^(?:sb|strbuild|builder)$/i.test(qualifier)) targetList = STRINGBUILDER_MEMBERS;
-        else if (/^(?:str|s|text|line|word|name|msg)$/i.test(qualifier))
+        if (/^(?:sc|scanner|in|reader)\d*$/i.test(qualifier)) targetList = SCANNER_MEMBERS;
+        else if (/^(?:sb|strbuild|builder)\d*$/i.test(qualifier))
+          targetList = STRINGBUILDER_MEMBERS;
+        else if (/^(?:str|s|text|line|word|name|msg)\d*$/i.test(qualifier))
           targetList = STRING_INSTANCE_MEMBERS;
-        else if (/^(?:list|items|values|res|result)$/i.test(qualifier)) targetList = LIST_MEMBERS;
-        else if (/^(?:arr|nums)$/i.test(qualifier)) targetList = ARRAY_MEMBERS;
-        else if (/^(?:map|dict|counts|freq|seen)$/i.test(qualifier)) targetList = MAP_MEMBERS;
-        else if (/^(?:set|unique|visited)$/i.test(qualifier)) targetList = SET_MEMBERS;
-        else if (/^(?:q|queue|dq|deque)$/i.test(qualifier)) targetList = QUEUE_MEMBERS;
-        else if (/^(?:st|stack)$/i.test(qualifier)) targetList = STACK_MEMBERS;
+        else if (/^(?:list|items|values|res|result)\d*$/i.test(qualifier))
+          targetList = LIST_MEMBERS;
+        else if (/^(?:arr|nums)\d*$/i.test(qualifier)) targetList = ARRAY_MEMBERS;
+        else if (/^(?:map|dict|counts|freq|seen)\d*$/i.test(qualifier)) targetList = MAP_MEMBERS;
+        else if (/^(?:set|unique|visited)\d*$/i.test(qualifier)) targetList = SET_MEMBERS;
+        else if (/^(?:q|queue|dq|deque)\d*$/i.test(qualifier)) targetList = QUEUE_MEMBERS;
+        else if (/^(?:st|stack)\d*$/i.test(qualifier)) targetList = STACK_MEMBERS;
       }
 
       if (targetList) {
