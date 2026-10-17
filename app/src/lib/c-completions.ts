@@ -1775,6 +1775,34 @@ export const C_PRIMITIVE_TYPES = new Set([
 ]);
 
 /**
+ * Parses an array subscript expression (e.g. "matrix[row[0]][col[0]]" or "arr[i + 1]")
+ * and returns the base variable name and total subscript depth.
+ */
+export function parseSubscriptExpression(
+  expr: string,
+): { baseVar: string; subDepth: number } | null {
+  const m = expr.match(/^([a-zA-Z_]\w*)\s*\[/);
+  if (!m) return null;
+  const baseVar = m[1];
+  let depth = 0;
+  let subDepth = 0;
+  for (let i = baseVar.length; i < expr.length; i++) {
+    const ch = expr[i];
+    if (ch === "[") {
+      if (depth === 0) subDepth++;
+      depth++;
+    } else if (ch === "]") {
+      depth--;
+      if (depth < 0) return null;
+    } else if (depth === 0 && !/\s/.test(ch)) {
+      return null;
+    }
+  }
+  if (depth !== 0 || subDepth === 0) return null;
+  return { baseVar, subDepth };
+}
+
+/**
  * Infers the type of an expression preceding '.' or '->' in C.
  */
 export function inferCType(
@@ -1800,23 +1828,21 @@ export function inferCType(
   }
 
   // Recursive pointer / struct chaining:
-  // e.g. head->next-> or head->next->next->
-  if (operatorKind === "->" && /(?:->|\.)next$/.test(expr)) {
-    // If base expression is ListNode, next is also ListNode
+  // e.g. head->next-> or head->next->next-> or root->left->right->
+  if (operatorKind === "->" && /(?:->|\.)(?:next|prev)$/.test(expr)) {
     return "ListNode";
   }
   if (operatorKind === "->" && /(?:->|\.)(?:left|right)$/.test(expr)) {
-    // If base expression is TreeNode, left/right is also TreeNode
     return "TreeNode";
   }
+  if (operatorKind === "->" && /(?:->|\.)random$/.test(expr)) {
+    return "Node";
+  }
 
-  // Multi-bracket subscript / array indexing: arr[0]. or matrix[0][0]. or nodes[i].
-  const subMatch = expr.match(/^([a-zA-Z_]\w*)((?:\s*\[[^\]]*\])+)$/);
-  if (subMatch) {
-    const baseVar = subMatch[1];
-    const brackets = subMatch[2];
-    const subDepth = (brackets.match(/\[/g) || []).length;
-
+  // Multi-bracket subscript / array indexing: arr[0]. or matrix[0][0]. or matrix[row[0]][col[0]].
+  const subParsed = parseSubscriptExpression(expr);
+  if (subParsed) {
+    const { baseVar, subDepth } = subParsed;
     const scopes = computeCScopes(model, position.lineNumber);
 
     for (let ln = position.lineNumber; ln >= 1; ln--) {
@@ -1832,13 +1858,12 @@ export function inferCType(
       );
       if (arrDecl) {
         const rawType = arrDecl[1].replace(/^struct\s+/, "").trim();
-        const hasPointer = Boolean(arrDecl[2]);
         const declaredDim = (arrDecl[3].match(/\[/g) || []).length;
 
         if (subDepth === declaredDim) {
           if (C_PRIMITIVE_TYPES.has(rawType)) {
             // e.g. int arr[10]; arr[0] is primitive int!
-            return hasPointer ? "primitive" : "primitive";
+            return "primitive";
           }
           if (rawType === "ListNode") return "ListNode";
           if (rawType === "TreeNode") return "TreeNode";
@@ -1864,25 +1889,20 @@ export function inferCType(
       const line = maskCComments(model.getLineContent(ln)).trim();
       if (!line) continue;
 
-      // 1. Primitive declaration: int x; or float y; or char str[10];
+      // 1. Primitive declaration: int x; or float y = 1.0; or int a = 1, b = 2;
       const primMatch = line.match(
         new RegExp(
-          `\\b(int|long|double|float|char|bool|_Bool|short|unsigned|signed|size_t|ssize_t|ptrdiff_t|uint8_t|uint16_t|uint32_t|uint64_t|int8_t|int16_t|int32_t|int64_t|intptr_t|uintptr_t|void)\\b\\s*(\\*+)?\\s*(?:[a-zA-Z_]\\w*\\s*,\\s*)*${varName}\\b`,
+          `\\b(int|long|double|float|char|bool|_Bool|short|unsigned|signed|size_t|ssize_t|ptrdiff_t|uint8_t|uint16_t|uint32_t|uint64_t|int8_t|int16_t|int32_t|int64_t|intptr_t|uintptr_t|void)\\b\\s*(?:(?:\\*+\\s*)?[a-zA-Z_]\\w*(?:\\s*=\\s*[^,;]+)?\\s*,\\s*)*(?:\\*+\\s*)?${varName}\\b`,
         ),
       );
       if (primMatch) {
-        const hasPointer = Boolean(primMatch[2]);
-        if (!hasPointer) {
-          return "primitive";
-        }
-        // Pointer to primitive like int* ptr. In C, primitives and primitive pointers have NO members!
         return "primitive";
       }
 
-      // 2. Struct declaration: struct ListNode *head; or ListNode* head;
+      // 2. Struct pointer declaration: struct ListNode *head = NULL, *cur; or Book *b;
       const structMatch = line.match(
         new RegExp(
-          `\\b(?:struct\\s+)?([a-zA-Z_]\\w*)\\s*\\*+\\s*(?:[a-zA-Z_]\\w*\\s*,\\s*)*${varName}\\b`,
+          `\\b(?:struct\\s+)?([a-zA-Z_]\\w*)(?:\\s*\\*+)?\\s*(?:(?:\\*+\\s*)?[a-zA-Z_]\\w*(?:\\s*=\\s*[^,;]+)?\\s*,\\s*)*(?:\\*+\\s*)?${varName}\\b`,
         ),
       );
       if (structMatch) {
@@ -1892,12 +1912,16 @@ export function inferCType(
         if (sType === "Node") return "Node";
         if (sType === "Point") return "Point";
         if (sType === "Pair") return "Pair";
-        return sType;
+        if (!C_KEYWORD_SET.has(sType) && !C_PRIMITIVE_TYPES.has(sType)) {
+          return sType;
+        }
       }
 
-      // 3. Struct value declaration: struct Point p; or Point p;
+      // 3. Struct value declaration: struct Point p; or Point p1 = {0}, p2;
       const structValMatch = line.match(
-        new RegExp(`\\b(?:struct\\s+)?([a-zA-Z_]\\w*)\\s+(?:[a-zA-Z_]\\w*\\s*,\\s*)*${varName}\\b`),
+        new RegExp(
+          `\\b(?:struct\\s+)?([a-zA-Z_]\\w*)\\s+(?:[a-zA-Z_]\\w*(?:\\s*=\\s*[^,;]+)?\\s*,\\s*)*${varName}\\b`,
+        ),
       );
       if (structValMatch) {
         const sType = structValMatch[1];
@@ -1999,11 +2023,31 @@ export function extractCDocSymbols(
       }
     }
 
+    // Check enum declaration
+    const enumMatch = masked.match(/\benum\s+([a-zA-Z_]\w*)?\s*\{([^}]+)\}/);
+    if (enumMatch) {
+      const enumBody = enumMatch[2];
+      const items = enumBody.split(",");
+      for (const rawItem of items) {
+        const item = rawItem.split("=")[0].trim();
+        if (item && !seen.has(item) && !C_KEYWORD_SET.has(item)) {
+          seen.add(item);
+          symbols.push({
+            name: item,
+            kind: monacoDefault.languages.CompletionItemKind.EnumMember,
+            detail: `enum constant`,
+            documentation: `Enumeration constant (line ${ln})`,
+            line: ln,
+          });
+        }
+      }
+    }
+
     // Check variable declaration if line is visible in current scope
     if (isLineVisible(scopes, ln)) {
       // Identifier hygiene: negative lookbehind (?:^|[^.->]) so member names are not captured
       const varDeclMatches = masked.matchAll(
-        /(?:^|[^.->])\b((?:const\s+)?(?:struct\s+[a-zA-Z_]\w*|[a-zA-Z_]\w*))\s*(\*+)?\s+([a-zA-Z_]\w*(?:\s*,\s*(?:\*+)?[a-zA-Z_]\w*)*)\s*(?:=|;|,|\()/g,
+        /(?:^|[^.->])\b((?:const\s+)?(?:struct\s+[a-zA-Z_]\w*|[a-zA-Z_]\w*))\s*(\*+)?\s+([^;]+);/g,
       );
       for (const vm of varDeclMatches) {
         const baseType = vm[1].trim();
@@ -2026,7 +2070,9 @@ export function extractCDocSymbols(
         const varGroup = vm[3];
         const individualVars = varGroup.split(",");
         for (const rawV of individualVars) {
-          const cleanVar = rawV.replace(/\*+/g, "").trim();
+          const namePart = rawV.split("=")[0].replace(/\*+/g, "").trim();
+          const matchName = namePart.match(/([a-zA-Z_]\w*)$/);
+          const cleanVar = matchName ? matchName[1] : "";
           if (
             cleanVar &&
             !seen.has(cleanVar) &&

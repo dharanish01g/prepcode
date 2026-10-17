@@ -1144,3 +1144,41 @@ void other() {
   assert.ok(hVar.contents[0].value.includes("totalItems"), "Hover shows variable name");
   assert.ok(hVar.contents[0].value.includes("int"), "Hover shows variable type");
 });
+
+test("C: Multi-variable initializers, enums, and nested bracket subscript dereferencing", () => {
+  // 1. Nested bracket subscript expressions: matrix[row[0]][col[0]]. is primitive int -> 0 suggestions
+  const matNested = cLabels("int matrix[5][5];\nmatrix[row[0]][col[0]].");
+  assert.equal(matNested.length, 0, "matrix[row[0]][col[0]]. yields 0 suggestions (primitive int)");
+
+  // 2. Multi-variable declarations with initializers
+  const multiVars = cLabels("int a = 1, b = 2;\nb.");
+  assert.equal(
+    multiVars.length,
+    0,
+    "b. in 'int a = 1, b = 2;' yields 0 suggestions (primitive int)",
+  );
+
+  // 3. Initialized pointer declaration: struct ListNode *head = NULL, *cur;
+  const initPtrLabels = cLabels("struct ListNode *head = NULL, *cur;\ncur->");
+  assert.ok(initPtrLabels.includes("val"), "cur-> suggests val");
+  assert.ok(initPtrLabels.includes("next"), "cur-> suggests next");
+
+  // 4. Enumerations: enum Direction { NORTH, SOUTH, EAST, WEST };
+  const enumSrc = `enum Direction { NORTH, SOUTH, EAST, WEST };
+void test() {
+    
+}`;
+  const enumLabels = cLabels(enumSrc, 5, 3);
+  assert.ok(enumLabels.includes("NORTH"), "Enum member NORTH is suggested");
+  assert.ok(enumLabels.includes("SOUTH"), "Enum member SOUTH is suggested");
+
+  // 5. Multiple variables on one line extracted as document symbols
+  const multiVarsSrc = `void test() {
+    int count = 10, total = 100, *ptr = NULL;
+    
+}`;
+  const docVars = cLabels(multiVarsSrc, 5, 3);
+  assert.ok(docVars.includes("count"), "count is suggested");
+  assert.ok(docVars.includes("total"), "total is suggested");
+  assert.ok(docVars.includes("ptr"), "ptr is suggested");
+});
