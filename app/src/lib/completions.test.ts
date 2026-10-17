@@ -1027,3 +1027,27 @@ test("SQL Issue 13: multi-dialect parity across mysql and pgsql", () => {
   assert.equal(sqlSig("SUBSTRING('hello', ", "mysql"), 1, "MySQL signature help works");
   assert.equal(sqlSig("SUBSTRING('hello', ", "pgsql"), 1, "PostgreSQL signature help works");
 });
+
+test("SQL Issue 14: advanced robustness for strings with comment markers, outer joins, and default strings with commas", () => {
+  const doc = `CREATE TABLE logs (
+    id INT PRIMARY KEY,
+    msg VARCHAR(100) DEFAULT 'warning, error -- not a comment',
+    created_at TIMESTAMP
+);
+CREATE TABLE audit (
+    audit_id INT,
+    action TEXT
+);
+SELECT * FROM logs l LEFT OUTER JOIN audit a ON l.id = a.audit_id WHERE l.`;
+
+  const labels = sqlLabels(doc);
+  assert.ok(labels.includes("id"), "id column suggested");
+  assert.ok(labels.includes("msg"), "msg column with comma in default suggested as single column");
+  assert.ok(labels.includes("created_at"), "created_at suggested");
+  assert.ok(!labels.includes("action"), "LEFT OUTER JOIN alias l. does not leak audit.action");
+
+  // Audit alias
+  const auditLabels = sqlLabels(doc.replace("WHERE l.", "WHERE a."));
+  assert.ok(auditLabels.includes("action"), "a. suggests audit.action");
+  assert.ok(!auditLabels.includes("msg"), "a. does not suggest logs.msg");
+});

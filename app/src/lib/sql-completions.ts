@@ -806,55 +806,94 @@ export function stripSqlComment(line: string): string {
 }
 
 /**
- * Strips comments and strings from multi-line code for clean syntax and symbol parsing.
+ * Strips comments and strings from multi-line code for clean syntax and symbol parsing,
+ * preserving line numbers and whitespace offsets without regex collision bugs.
  */
 export function stripSqlCommentsAndStrings(code: string): string {
-  return code
-    .replace(/\/\*[\s\S]*?\*\//g, " ")
-    .replace(/--.*$/gm, " ")
-    .replace(/#.*$/gm, " ")
-    .replace(/'(?:''|\\'|[^'])*'/g, " ")
-    .replace(/"(?:""|\\"|[^"])*"/g, " ");
-}
+  let result = "";
+  let inQuote: string | null = null;
+  let inBlockComment = false;
+  let inLineComment = false;
 
-/**
- * Checks whether the cursor position is inside a SQL comment (-- or # or multi-line /* ... *\/).
- */
-export function isInsideSqlComment(
-  model: monacoDefault.editor.ITextModel,
-  position: monacoDefault.IPosition,
-): boolean {
-  const line = model.getLineContent(position.lineNumber);
-  const textBefore = line.slice(0, position.column - 1);
+  for (let i = 0; i < code.length; i++) {
+    const ch = code[i];
 
-  // Check single-line comments on the current line
-  let inString: string | null = null;
-  for (let i = 0; i < textBefore.length; i++) {
-    const ch = textBefore[i];
-    if (inString !== null) {
-      if (ch === "\\") {
+    if (inLineComment) {
+      if (ch === "\n") {
+        inLineComment = false;
+        result += "\n";
+      } else {
+        result += " ";
+      }
+      continue;
+    }
+
+    if (inBlockComment) {
+      if (ch === "*" && i + 1 < code.length && code[i + 1] === "/") {
+        inBlockComment = false;
+        result += "  ";
+        i++;
+      } else {
+        result += ch === "\n" ? "\n" : " ";
+      }
+      continue;
+    }
+
+    if (inQuote !== null) {
+      if (ch === "\\" && i + 1 < code.length) {
+        result += "  ";
         i++;
         continue;
       }
-      if (ch === inString) {
-        if (i + 1 < textBefore.length && textBefore[i + 1] === inString) {
+      if (ch === inQuote) {
+        if (i + 1 < code.length && code[i + 1] === inQuote) {
+          result += "  ";
           i++;
           continue;
         }
-        inString = null;
+        inQuote = null;
+        result += " ";
+        continue;
       }
+      result += ch === "\n" ? "\n" : " ";
       continue;
     }
-    if (ch === "'" || ch === '"' || ch === "`") {
-      inString = ch;
+
+    // Check comment start
+    if ((ch === "-" && i + 1 < code.length && code[i + 1] === "-") || ch === "#") {
+      inLineComment = true;
+      result += "  ";
+      if (ch === "-") i++;
       continue;
     }
-    if ((ch === "-" && i + 1 < textBefore.length && textBefore[i + 1] === "-") || ch === "#") {
-      return true;
+
+    if (ch === "/" && i + 1 < code.length && code[i + 1] === "*") {
+      inBlockComment = true;
+      result += "  ";
+      i++;
+      continue;
     }
+
+    // Check string start
+    if (ch === "'" || ch === '"') {
+      inQuote = ch;
+      result += " ";
+      continue;
+    }
+
+    result += ch;
   }
 
-  // Check multi-line block comments /* ... */ across preceding lines
+  return result;
+}
+
+/**
+ * Checks whether the cursor position is inside a SQL comment or string literal.
+ */
+export function getSqlContextAtPosition(
+  model: monacoDefault.editor.ITextModel,
+  position: monacoDefault.IPosition,
+): { inComment: boolean; inString: boolean } {
   const startLine = Math.max(1, position.lineNumber - 50);
   const precedingText = model.getValueInRange({
     startLineNumber: startLine,
@@ -863,10 +902,20 @@ export function isInsideSqlComment(
     endColumn: position.column,
   });
 
+  let inQuote: string | null = null;
   let inBlockComment = false;
-  let inStr: string | null = null;
+  let inLineComment = false;
+
   for (let i = 0; i < precedingText.length; i++) {
     const ch = precedingText[i];
+
+    if (inLineComment) {
+      if (ch === "\n") {
+        inLineComment = false;
+      }
+      continue;
+    }
+
     if (inBlockComment) {
       if (ch === "*" && i + 1 < precedingText.length && precedingText[i + 1] === "/") {
         inBlockComment = false;
@@ -874,79 +923,61 @@ export function isInsideSqlComment(
       }
       continue;
     }
-    if (inStr !== null) {
+
+    if (inQuote !== null) {
       if (ch === "\\" && i + 1 < precedingText.length) {
         i++;
         continue;
       }
-      if (ch === inStr) {
-        if (i + 1 < precedingText.length && precedingText[i + 1] === inStr) {
+      if (ch === inQuote) {
+        if (i + 1 < precedingText.length && precedingText[i + 1] === inQuote) {
           i++;
           continue;
         }
-        inStr = null;
+        inQuote = null;
       }
       continue;
     }
-    if (ch === "'" || ch === '"' || ch === "`") {
-      inStr = ch;
-      continue;
-    }
+
     if (
       (ch === "-" && i + 1 < precedingText.length && precedingText[i + 1] === "-") ||
       ch === "#"
     ) {
-      while (i < precedingText.length && precedingText[i] !== "\n") {
-        i++;
-      }
+      inLineComment = true;
       continue;
     }
+
     if (ch === "/" && i + 1 < precedingText.length && precedingText[i + 1] === "*") {
       inBlockComment = true;
       i++;
       continue;
     }
+
+    if (ch === "'" || ch === '"' || ch === "`") {
+      inQuote = ch;
+      continue;
+    }
   }
 
-  return inBlockComment;
+  return {
+    inComment: inLineComment || inBlockComment,
+    inString: inQuote !== null,
+  };
 }
 
-/**
- * Checks whether the cursor position is inside a comment or an unclosed string literal.
- */
+export function isInsideSqlComment(
+  model: monacoDefault.editor.ITextModel,
+  position: monacoDefault.IPosition,
+): boolean {
+  return getSqlContextAtPosition(model, position).inComment;
+}
+
 export function isInsideSqlCommentOrString(
   model: monacoDefault.editor.ITextModel,
   position: monacoDefault.IPosition,
 ): boolean {
-  if (isInsideSqlComment(model, position)) return true;
-
-  const line = model.getLineContent(position.lineNumber);
-  const textBefore = line.slice(0, position.column - 1);
-  let inString: string | null = null;
-
-  for (let i = 0; i < textBefore.length; i++) {
-    const ch = textBefore[i];
-    if (inString !== null) {
-      if (ch === "\\") {
-        i++;
-        continue;
-      }
-      if (ch === inString) {
-        if (i + 1 < textBefore.length && textBefore[i + 1] === inString) {
-          i++;
-          continue;
-        }
-        inString = null;
-      }
-      continue;
-    }
-    if (ch === "'" || ch === '"' || ch === "`") {
-      inString = ch;
-      continue;
-    }
-  }
-
-  return inString !== null;
+  const ctx = getSqlContextAtPosition(model, position);
+  return ctx.inComment || ctx.inString;
 }
 
 // --- Document Schema & Table / Column Extraction ---------------------------------------
@@ -1139,7 +1170,7 @@ export function extractSqlAliases(queryText: string): Map<string, string> {
 
   // 1. Match FROM and JOIN clauses: FROM table [AS] alias or JOIN table [AS] alias
   const fromJoinRegex =
-    /\b(?:FROM|(?:LEFT|RIGHT|FULL|INNER|CROSS\s+)?JOIN)\s+(?:`|")?(?:[a-zA-Z_]\w*\.)?([a-zA-Z_]\w*)(?:`|")?(?:\s+(?:AS\s+)?(?:`|")?([a-zA-Z_]\w*)(?:`|")?)?/gi;
+    /\b(?:FROM|(?:(?:LEFT|RIGHT|FULL|INNER|CROSS|NATURAL)(?:\s+OUTER)?\s+)?JOIN)\s+(?:`|")?(?:[a-zA-Z_]\w*\.)?([a-zA-Z_]\w*)(?:`|")?(?:\s+(?:AS\s+)?(?:`|")?([a-zA-Z_]\w*)(?:`|")?)?/gi;
 
   let match: RegExpExecArray | null;
   while ((match = fromJoinRegex.exec(cleaned)) !== null) {
