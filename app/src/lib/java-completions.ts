@@ -1555,6 +1555,12 @@ const SNIPPETS = [
     documentation: "Prints the value to standard output followed by a newline.",
   },
   {
+    label: "sysout",
+    insertText: "System.out.println(${1});",
+    detail: "System.out.println(...);",
+    documentation: "Prints the value to standard output followed by a newline (Eclipse shortcut).",
+  },
+  {
     label: "souf",
     insertText: 'System.out.printf("${1:%s}\\n", ${2});',
     detail: "System.out.printf(...);",
@@ -1760,12 +1766,23 @@ function classifyJavaType(
   elementType?: string;
   elementCategory?: JavaCategory;
 } {
-  const typeStr = rawType.trim();
+  const typeStr = rawType.trim().replace(/\s*\[\s*\]/g, "[]");
 
   // If declared with `var`, inspect RHS initializer
   if (typeStr === "var" && rhs) {
     const trimmedRhs = rhs.trim();
-    if (/^new\s+[a-zA-Z_]\w*\s*\[/.test(trimmedRhs) || /^\{/.test(trimmedRhs)) {
+    const newArrayMatch = trimmedRhs.match(/^new\s+([a-zA-Z_]\w*(?:<[^>]+>)?)(?:\s*\[[^\]]*\])+/);
+    if (newArrayMatch) {
+      const elemType = newArrayMatch[1];
+      const elemInfo = classifyJavaType(elemType);
+      return {
+        typeString: `${elemType}[]`,
+        category: "array",
+        elementType: elemType,
+        elementCategory: elemInfo.category,
+      };
+    }
+    if (/^\{/.test(trimmedRhs)) {
       return { typeString: "array", category: "array" };
     }
     if (/^new\s+Scanner\b/.test(trimmedRhs)) {
@@ -1856,6 +1873,19 @@ function classifyJavaType(
   }
 
   // Map: Map<K, V>, HashMap<K, V>, TreeMap<K, V>, LinkedHashMap<K, V>
+  const mapMatch = typeStr.match(
+    /^(?:Map|HashMap|TreeMap|LinkedHashMap|ConcurrentHashMap)<([^,]+),\s*(.+)>$/,
+  );
+  if (mapMatch) {
+    const valType = mapMatch[2].trim();
+    const valInfo = classifyJavaType(valType);
+    return {
+      typeString: typeStr,
+      category: "map",
+      elementType: valType,
+      elementCategory: valInfo.category,
+    };
+  }
   if (/^(?:Map|HashMap|TreeMap|LinkedHashMap|ConcurrentHashMap)(?:<.*>)?$/.test(typeStr)) {
     return { typeString: typeStr, category: "map" };
   }
@@ -1900,6 +1930,99 @@ function classifyJavaType(
   }
 
   return { typeString: typeStr, category: "other" };
+}
+
+/**
+ * Peels `depth` array dimensions from `typeStr` (e.g. `int[][]` with depth 2 becomes `int`).
+ */
+export function peelArrayDimensions(
+  typeStr: string,
+  depth: number,
+  fallbackElemCategory?: JavaCategory,
+): { baseType: string; category: JavaCategory } {
+  let current = typeStr.trim().replace(/\s*\[\s*\]/g, "[]");
+  for (let i = 0; i < depth; i++) {
+    if (current.endsWith("[]")) {
+      current = current.slice(0, -2).trim();
+    } else {
+      break;
+    }
+  }
+  if (current === "array" && fallbackElemCategory) {
+    return { baseType: current, category: fallbackElemCategory };
+  }
+  const classified = classifyJavaType(current);
+  return { baseType: current, category: classified.category };
+}
+
+/**
+ * Peels `depth` generic levels from a List type (e.g. `List<List<String>>` with depth 1 becomes `List<String>`).
+ */
+export function peelListElementType(
+  typeStr: string,
+  depth: number,
+): { baseType: string; category: JavaCategory } {
+  let current = typeStr.trim();
+  for (let i = 0; i < depth; i++) {
+    const m = current.match(/^(?:List|ArrayList|LinkedList|Vector)<(.+)>$/);
+    if (m) {
+      current = m[1].trim();
+    } else {
+      break;
+    }
+  }
+  const classified = classifyJavaType(current);
+  return { baseType: current, category: classified.category };
+}
+
+/**
+ * Splits variable declarations on commas that occur at the top level
+ * (not inside braces, parens, brackets, or string literals).
+ */
+function splitByTopLevelCommas(str: string): string[] {
+  const parts: string[] = [];
+  let current = "";
+  let parenDepth = 0;
+  let braceDepth = 0;
+  let bracketDepth = 0;
+  let inString = false;
+
+  for (let i = 0; i < str.length; i++) {
+    const ch = str[i];
+    if (ch === '"') {
+      inString = !inString;
+      current += ch;
+    } else if (inString) {
+      current += ch;
+    } else if (ch === "(") {
+      parenDepth++;
+      current += ch;
+    } else if (ch === ")") {
+      if (parenDepth > 0) parenDepth--;
+      current += ch;
+    } else if (ch === "{") {
+      braceDepth++;
+      current += ch;
+    } else if (ch === "}") {
+      if (braceDepth > 0) braceDepth--;
+      current += ch;
+    } else if (ch === "[") {
+      bracketDepth++;
+      current += ch;
+    } else if (ch === "]") {
+      if (bracketDepth > 0) bracketDepth--;
+      current += ch;
+    } else if (ch === "," && parenDepth === 0 && braceDepth === 0 && bracketDepth === 0) {
+      parts.push(current);
+      current = "";
+    } else {
+      current += ch;
+    }
+  }
+  if (current.trim()) {
+    parts.push(current);
+  }
+  return parts;
 }
 
 /**
@@ -2168,10 +2291,19 @@ export function computeJavaScopes(
     } else {
       // Check if line looks like a method or constructor declaration
       const methodMatch = line.match(
-        /\b(?:public|private|protected|static|final|synchronized|abstract|default|native|\s)*\s*([a-zA-Z_]\w*(?:<[^>]+>)?(?:\[\])*)\s+([a-zA-Z_]\w*)\s*\(/,
+        /\b(?:public|private|protected|static|final|synchronized|abstract|default|native|\s)*(?:<[^>]+>\s+)?([a-zA-Z_]\w*(?:<[^>]+>)?(?:\s*\[\s*\])*)\s+([a-zA-Z_]\w*)\s*\(/,
       );
+      const constructorMatch = !methodMatch
+        ? line.match(/\b(?:public|private|protected|\s)*\s*([A-Z]\w*)\s*\(/)
+        : null;
+
       if (methodMatch && !trimmed.endsWith(";")) {
         const name = methodMatch[2];
+        if (!CONTROL_FLOW_KEYWORDS.has(name)) {
+          pendingHeader = { kind: "method", startLine: ln, headerLines: [ln] };
+        }
+      } else if (constructorMatch && !trimmed.endsWith(";")) {
+        const name = constructorMatch[1];
         if (!CONTROL_FLOW_KEYWORDS.has(name)) {
           pendingHeader = { kind: "method", startLine: ln, headerLines: [ln] };
         }
@@ -2282,10 +2414,10 @@ function inferJavaVariablesAndTypes(
 
     // 1. Foreach variable: `for (int x : nums)` or `for (String item : list)`
     const foreachMatch = line.match(
-      /\bfor\s*\(\s*(?:final\s+)?([a-zA-Z_]\w*(?:<[^>]+>)?(?:\[\])*)\s+([a-zA-Z_]\w*)\s*:/,
+      /\bfor\s*\(\s*(?:final\s+)?([a-zA-Z_]\w*(?:<[^>]+>)?(?:\s*\[\s*\])*)\s+([a-zA-Z_]\w*)\s*:/,
     );
     if (foreachMatch) {
-      const typeStr = foreachMatch[1];
+      const typeStr = foreachMatch[1].replace(/\s*\[\s*\]/g, "[]");
       const name = foreachMatch[2];
       if (!JAVA_KEYWORD_SET.has(name) && !JAVA_TYPE_SET.has(name)) {
         const classified = classifyJavaType(typeStr);
@@ -2302,7 +2434,7 @@ function inferJavaVariablesAndTypes(
 
     // 2. Method parameters: `public int solve(int[] nums, int target)`
     const methodParamMatch = line.match(
-      /\b(?:public|private|protected|static|final|\s)*\s*[a-zA-Z_]\w*(?:<[^>]+>)?(?:\[\])*\s+[a-zA-Z_]\w*\s*\(([^)]*)\)/,
+      /\b(?:public|private|protected|static|final|\s)*(?:<[^>]+>\s+)?(?:(?:[a-zA-Z_]\w*(?:<[^>]+>)?(?:\s*\[\s*\])*)\s+)?[a-zA-Z_]\w*\s*\(([^)]*)\)/,
     );
     if (methodParamMatch && methodParamMatch[1].trim()) {
       const paramsRaw = methodParamMatch[1].trim();
@@ -2310,11 +2442,13 @@ function inferJavaVariablesAndTypes(
       for (const pt of pTokens) {
         const pm = pt
           .trim()
-          .match(/^(?:final\s+)?([a-zA-Z_]\w*(?:<[^>]+>)?(?:\[\])*)\s+([a-zA-Z_]\w*)(\[\])?$/);
+          .match(
+            /^(?:final\s+)?([a-zA-Z_]\w*(?:<[^>]+>)?(?:\s*\[\s*\])*)\s+([a-zA-Z_]\w*)((?:\s*\[\s*\])*)$/,
+          );
         if (pm) {
-          let pType = pm[1];
+          let pType = pm[1].replace(/\s*\[\s*\]/g, "[]");
           const pName = pm[2];
-          if (pm[3]) pType += "[]";
+          if (pm[3]) pType += pm[3].replace(/\s*\[\s*\]/g, "[]");
           if (!JAVA_KEYWORD_SET.has(pName) && !JAVA_TYPE_SET.has(pName)) {
             const classified = classifyJavaType(pType);
             vars.set(pName, {
@@ -2332,30 +2466,34 @@ function inferJavaVariablesAndTypes(
 
     // 3. Local variables and fields:
     const varDeclMatch = line.match(
-      /^(?:public\s+|private\s+|protected\s+|static\s+|final\s+|transient\s+|volatile\s+)*([a-zA-Z_]\w*(?:<[^>]+>)?(?:\[\])*)\s+([a-zA-Z_]\w*(?:\s*\[\])?(?:\s*=\s*[^,;]+)?(?:\s*,\s*[a-zA-Z_]\w*(?:\s*\[\])?(?:\s*=\s*[^,;]+)?)*)\s*[;,]/,
+      /^(?:public\s+|private\s+|protected\s+|static\s+|final\s+|transient\s+|volatile\s+)*([a-zA-Z_]\w*(?:<[^>]+>)?(?:\s*\[\s*\])*)\s+([^;]+);$/,
     );
     if (varDeclMatch) {
-      const baseType = varDeclMatch[1];
-      if (!JAVA_NON_TYPE_KEYWORDS.has(baseType)) {
-        const rest = varDeclMatch[2];
-        const entries = rest.split(",");
+      const baseType = varDeclMatch[1].replace(/\s*\[\s*\]/g, "[]");
+      const rest = varDeclMatch[2].trim();
+      const isField = Boolean(scopes && scopes.kind.get(scopes.owner[ln]) === "class");
+
+      if (
+        !JAVA_NON_TYPE_KEYWORDS.has(baseType) &&
+        (!rest.includes("(") || (rest.includes("=") && rest.indexOf("=") < rest.indexOf("(")))
+      ) {
+        const entries = splitByTopLevelCommas(rest);
         for (const entry of entries) {
-          const m = entry.trim().match(/^([a-zA-Z_]\w*)(\s*\[\])?(?:\s*=\s*(.+))?$/);
+          const m = entry.trim().match(/^([a-zA-Z_]\w*)((?:\s*\[\s*\])*)(?:\s*=\s*(.+))?$/);
           if (m) {
             const name = m[1];
-            const hasCArray = Boolean(m[2]);
+            const extraBrackets = m[2] ? m[2].replace(/\s*\[\s*\]/g, "[]") : "";
             const rhs = m[3] ? m[3].trim() : undefined;
-            let fullType = baseType;
-            if (hasCArray) fullType += "[]";
+            const fullType = baseType + extraBrackets;
             if (!JAVA_KEYWORD_SET.has(name) && !JAVA_TYPE_SET.has(name)) {
               const classified = classifyJavaType(fullType, rhs);
               vars.set(name, {
                 name,
-                typeString: fullType,
+                typeString: baseType === "var" ? classified.typeString : fullType,
                 category: classified.category,
                 elementType: classified.elementType,
                 elementCategory: classified.elementCategory,
-                origin: "local variable",
+                origin: isField ? "field" : "local variable",
               });
             }
           }
@@ -2388,10 +2526,10 @@ function extractJavaDocumentMethods(
     if (!line) continue;
 
     const methodMatch = line.match(
-      /\b(?:public|private|protected|static|final|\s)*\s*([a-zA-Z_]\w*(?:<[^>]+>)?(?:\[\])*)\s+([a-zA-Z_]\w*)\s*\(([^)]*)\)/,
+      /\b(?:public|private|protected|static|final|\s)*(?:<[^>]+>\s+)?([a-zA-Z_]\w*(?:<[^>]+>)?(?:\s*\[\s*\])*)\s+([a-zA-Z_]\w*)\s*\(([^)]*)\)/,
     );
     if (methodMatch) {
-      const returnType = methodMatch[1];
+      const returnType = methodMatch[1].replace(/\s*\[\s*\]/g, "[]");
       const name = methodMatch[2];
       const paramsRaw = methodMatch[3].trim();
 
@@ -2401,10 +2539,14 @@ function extractJavaDocumentMethods(
           for (const p of paramsRaw.split(",")) {
             const pm = p
               .trim()
-              .match(/^(?:final\s+)?([a-zA-Z_]\w*(?:<[^>]+>)?(?:\[\])*)\s+([a-zA-Z_]\w*)(\[\])?$/);
+              .match(
+                /^(?:final\s+)?([a-zA-Z_]\w*(?:<[^>]+>)?(?:\s*\[\s*\])*)\s+([a-zA-Z_]\w*)((?:\s*\[\s*\])*)$/,
+              );
             if (pm) {
+              let pType = pm[1].replace(/\s*\[\s*\]/g, "[]");
+              if (pm[3]) pType += pm[3].replace(/\s*\[\s*\]/g, "[]");
               paramList.push({
-                type: pm[3] ? `${pm[1]}[]` : pm[1],
+                type: pType,
                 name: pm[2],
               });
             }
@@ -2446,7 +2588,10 @@ function extractJavaDocumentSymbols(
       seen.add(name);
       items.push({
         label: name,
-        kind: monaco.languages.CompletionItemKind.Variable,
+        kind:
+          info.origin === "field"
+            ? monaco.languages.CompletionItemKind.Field
+            : monaco.languages.CompletionItemKind.Variable,
         insertText: name,
         detail: `${info.typeString} ${name} (${info.origin ?? "local"})`,
         range,
@@ -2572,19 +2717,40 @@ export function registerJavaCompletions(mInstance?: Monaco) {
         const isImportPackageLine =
           !isImportStaticLine && /^\s*import\s+/i.test(lineContent.slice(0, position.column - 1));
 
-        // Subscript access: e.g. `words[0].` or `nums[i].` or `matrix[0].`
-        const subMatch = textBeforeWord.match(/([a-zA-Z_]\w*)\[[^\]]*\]\.$/);
+        // Chained split subscript: e.g. `s.split(" ")[0].`
+        if (/\.split\s*\([^)]*\)\s*\[[^\]]*\]\.$/.test(textBeforeWord)) {
+          return {
+            suggestions: deduplicateSuggestions(
+              toCompletionItems([...STRING_INSTANCE_MEMBERS, ...COMMON_INSTANCE_MEMBERS], range),
+            ),
+          };
+        }
+
+        // Chained toCharArray subscript: e.g. `s.toCharArray()[0].` (primitive char cannot dereference)
+        if (/\.toCharArray\s*\([^)]*\)\s*\[[^\]]*\]\.$/.test(textBeforeWord)) {
+          return { suggestions: [] };
+        }
+
+        // Subscript access: e.g. `words[0].`, `nums[i].`, `matrix[0].`, `matrix[0][0].`
+        const subMatch = textBeforeWord.match(/([a-zA-Z_]\w*)((?:\s*\[[^\]]*\])+)\.$/);
         if (subMatch) {
           const baseVar = subMatch[1];
+          const brackets = subMatch[2];
+          const subDepth = (brackets.match(/\[/g) || []).length;
           const varsMap = inferJavaVariablesAndTypes(model, position.lineNumber);
           const varInfo = varsMap.get(baseVar);
           if (varInfo) {
             if (varInfo.category === "array") {
-              if (varInfo.elementCategory === "primitive") {
-                // Primitive element of array (e.g. int[] nums; nums[0].) cannot be dereferenced
+              const peeled = peelArrayDimensions(
+                varInfo.typeString,
+                subDepth,
+                varInfo.elementCategory,
+              );
+              if (peeled.category === "primitive") {
+                // Primitive element of array (e.g. int[] nums; nums[0]. or matrix[0][0].) cannot be dereferenced
                 return { suggestions: [] };
               }
-              if (varInfo.elementCategory === "string") {
+              if (peeled.category === "string") {
                 return {
                   suggestions: deduplicateSuggestions(
                     toCompletionItems(
@@ -2594,21 +2760,40 @@ export function registerJavaCompletions(mInstance?: Monaco) {
                   ),
                 };
               }
-              if (varInfo.elementCategory === "array") {
+              if (peeled.category === "array") {
                 return {
                   suggestions: deduplicateSuggestions(
                     toCompletionItems([...ARRAY_MEMBERS, ...COMMON_INSTANCE_MEMBERS], range),
                   ),
                 };
               }
-              if (varInfo.elementCategory === "list") {
+              if (peeled.category === "list") {
                 return {
                   suggestions: deduplicateSuggestions(
                     toCompletionItems([...LIST_MEMBERS, ...COMMON_INSTANCE_MEMBERS], range),
                   ),
                 };
               }
-            } else if (varInfo.category === "list") {
+              if (peeled.category === "map") {
+                return {
+                  suggestions: deduplicateSuggestions(
+                    toCompletionItems([...MAP_MEMBERS, ...COMMON_INSTANCE_MEMBERS], range),
+                  ),
+                };
+              }
+              if (peeled.category === "set") {
+                return {
+                  suggestions: deduplicateSuggestions(
+                    toCompletionItems([...SET_MEMBERS, ...COMMON_INSTANCE_MEMBERS], range),
+                  ),
+                };
+              }
+              return {
+                suggestions: deduplicateSuggestions(
+                  toCompletionItems(COMMON_INSTANCE_MEMBERS, range),
+                ),
+              };
+            } else if (varInfo.category === "list" && subDepth === 1) {
               if (varInfo.elementCategory === "string") {
                 return {
                   suggestions: deduplicateSuggestions(
@@ -2620,6 +2805,13 @@ export function registerJavaCompletions(mInstance?: Monaco) {
                 };
               }
             }
+          }
+          if (subDepth === 1 && /^(?:matrix|grid|board)\d*$/i.test(baseVar)) {
+            return {
+              suggestions: deduplicateSuggestions(
+                toCompletionItems([...ARRAY_MEMBERS, ...COMMON_INSTANCE_MEMBERS], range),
+              ),
+            };
           }
           return {
             suggestions: deduplicateSuggestions(toCompletionItems(COMMON_INSTANCE_MEMBERS, range)),
@@ -2648,11 +2840,89 @@ export function registerJavaCompletions(mInstance?: Monaco) {
           };
         }
 
-        // Chained array return: e.g. `.toArray().`
-        if (/\.toArray\s*\([^)]*\)\.$/.test(textBeforeWord)) {
+        // Chained array return: e.g. `.toArray().` or `.toCharArray().`
+        if (/\.(?:toArray|toCharArray)\s*\([^)]*\)\.$/.test(textBeforeWord)) {
           return {
             suggestions: deduplicateSuggestions(
               toCompletionItems([...ARRAY_MEMBERS, ...COMMON_INSTANCE_MEMBERS], range),
+            ),
+          };
+        }
+
+        // Chained collection .get(...) access: e.g. `list.get(0).` or `map.get(k).` or `matrix.get(0).get(0).`
+        const getMatch = textBeforeWord.match(/([a-zA-Z_]\w*)((?:\.get\s*\([^)]*\))+)\.$/);
+        if (getMatch) {
+          const baseVar = getMatch[1];
+          const gets = getMatch[2];
+          const getDepth = (gets.match(/\.get\s*\(/g) || []).length;
+          const varsMap = inferJavaVariablesAndTypes(model, position.lineNumber);
+          const varInfo = varsMap.get(baseVar);
+
+          if (varInfo) {
+            if (varInfo.category === "list") {
+              const peeled = peelListElementType(varInfo.typeString, getDepth);
+              if (peeled.category === "string") {
+                return {
+                  suggestions: deduplicateSuggestions(
+                    toCompletionItems(
+                      [...STRING_INSTANCE_MEMBERS, ...COMMON_INSTANCE_MEMBERS],
+                      range,
+                    ),
+                  ),
+                };
+              }
+              if (peeled.category === "list") {
+                return {
+                  suggestions: deduplicateSuggestions(
+                    toCompletionItems([...LIST_MEMBERS, ...COMMON_INSTANCE_MEMBERS], range),
+                  ),
+                };
+              }
+              if (peeled.category === "array") {
+                return {
+                  suggestions: deduplicateSuggestions(
+                    toCompletionItems([...ARRAY_MEMBERS, ...COMMON_INSTANCE_MEMBERS], range),
+                  ),
+                };
+              }
+              return {
+                suggestions: deduplicateSuggestions(
+                  toCompletionItems(COMMON_INSTANCE_MEMBERS, range),
+                ),
+              };
+            } else if (varInfo.category === "map") {
+              if (varInfo.elementCategory === "string") {
+                return {
+                  suggestions: deduplicateSuggestions(
+                    toCompletionItems(
+                      [...STRING_INSTANCE_MEMBERS, ...COMMON_INSTANCE_MEMBERS],
+                      range,
+                    ),
+                  ),
+                };
+              }
+              if (varInfo.elementCategory === "list") {
+                return {
+                  suggestions: deduplicateSuggestions(
+                    toCompletionItems([...LIST_MEMBERS, ...COMMON_INSTANCE_MEMBERS], range),
+                  ),
+                };
+              }
+              return {
+                suggestions: deduplicateSuggestions(
+                  toCompletionItems(COMMON_INSTANCE_MEMBERS, range),
+                ),
+              };
+            }
+          }
+
+          // Fallback for .get(...) calls
+          return {
+            suggestions: deduplicateSuggestions(
+              toCompletionItems(
+                [...STRING_INSTANCE_MEMBERS, ...LIST_MEMBERS, ...COMMON_INSTANCE_MEMBERS],
+                range,
+              ),
             ),
           };
         }
@@ -2676,6 +2946,60 @@ export function registerJavaCompletions(mInstance?: Monaco) {
 
         const target = singleMatch[1];
         const lowerTarget = target.toLowerCase();
+
+        // this. and super. instance member access
+        if (lowerTarget === "this" || lowerTarget === "super") {
+          const thisSuggestions: monacoDefault.languages.CompletionItem[] = [];
+          const seenThis = new Set<string>();
+
+          // 1. Methods declared in enclosing class
+          const docMethods = extractJavaDocumentMethods(model, position.lineNumber);
+          for (const [name, info] of docMethods) {
+            if (!seenThis.has(name)) {
+              seenThis.add(name);
+              thisSuggestions.push({
+                label: name,
+                kind: m.languages.CompletionItemKind.Method,
+                insertText: `${name}()`,
+                detail: info.signature,
+                range,
+                sortText: `0_${name}`,
+              });
+            }
+          }
+
+          // 2. Class fields (only fields, NOT local variables or parameters)
+          if (lowerTarget === "this") {
+            const varsMap = inferJavaVariablesAndTypes(model, position.lineNumber);
+            for (const [name, info] of varsMap) {
+              if (info.origin === "field" && !seenThis.has(name)) {
+                seenThis.add(name);
+                thisSuggestions.push({
+                  label: name,
+                  kind: m.languages.CompletionItemKind.Field,
+                  insertText: name,
+                  detail: `${info.typeString} ${name} (field)`,
+                  range,
+                  sortText: `0_${name}`,
+                });
+              }
+            }
+          }
+
+          // 3. Object common instance members (equals, hashCode, toString, getClass, etc.)
+          const commonItems = toCompletionItems(COMMON_INSTANCE_MEMBERS, range);
+          for (const item of commonItems) {
+            const labelStr = typeof item.label === "string" ? item.label : item.label.label;
+            if (!seenThis.has(labelStr)) {
+              seenThis.add(labelStr);
+              thisSuggestions.push(item);
+            }
+          }
+
+          return {
+            suggestions: deduplicateSuggestions(thisSuggestions),
+          };
+        }
 
         // Standard library static classes
         if (lowerTarget === "system") {
@@ -3074,6 +3398,42 @@ export function registerJavaCompletions(mInstance?: Monaco) {
         match = findInList(OBJECTS_MEMBERS, name);
       } else if (qualifier === "string") {
         match = findInList(STRING_INSTANCE_MEMBERS, name);
+      } else if (qualifier === "this" || qualifier === "super") {
+        const docMethods = extractJavaDocumentMethods(model, position.lineNumber);
+        const dm = docMethods.get(name);
+        if (dm) {
+          return {
+            range: new m.Range(
+              position.lineNumber,
+              word.startColumn,
+              position.lineNumber,
+              word.endColumn,
+            ),
+            contents: [
+              { value: `\`\`\`java\n${dm.signature}\n\`\`\`` },
+              { value: `*Method declared in current class.*` },
+            ],
+          };
+        }
+        if (qualifier === "this") {
+          const varsMap = inferJavaVariablesAndTypes(model, position.lineNumber);
+          const f = varsMap.get(name);
+          if (f && f.origin === "field") {
+            return {
+              range: new m.Range(
+                position.lineNumber,
+                word.startColumn,
+                position.lineNumber,
+                word.endColumn,
+              ),
+              contents: [
+                { value: `\`\`\`java\n${f.typeString} ${f.name}\n\`\`\`` },
+                { value: `*Field of current class.*` },
+              ],
+            };
+          }
+        }
+        match = findInList(COMMON_INSTANCE_MEMBERS, name);
       } else if (qualifier) {
         // Check inferred variable types from the document in visible scope
         const varsMap = inferJavaVariablesAndTypes(model, position.lineNumber);
@@ -3143,7 +3503,9 @@ export function registerJavaCompletions(mInstance?: Monaco) {
             ),
             contents: [
               { value: `\`\`\`java\n${v.typeString} ${v.name}\n\`\`\`` },
-              { value: `*${v.origin ?? "Local variable"}*` },
+              {
+                value: `*${v.origin === "field" ? "Field" : v.origin === "parameter" ? "Parameter" : v.origin === "foreach variable" ? "Foreach variable" : "Local variable"}*`,
+              },
             ],
           };
         }
@@ -3336,8 +3698,8 @@ export function registerJavaCompletions(mInstance?: Monaco) {
         };
       };
 
-      // 2. Unqualified call (e.g. `solve(`, `max(`)
-      if (!qualifier) {
+      // 2. Unqualified call (e.g. `solve(`, `max(`) or this/super call (e.g. `this.solve(`)
+      if (!qualifier || qualifier === "this" || qualifier === "super") {
         // Check document-defined methods in scope
         const docMethods = extractJavaDocumentMethods(model, position.lineNumber);
         const docMethod = docMethods.get(methodName);
@@ -3358,6 +3720,12 @@ export function registerJavaCompletions(mInstance?: Monaco) {
             },
             dispose: () => {},
           };
+        }
+
+        if (qualifier === "this" || qualifier === "super") {
+          const commonFound = COMMON_INSTANCE_MEMBERS.find((item) => item.label === methodName);
+          if (commonFound) return buildSigResult(commonFound, top.argCount);
+          return null;
         }
 
         // Check statically imported Math methods

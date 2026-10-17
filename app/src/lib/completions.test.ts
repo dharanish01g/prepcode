@@ -718,17 +718,21 @@ test("C# Issue 9: no made-up signature for keywords or unknown methods", () => {
 // JAVA COMPLETION & SIGNATURE HELP TESTS
 // ==========================================
 
-function javaLabels(src: string): string[] {
+function javaLabels(src: string, col?: number, line?: number): string[] {
   const { mockMonaco, completionProviders } = setupMockMonaco();
   registerJavaCompletions(mockMonaco);
-  const r = completionProviders["java"].provideCompletionItems(createMockModel(src), endOf(src));
+  const pos =
+    line !== undefined && col !== undefined ? { lineNumber: line, column: col } : endOf(src);
+  const r = completionProviders["java"].provideCompletionItems(createMockModel(src), pos);
   return r.suggestions.map((s: any) => s.label);
 }
 
-function javaSig(src: string): any {
+function javaSig(src: string, col?: number, line?: number): any {
   const { mockMonaco, sigHelpProviders } = setupMockMonaco();
   registerJavaCompletions(mockMonaco);
-  return sigHelpProviders["java"].provideSignatureHelp(createMockModel(src), endOf(src));
+  const pos =
+    line !== undefined && col !== undefined ? { lineNumber: line, column: col } : endOf(src);
+  return sigHelpProviders["java"].provideSignatureHelp(createMockModel(src), pos);
 }
 
 function javaSigParam(src: string): number | null {
@@ -1119,5 +1123,200 @@ test("Java Issue 11: Trailing digits on variable names (nums2., arr1., list2.) r
   assert.ok(
     h3.includes("charAt") && h3.includes("substring"),
     "s1. heuristic suggests string members",
+  );
+});
+
+test("Java Issue 12: this. and super. completions, hover, and signature help", () => {
+  const src = `class Solution {
+    int myField = 10;
+    public void customMethod(int a, int b) {
+        int localVar = 42;
+        this.
+    }
+}`;
+  const thisLabels = javaLabels(src, 14, 5);
+
+  // Must suggest class fields, class methods, and common object members
+  assert.ok(thisLabels.includes("myField"), "this. suggests class field");
+  assert.ok(thisLabels.includes("customMethod"), "this. suggests class method");
+  assert.ok(thisLabels.includes("equals"), "this. suggests Object.equals");
+  assert.ok(thisLabels.includes("toString"), "this. suggests Object.toString");
+
+  // Must NOT suggest local variables or unrelated String/List members
+  assert.ok(!thisLabels.includes("localVar"), "this. must NOT suggest local variable");
+  assert.ok(!thisLabels.includes("charAt"), "this. must NOT suggest String.charAt");
+  assert.ok(!thisLabels.includes("add"), "this. must NOT suggest List.add");
+
+  // super. suggests class methods and object members, but not local variables
+  const superSrc = `class Solution {
+    public void run() {
+        int x = 1;
+        super.
+    }
+}`;
+  const superLabels = javaLabels(superSrc, 15, 4);
+  assert.ok(superLabels.includes("run"), "super. suggests method");
+  assert.ok(superLabels.includes("toString"), "super. suggests Object.toString");
+  assert.ok(!superLabels.includes("x"), "super. must NOT suggest local variable");
+
+  // Hover over this.myField
+  const hoverField = javaHover(
+    `class Solution {\n    int myField = 10;\n    void m() {\n        this.myField = 20;\n    }\n}`,
+    15,
+    4,
+  );
+  assert.ok(
+    hoverField && hoverField.contents[0].value.includes("int myField"),
+    "Hover over this.myField displays field type",
+  );
+  assert.ok(
+    hoverField && hoverField.contents[1].value.includes("Field of current class"),
+    "Hover over this.myField indicates field of current class",
+  );
+
+  // Hover over this.customMethod
+  const hoverMethod = javaHover(
+    `class Solution {\n    void customMethod(int a) {}\n    void m() {\n        this.customMethod(1);\n    }\n}`,
+    15,
+    4,
+  );
+  assert.ok(
+    hoverMethod && hoverMethod.contents[0].value.includes("customMethod(int a)"),
+    "Hover over this.customMethod displays method signature",
+  );
+
+  // Signature help for this.customMethod(1,
+  const sigSrc = `class Solution {\n    void customMethod(int a, int b) {}\n    void m() {\n        this.customMethod(1, `;
+  const sig = javaSig(sigSrc);
+  assert.ok(sig, "this.customMethod(1, returns signature help");
+  assert.equal(sig.value.activeParameter, 1, "activeParameter is 1 after comma");
+});
+
+test("Java Issue 13: Array declarations with whitespace and var array inference", () => {
+  // Whitespace-tolerant array declarations
+  const dec1 = javaLabels("int [] nums = new int[5];\nnums.");
+  assert.ok(
+    dec1.includes("length") && dec1.includes("clone"),
+    "int [] nums. suggests array members",
+  );
+
+  const dec2 = javaLabels("String [ ] words = new String[5];\nwords[0].");
+  assert.ok(
+    dec2.includes("charAt") && dec2.includes("substring"),
+    "String [ ] words[0]. suggests String members",
+  );
+
+  // var array initializer with primitive element: var nums = new int[5]; nums[0]. cannot dereference
+  const varPrim = javaLabels("var nums = new int[5];\nnums[0].");
+  assert.equal(
+    varPrim.length,
+    0,
+    "var nums = new int[5]; nums[0]. yields 0 suggestions for primitive int",
+  );
+
+  // var array initializer with String element: var words = new String[5]; words[0]. suggests String
+  const varStr = javaLabels("var words = new String[5];\nwords[0].");
+  assert.ok(
+    varStr.includes("charAt") && varStr.includes("substring"),
+    "var words = new String[5]; words[0]. suggests String members",
+  );
+});
+
+test("Java Issue 14: Multi-dimensional array element dereferencing (matrix[0][0]., grid[0][0].)", () => {
+  // 2D int array: 1st dimension is array, 2nd dimension is primitive int
+  const codeMat = "int[][] matrix = new int[5][5];\nmatrix[0].";
+  const matRow = javaLabels(codeMat);
+  assert.ok(matRow.includes("length") && matRow.includes("clone"), "matrix[0]. is int[] array");
+
+  const codeMatElem = "int[][] matrix = new int[5][5];\nmatrix[0][0].";
+  assert.equal(
+    javaLabels(codeMatElem).length,
+    0,
+    "matrix[0][0]. yields 0 suggestions (primitive int)",
+  );
+
+  // 2D String array: 2nd dimension is String
+  const codeGrid = "String[][] grid = new String[5][5];\ngrid[0][0].";
+  const gridElem = javaLabels(codeGrid);
+  assert.ok(
+    gridElem.includes("charAt") && gridElem.includes("substring"),
+    "grid[0][0]. suggests String members",
+  );
+
+  // Chained split subscript: s.split(" ")[0].
+  const splitElem = javaLabels('String s = "hello world";\ns.split(" ")[0].');
+  assert.ok(
+    splitElem.includes("charAt") && splitElem.includes("substring"),
+    's.split(" ")[0]. suggests String members',
+  );
+
+  // Chained toCharArray subscript: s.toCharArray()[0]. is primitive char -> 0 suggestions
+  const charElem = javaLabels('String s = "hello";\ns.toCharArray()[0].');
+  assert.equal(charElem.length, 0, "s.toCharArray()[0]. yields 0 suggestions (primitive char)");
+});
+
+test("Java Issue 15: Chained .get(...) calls on collections (List and Map)", () => {
+  // List<String> list; list.get(0). suggests String members
+  const listStr = javaLabels("List<String> words = new ArrayList<>();\nwords.get(0).");
+  assert.ok(
+    listStr.includes("charAt") && listStr.includes("substring"),
+    "words.get(0). suggests String members",
+  );
+
+  // Nested List: List<List<String>> matrix; matrix.get(0).get(0). suggests String members
+  const nestedList = javaLabels(
+    "List<List<String>> matrix = new ArrayList<>();\nmatrix.get(0).get(0).",
+  );
+  assert.ok(
+    nestedList.includes("charAt") && nestedList.includes("substring"),
+    "matrix.get(0).get(0). suggests String members",
+  );
+
+  // Map<String, String> map; map.get("k"). suggests String members
+  const mapStr = javaLabels('Map<String, String> map = new HashMap<>();\nmap.get("k").');
+  assert.ok(
+    mapStr.includes("charAt") && mapStr.includes("substring"),
+    'map.get("k"). suggests String members',
+  );
+
+  // Map<String, List<Integer>> map; map.get("k"). suggests List members
+  const mapList = javaLabels('Map<String, List<Integer>> map = new HashMap<>();\nmap.get("k").');
+  assert.ok(
+    mapList.includes("add") && mapList.includes("size"),
+    'map.get("k"). suggests List members',
+  );
+});
+
+test("Java Issue 16: sysout snippet and field vs local variable origin", () => {
+  const { mockMonaco, completionProviders } = setupMockMonaco();
+  registerJavaCompletions(mockMonaco);
+  const provider = completionProviders["java"];
+
+  // sysout snippet
+  const res = provider.provideCompletionItems(createMockModel("sys"), endOf("sys"));
+  const sysoutItem = res.suggestions.find((s: any) => s.label === "sysout");
+  assert.ok(sysoutItem, "sysout snippet is provided");
+  assert.ok(
+    sysoutItem.insertText.includes("System.out.println"),
+    "sysout inserts System.out.println",
+  );
+
+  // Class field hover displays Field, local variable displays Local variable
+  const src = `class Solution {
+    int classField = 10;
+    void run() {
+        int methodLocal = 20;
+    }
+}`;
+  const hoverField = javaHover(src, 10, 2); // over 'classField'
+  assert.ok(
+    hoverField && hoverField.contents[1].value.includes("Field"),
+    "classField displays Field in hover",
+  );
+
+  const hoverLocal = javaHover(src, 14, 4); // over 'methodLocal'
+  assert.ok(
+    hoverLocal && hoverLocal.contents[1].value.includes("Local variable"),
+    "methodLocal displays Local variable in hover",
   );
 });
