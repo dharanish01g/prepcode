@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { registerCSharpCompletions } from "./csharp-completions.ts";
 import { registerPythonCompletions } from "./python-completions.ts";
+import { registerSqlCompletions } from "./sql-completions.ts";
 
 // Helper mock types
 interface MockModel {
@@ -25,6 +26,7 @@ interface MockModel {
     endLineNumber: number;
     endColumn: number;
   }): string;
+  getPositionAt(offset: number): { lineNumber: number; column: number };
 }
 
 function createMockModel(content: string): MockModel {
@@ -89,6 +91,17 @@ function createMockModel(content: string): MockModel {
         }
       }
       return parts.join("\n");
+    },
+    getPositionAt(offset: number) {
+      let cur = 0;
+      for (let i = 0; i < lines.length; i++) {
+        const lineLen = lines[i].length + 1;
+        if (cur + lineLen > offset) {
+          return { lineNumber: i + 1, column: offset - cur + 1 };
+        }
+        cur += lineLen;
+      }
+      return { lineNumber: lines.length, column: (lines[lines.length - 1]?.length ?? 0) + 1 };
     },
   };
 }
@@ -711,4 +724,306 @@ test("C# Issue 9: no made-up signature for keywords or unknown methods", () => {
     1,
     "WriteLine(object? value) has one parameter",
   );
+});
+
+// ==========================================
+// SQL AUTOCOMPLETE, HOVER & SIGNATURE HELP TESTS
+// ==========================================
+
+function sqlLabels(src: string, lang = "sql"): string[] {
+  const { mockMonaco, completionProviders } = setupMockMonaco();
+  registerSqlCompletions(mockMonaco);
+  const provider = completionProviders[lang];
+  const r = provider.provideCompletionItems(createMockModel(src), endOf(src));
+  return r.suggestions.map((s: any) => s.label);
+}
+
+function sqlSig(src: string, lang = "sql"): number | null {
+  const { mockMonaco, sigHelpProviders } = setupMockMonaco();
+  registerSqlCompletions(mockMonaco);
+  const provider = sigHelpProviders[lang];
+  const r = provider.provideSignatureHelp(createMockModel(src), endOf(src));
+  return r ? r.value.activeParameter : null;
+}
+
+function sqlHover(
+  src: string,
+  pos?: { lineNumber: number; column: number },
+  lang = "sql",
+): string[] | null {
+  const { mockMonaco, hoverProviders } = setupMockMonaco();
+  registerSqlCompletions(mockMonaco);
+  const provider = hoverProviders[lang];
+  const r = provider.provideHover(createMockModel(src), pos ?? endOf(src));
+  return r ? r.contents.map((c: any) => c.value) : null;
+}
+
+function posOf(src: string, needle: string): { lineNumber: number; column: number } {
+  const lines = src.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const idx = lines[i].indexOf(needle);
+    if (idx !== -1) {
+      return { lineNumber: i + 1, column: idx + 1 + Math.floor(needle.length / 2) };
+    }
+  }
+  return endOf(src);
+}
+
+test("SQL Issue 1: dialect registration for sql, mysql, and pgsql", () => {
+  const { mockMonaco, completionProviders, hoverProviders, sigHelpProviders } = setupMockMonaco();
+  registerSqlCompletions(mockMonaco);
+
+  for (const dialect of ["sql", "mysql", "pgsql"]) {
+    assert.ok(completionProviders[dialect], `${dialect} completion provider registered`);
+    assert.ok(hoverProviders[dialect], `${dialect} hover provider registered`);
+    assert.ok(sigHelpProviders[dialect], `${dialect} signature help provider registered`);
+  }
+});
+
+test("SQL Issue 2: standard keywords, types, functions, and snippets offered", () => {
+  const labels = sqlLabels("SEL");
+
+  // Keywords
+  assert.ok(labels.includes("SELECT"), "SELECT keyword suggested");
+  assert.ok(labels.includes("WHERE"), "WHERE keyword suggested");
+  assert.ok(labels.includes("GROUP BY"), "GROUP BY keyword suggested");
+  assert.ok(labels.includes("JOIN"), "JOIN keyword suggested");
+
+  // Types
+  assert.ok(labels.includes("INT"), "INT data type suggested");
+  assert.ok(labels.includes("VARCHAR"), "VARCHAR data type suggested");
+  assert.ok(labels.includes("TIMESTAMP"), "TIMESTAMP data type suggested");
+
+  // Functions
+  assert.ok(labels.includes("COUNT"), "COUNT function suggested");
+  assert.ok(labels.includes("ROUND"), "ROUND function suggested");
+  assert.ok(labels.includes("SUBSTRING"), "SUBSTRING function suggested");
+  assert.ok(labels.includes("COALESCE"), "COALESCE function suggested");
+  assert.ok(labels.includes("ROW_NUMBER"), "ROW_NUMBER window function suggested");
+
+  // Snippets
+  assert.ok(labels.includes("select"), "select snippet suggested");
+  assert.ok(labels.includes("join"), "join snippet suggested");
+  assert.ok(labels.includes("cte"), "cte snippet suggested");
+});
+
+test("SQL Issue 3: table context suggests declared document tables", () => {
+  const src = `CREATE TABLE employees (
+    id INT PRIMARY KEY,
+    name VARCHAR(50)
+);
+SELECT * FROM `;
+  const labels = sqlLabels(src);
+  assert.ok(labels.includes("employees"), "Declared table suggested after FROM");
+  assert.ok(!labels.includes("SELECT"), "Keywords not suggested in table context");
+});
+
+test("SQL Issue 4: dot triggers column completions on declared tables", () => {
+  const src = `CREATE TABLE users (
+    id INT PRIMARY KEY,
+    email VARCHAR(100),
+    created_at TIMESTAMP
+);
+SELECT users.`;
+  const labels = sqlLabels(src);
+  assert.ok(labels.includes("id"), "id column suggested for users.");
+  assert.ok(labels.includes("email"), "email column suggested for users.");
+  assert.ok(labels.includes("created_at"), "created_at column suggested for users.");
+  assert.ok(!labels.includes("SELECT"), "Global keywords not suggested after dot");
+});
+
+test("SQL Issue 5: table-level PRIMARY KEY constraint marks primary key column", () => {
+  const { mockMonaco, completionProviders } = setupMockMonaco();
+  registerSqlCompletions(mockMonaco);
+  const src = `CREATE TABLE items (
+    item_id INT,
+    title TEXT,
+    PRIMARY KEY (item_id)
+);
+SELECT items.`;
+  const res = completionProviders["sql"].provideCompletionItems(createMockModel(src), endOf(src));
+  const idItem = res.suggestions.find((s: any) => s.label === "item_id");
+  assert.ok(idItem, "item_id suggested");
+  assert.equal(idItem.documentation, "PRIMARY KEY column");
+});
+
+test("SQL Issue 6: scoped alias resolution for FROM, JOIN, and comma joins", () => {
+  const doc = `CREATE TABLE students (
+    id INT PRIMARY KEY,
+    name VARCHAR(50)
+);
+CREATE TABLE marks (
+    student_id INT,
+    score INT
+);
+`;
+
+  // Student alias s.
+  const sLabels = sqlLabels(
+    `${doc}SELECT * FROM students s JOIN marks m ON s.id = m.student_id WHERE s.`,
+  );
+  assert.ok(sLabels.includes("name"), "s. suggests students.name");
+  assert.ok(!sLabels.includes("score"), "s. must not suggest marks.score");
+
+  // Marks alias m.
+  const mLabels = sqlLabels(
+    `${doc}SELECT * FROM students s JOIN marks m ON s.id = m.student_id WHERE m.`,
+  );
+  assert.ok(mLabels.includes("score"), "m. suggests marks.score");
+  assert.ok(!mLabels.includes("name"), "m. must not suggest students.name");
+
+  // Comma join alias
+  const commaLabels = sqlLabels(`${doc}SELECT * FROM students s, marks m WHERE s.`);
+  assert.ok(commaLabels.includes("id"), "s. in comma join suggests students.id");
+  assert.ok(!commaLabels.includes("score"), "s. in comma join must not suggest marks.score");
+});
+
+test("SQL Issue 7: clause keywords are never treated as aliases", () => {
+  const doc = `CREATE TABLE students (
+    id INT PRIMARY KEY,
+    name VARCHAR(50)
+);
+SELECT * FROM students GROUP BY age;
+GROUP.`;
+  const labels = sqlLabels(doc);
+  assert.equal(labels.length, 0, "GROUP must not be treated as a table alias");
+
+  const orderLabels = sqlLabels(`SELECT * FROM students ORDER BY name;\nORDER.`);
+  assert.equal(orderLabels.length, 0, "ORDER must not be treated as a table alias");
+});
+
+test("SQL Issue 8: numeric literals and unknown dot targets return no column suggestions", () => {
+  assert.deepEqual(sqlLabels("SELECT 10."), [], "Numeric literal 10. must not suggest columns");
+  assert.deepEqual(sqlLabels("SELECT 10.5."), [], "Numeric literal 10.5. must not suggest columns");
+  assert.deepEqual(
+    sqlLabels("SELECT 10 ."),
+    [],
+    "Numeric literal with space 10 . must not suggest columns",
+  );
+  assert.deepEqual(
+    sqlLabels("SELECT nonexistent."),
+    [],
+    "Unknown table must return empty suggestions",
+  );
+});
+
+test("SQL Issue 9: comment and string shielding in autocomplete and hover", () => {
+  assert.deepEqual(sqlLabels("-- SELECT "), [], "Single-line comment must return no completions");
+  assert.deepEqual(sqlLabels("# SELECT "), [], "MySQL comment must return no completions");
+  assert.deepEqual(
+    sqlLabels("/* SELECT "),
+    [],
+    "Unclosed block comment must return no completions",
+  );
+  assert.deepEqual(sqlLabels("/* \n SELECT "), [], "Multi-line comment must return no completions");
+  assert.deepEqual(
+    sqlLabels("SELECT 'hello world"),
+    [],
+    "Unclosed string literal must return no completions",
+  );
+
+  // Hover in comment returns null
+  assert.equal(sqlHover("-- SELECT COUNT(*)"), null, "Hover inside comment returns null");
+  assert.equal(sqlHover("SELECT 'COUNT'"), null, "Hover inside string returns null");
+});
+
+test("SQL Issue 10: non-function keywords produce no fake signature help", () => {
+  for (const line of [
+    "INSERT INTO users VALUES (",
+    "SELECT * FROM users WHERE id IN (",
+    "SELECT * FROM users WHERE EXISTS (",
+    "CREATE TABLE users (",
+    "PRIMARY KEY (",
+    "CHECK (",
+    "SELECT (",
+    "WITH cte AS (",
+    "-- SUBSTRING('hello', 1, ",
+  ]) {
+    assert.equal(
+      sqlSig(line),
+      null,
+      `Keyword or comment '${line}' must not produce signature help`,
+    );
+  }
+});
+
+test("SQL Issue 11: signature help argument counting with nested commas, strings, and escaped quotes", () => {
+  // First argument
+  assert.equal(sqlSig("SUBSTRING('hello', "), 1, "Active parameter after first comma is 1");
+  // Second argument
+  assert.equal(sqlSig("SUBSTRING('hello', 1, "), 2, "Active parameter after second comma is 2");
+
+  // String with doubled single quote
+  assert.equal(
+    sqlSig("SUBSTRING('don''t fail', "),
+    1,
+    "Doubled quotes in string must not corrupt argument count",
+  );
+
+  // String with backslash quote
+  assert.equal(
+    sqlSig("SUBSTRING('don\\'t fail', "),
+    1,
+    "Backslash-escaped quote must not corrupt argument count",
+  );
+
+  // Prior comment with paren and apostrophe
+  const complex = `-- Don't forget (foo
+/* block comment with parens ( ) and commas , */
+SELECT SUBSTRING('abc', `;
+  assert.equal(sqlSig(complex), 1, "Prior comments must not corrupt argument count");
+
+  // Nested function call
+  assert.equal(sqlSig("ROUND(ABS(-5), "), 1, "Nested function call must pop when closed");
+});
+
+test("SQL Issue 12: hover tooltips for tables, functions, types, keywords, and columns", () => {
+  const doc = `CREATE TABLE students (
+    id INT PRIMARY KEY,
+    name VARCHAR(50)
+);
+SELECT s.name FROM students s;`;
+
+  // Function hover
+  const fnH = sqlHover("SELECT COUNT(*)", posOf("SELECT COUNT(*)", "COUNT"));
+  assert.ok(fnH && fnH[0].includes("COUNT"), "COUNT function hover contains detail");
+
+  // Type hover
+  const typeH = sqlHover("INT", posOf("INT", "INT"));
+  assert.ok(typeH && typeH[0].includes("type INT"), "INT hover contains type detail");
+
+  // Keyword hover
+  const kwH = sqlHover("SELECT 1", posOf("SELECT 1", "SELECT"));
+  assert.ok(kwH && kwH[0].includes("keyword SELECT"), "SELECT hover contains keyword detail");
+
+  // Table hover
+  const tblH = sqlHover(doc, posOf(doc, "students s"));
+  assert.ok(tblH && tblH[0].includes("CREATE TABLE students"), "students table hover shows schema");
+
+  // Dotted column hover: s.name
+  const colH = sqlHover(doc, posOf(doc, "s.name"));
+  assert.ok(
+    colH && colH[0].includes("students.name: VARCHAR(50)"),
+    "s.name hover shows column type",
+  );
+
+  // Unknown dotted column hover returns null
+  const unkH = sqlHover(doc, posOf("SELECT s.unknown", "unknown"));
+  assert.equal(unkH, null, "Unknown column hover returns null");
+});
+
+test("SQL Issue 13: multi-dialect parity across mysql and pgsql", () => {
+  const doc = `CREATE TABLE users ( id INT, name VARCHAR(50) );\nSELECT u. FROM users u;`;
+
+  const mysqlLabels = sqlLabels(doc, "mysql");
+  const pgsqlLabels = sqlLabels(doc, "pgsql");
+
+  assert.ok(mysqlLabels.includes("id") && mysqlLabels.includes("name"), "MySQL suggests columns");
+  assert.ok(
+    pgsqlLabels.includes("id") && pgsqlLabels.includes("name"),
+    "PostgreSQL suggests columns",
+  );
+
+  assert.equal(sqlSig("SUBSTRING('hello', ", "mysql"), 1, "MySQL signature help works");
+  assert.equal(sqlSig("SUBSTRING('hello', ", "pgsql"), 1, "PostgreSQL signature help works");
 });
