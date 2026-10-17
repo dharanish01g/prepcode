@@ -718,17 +718,21 @@ test("C# Issue 9: no made-up signature for keywords or unknown methods", () => {
 // C++ AUTOCOMPLETE & SIGNATURE HELP TESTS
 // ==========================================
 
-function cppLabels(src: string): string[] {
+function cppLabels(src: string, col?: number, line?: number): string[] {
   const { mockMonaco, completionProviders } = setupMockMonaco();
   registerCppCompletions(mockMonaco);
-  const r = completionProviders["cpp"].provideCompletionItems(createMockModel(src), endOf(src));
+  const pos =
+    line !== undefined && col !== undefined ? { lineNumber: line, column: col } : endOf(src);
+  const r = completionProviders["cpp"].provideCompletionItems(createMockModel(src), pos);
   return r.suggestions.map((s: any) => s.label);
 }
 
-function cppSig(src: string): any {
+function cppSig(src: string, col?: number, line?: number): any {
   const { mockMonaco, sigHelpProviders } = setupMockMonaco();
   registerCppCompletions(mockMonaco);
-  return sigHelpProviders["cpp"].provideSignatureHelp(createMockModel(src), endOf(src));
+  const pos =
+    line !== undefined && col !== undefined ? { lineNumber: line, column: col } : endOf(src);
+  return sigHelpProviders["cpp"].provideSignatureHelp(createMockModel(src), pos);
 }
 
 function cppHover(src: string, col: number, line = 1): any {
@@ -970,7 +974,9 @@ test("C++: Pointer chained navigation and iterator member access", () => {
 
 test("C++: Type inference correctly handles const qualifiers and direct pointer/reference syntax", () => {
   // ListNode* with pointer attached to type
-  const ptrLabels = cppLabels("void test() {\n    ListNode* myCustomNode = nullptr;\n    myCustomNode->");
+  const ptrLabels = cppLabels(
+    "void test() {\n    ListNode* myCustomNode = nullptr;\n    myCustomNode->",
+  );
   assert.ok(ptrLabels.includes("val"), "myCustomNode-> suggests val");
   assert.ok(ptrLabels.includes("next"), "myCustomNode-> suggests next");
 
@@ -1014,17 +1020,122 @@ test("C++: GCC builtins and competitive programming snippets are available", () 
 });
 
 test("C++: Document-defined function signature help and hover documentation", () => {
-  const src = "bool checkSubtree(TreeNode* root, int target, vector<int>& path) {\n    return true;\n}\n\nint main() {\n    checkSubtree(root, ";
+  const src =
+    "bool checkSubtree(TreeNode* root, int target, vector<int>& path) {\n    return true;\n}\n\nint main() {\n    checkSubtree(root, ";
   const sig = cppSig(src);
   assert.ok(sig !== null, "Signature help is provided for user-defined function");
-  assert.equal(sig.value.activeParameter, 1, "Second parameter (target) is active after first comma");
-  assert.equal(sig.value.signatures[0].parameters.length, 3, "Parsed 3 parameters from checkSubtree");
+  assert.equal(
+    sig.value.activeParameter,
+    1,
+    "Second parameter (target) is active after first comma",
+  );
+  assert.equal(
+    sig.value.signatures[0].parameters.length,
+    3,
+    "Parsed 3 parameters from checkSubtree",
+  );
 
   // Hover over user-defined function
   const hoverSrc = "void helperFunction(int x) {}\n\nint main() {\n    helperFunction(5);\n}";
   const hover = cppHover(hoverSrc, 7, 4); // column over helperFunction on line 4
   assert.ok(hover !== null, "Hover on user-defined function returns documentation");
   assert.ok(hover.contents[0].value.includes("helperFunction"), "Hover shows function signature");
-  assert.ok(hover.contents[1].value.includes("User-defined function"), "Hover notes it is a user-defined function");
+  assert.ok(
+    hover.contents[1].value.includes("User-defined function"),
+    "Hover notes it is a user-defined function",
+  );
 });
 
+test("C++: this-> member completions, hover, and signature help", () => {
+  const src = `class Solution {
+    int myField = 10;
+public:
+    void customMethod(int a, int b) {
+        int localVar = 42;
+        this->
+    }
+};`;
+  const thisLabels = cppLabels(src, 15, 6);
+
+  // Must suggest class fields and methods
+  assert.ok(thisLabels.includes("myField"), "this-> suggests class field");
+  assert.ok(thisLabels.includes("customMethod"), "this-> suggests class method");
+
+  // Must NOT suggest local variables or unrelated TreeNode/ListNode members
+  assert.ok(!thisLabels.includes("localVar"), "this-> must NOT suggest local variable");
+  assert.ok(!thisLabels.includes("val"), "this-> must NOT suggest TreeNode val");
+  assert.ok(!thisLabels.includes("next"), "this-> must NOT suggest ListNode next");
+
+  // Hover over this->myField
+  const hoverField = cppHover(
+    `class Solution {\n    int myField = 10;\n    void m() {\n        this->myField = 20;\n    }\n};`,
+    15,
+    4,
+  );
+  assert.ok(
+    hoverField && hoverField.contents[0].value.includes("int myField"),
+    "Hover over this->myField displays field type",
+  );
+  assert.ok(
+    hoverField && hoverField.contents[1].value.includes("Field of current class"),
+    "Hover over this->myField indicates field of current class",
+  );
+
+  // Hover over this->customMethod
+  const hoverMethod = cppHover(
+    `class Solution {\n    void customMethod(int a) {}\n    void m() {\n        this->customMethod(1);\n    }\n};`,
+    15,
+    4,
+  );
+  assert.ok(
+    hoverMethod && hoverMethod.contents[0].value.includes("customMethod(int a)"),
+    "Hover over this->customMethod displays method signature",
+  );
+
+  // Signature help for this->customMethod(1,
+  const sigSrc = `class Solution {\n    void customMethod(int a, int b) {}\n    void m() {\n        this->customMethod(1, `;
+  const sig = cppSig(sigSrc);
+  assert.ok(sig, "this->customMethod(1, returns signature help");
+  assert.equal(sig.value.activeParameter, 1, "activeParameter is 1 after comma");
+});
+
+test("C++: Multi-bracket array and vector dereferencing (matrix[0][0]., grid[i][j]., s[0].)", () => {
+  // 2D int vector: 1st dimension is vector, 2nd dimension is primitive int
+  const matRow = cppLabels("vector<vector<int>> matrix;\nmatrix[0].");
+  assert.ok(matRow.includes("push_back") && matRow.includes("size"), "matrix[0]. is vector<int>");
+
+  const matElem = cppLabels("vector<vector<int>> matrix;\nmatrix[0][0].");
+  assert.equal(matElem.length, 0, "matrix[0][0]. yields 0 suggestions (primitive int)");
+
+  // 2D string vector: 2nd dimension is string
+  const gridElem = cppLabels("vector<vector<string>> grid;\ngrid[0][0].");
+  assert.ok(gridElem.includes("substr") && gridElem.includes("length"), "grid[0][0]. is string");
+
+  // string subscript access: s[0] is char (primitive) -> 0 suggestions
+  const charElem = cppLabels('string s = "hello";\ns[0].');
+  assert.equal(charElem.length, 0, "s[0]. yields 0 suggestions (primitive char)");
+
+  // Raw 2D array: int arr[5][5]; arr[0][0]. -> 0 suggestions
+  const arrElem = cppLabels("int arr[5][5];\narr[0][0].");
+  assert.equal(arrElem.length, 0, "arr[0][0]. yields 0 suggestions (primitive int)");
+});
+
+test("C++: Chained method calls (.substr(...)., .front()., .back()., .at(...).)", () => {
+  // s.substr(...). suggests string methods
+  const subLabels = cppLabels('string s = "hello world";\ns.substr(0, 5).');
+  assert.ok(
+    subLabels.includes("length") && subLabels.includes("find"),
+    "s.substr(). suggests string methods",
+  );
+
+  // vector<string> words; words.front(). suggests string methods
+  const frontStr = cppLabels("vector<string> words;\nwords.front().");
+  assert.ok(
+    frontStr.includes("substr") && frontStr.includes("length"),
+    "words.front(). suggests string methods",
+  );
+
+  // vector<int> nums; nums.back(). yields 0 suggestions (primitive int)
+  const backInt = cppLabels("vector<int> nums;\nnums.back().");
+  assert.equal(backInt.length, 0, "nums.back(). yields 0 suggestions (primitive int)");
+});

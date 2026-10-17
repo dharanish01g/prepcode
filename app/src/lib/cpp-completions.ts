@@ -1395,6 +1395,138 @@ export function isLineVisible(scopes: CppScopes, ln: number): boolean {
   return scopes.visible.has(o);
 }
 
+export interface CppClassMember {
+  name: string;
+  kind: "method" | "field";
+  detail: string;
+  signature?: string;
+  documentation?: string;
+}
+
+/**
+ * Extracts methods and fields declared in the enclosing class/struct of cursorLine.
+ */
+export function extractEnclosingClassMembers(
+  model: monacoDefault.editor.ITextModel,
+  cursorLine: number,
+): CppClassMember[] {
+  const lineCount = model.getLineCount();
+  const fullText = model.getValue();
+  const cleaned = stripCppCommentsAndStrings(fullText);
+  const cleanedLines = cleaned.split("\n");
+
+  let classStartLine = -1;
+  let classEndLine = -1;
+  const classStack: { line: number; depth: number }[] = [];
+  let braceDepth = 0;
+
+  for (let ln = 1; ln <= lineCount; ln++) {
+    const rawLine = cleanedLines[ln - 1] ?? "";
+    const isClassDef =
+      /\b(?:class|struct)\s+([a-zA-Z_]\w*)/.test(rawLine) && !rawLine.trim().endsWith(";");
+
+    const opens = (rawLine.match(/\{/g) || []).length;
+    const closes = (rawLine.match(/\}/g) || []).length;
+
+    if (isClassDef) {
+      classStack.push({ line: ln, depth: braceDepth });
+    }
+
+    braceDepth += opens - closes;
+
+    if (ln === cursorLine && classStack.length > 0) {
+      classStartLine = classStack[classStack.length - 1].line;
+    }
+
+    while (classStack.length > 0 && braceDepth <= classStack[classStack.length - 1].depth) {
+      const popped = classStack.pop();
+      if (popped && popped.line === classStartLine && classEndLine === -1 && ln >= cursorLine) {
+        classEndLine = ln;
+      }
+    }
+  }
+
+  if (classStartLine === -1) {
+    for (let ln = cursorLine; ln >= 1; ln--) {
+      const rawLine = cleanedLines[ln - 1] ?? "";
+      if (/\b(?:class|struct)\s+([a-zA-Z_]\w*)/.test(rawLine) && !rawLine.trim().endsWith(";")) {
+        classStartLine = ln;
+        classEndLine = lineCount;
+        break;
+      }
+    }
+  }
+
+  if (classStartLine === -1) return [];
+  if (classEndLine === -1) classEndLine = lineCount;
+
+  const members: CppClassMember[] = [];
+  const seen = new Set<string>();
+
+  for (let ln = classStartLine; ln <= classEndLine; ln++) {
+    const rawLine = model.getLineContent(ln);
+    const line = stripCppComment(rawLine).trim();
+    if (!line) continue;
+
+    // Check member method
+    const methodMatch = line.match(
+      /\b(?:[a-zA-Z_]\w*(?:::[a-zA-Z_]\w*)?(?:<[^>]+>)?(?:\*|&)*)\s+([a-zA-Z_]\w*)\s*\(([^;)]*)\)\s*(?:const)?\s*\{?/,
+    );
+    if (
+      methodMatch &&
+      !/^\s*(?:if|while|for|switch|catch)\b/.test(line) &&
+      !CPP_KEYWORD_SET.has(methodMatch[1])
+    ) {
+      const mName = methodMatch[1];
+      if (!seen.has(mName)) {
+        seen.add(mName);
+        members.push({
+          name: mName,
+          kind: "method",
+          detail: methodMatch[0].replace(/\{$/, "").trim(),
+          signature: methodMatch[0].replace(/\{$/, "").trim(),
+          documentation: `Method declared in class (line ${ln})`,
+        });
+      }
+    }
+
+    // Check member field
+    const scopes = computeCppScopes(model, ln);
+    if (scopes.owner[ln] === 0 && ln > classStartLine) {
+      const fieldMatch = line.match(
+        /\b(?:const\s+)?([a-zA-Z_]\w*(?:::[a-zA-Z_]\w*)?(?:<[^>]+>)?)(?:\s+|\s*(?:&|\*)\s*)([a-zA-Z_]\w*)\s*(?:=|;|,|\(|\{)/,
+      );
+      if (
+        fieldMatch &&
+        !methodMatch &&
+        !line.startsWith("public:") &&
+        !line.startsWith("private:") &&
+        !line.startsWith("protected:")
+      ) {
+        const fName = fieldMatch[2];
+        const fType = fieldMatch[1];
+        if (
+          !seen.has(fName) &&
+          !CPP_KEYWORD_SET.has(fName) &&
+          !CPP_TYPE_SET.has(fName) &&
+          !line.startsWith("return") &&
+          !line.startsWith("using")
+        ) {
+          seen.add(fName);
+          members.push({
+            name: fName,
+            kind: "field",
+            detail: `${fType} ${fName}`,
+            documentation: `Field of current class (line ${ln})`,
+          });
+        }
+      }
+    }
+  }
+
+  return members;
+}
+
 // --- Type Inference --------------------------------------------------------------------
 
 export type InferredCppType =
@@ -1455,35 +1587,173 @@ export function inferCppType(
     return "string";
   }
 
-  // Subscript / index access: words[0]. or matrix[0].
-  const subscriptMatch = expr.match(/^([a-zA-Z_]\w*)\[(.*)\]$/);
-  if (subscriptMatch) {
-    const baseVar = subscriptMatch[1];
+  // Chained string methods: e.g. s.substr(1, 2).
+  if (operatorKind === "." && /\.substr\s*\([^)]*\)$/.test(expr)) {
+    return "string";
+  }
+
+  // Multi-bracket subscript / index access: words[0]., matrix[0]., matrix[0][0]., grid[i][j].
+  const subMatch = expr.match(/^([a-zA-Z_]\w*)((?:\s*\[[^\]]*\])+)$/);
+  if (subMatch) {
+    const baseVar = subMatch[1];
+    const brackets = subMatch[2];
+    const subDepth = (brackets.match(/\[/g) || []).length;
+
     for (let ln = position.lineNumber; ln >= 1; ln--) {
       const line = stripCppComment(model.getLineContent(ln)).trim();
       if (!line) continue;
 
-      // vector<string> baseVar;
-      const vecString = line.match(
+      // vector<vector<string>> baseVar
+      if (
         new RegExp(
-          `\\b(?:std::)?vector\\s*<\\s*(?:std::)?string\\s*>\\s*(?:&|\\*)?\\s*${baseVar}\\b`,
-        ),
-      );
-      if (vecString) return "string";
+          `\\b(?:std::)?vector\\s*<\\s*(?:std::)?vector\\s*<\\s*(?:std::)?string\\s*>\\s*>\\s*(?:&|\\*)?\\s*${baseVar}\\b`,
+        ).test(line)
+      ) {
+        if (subDepth === 1) return "vector";
+        if (subDepth === 2) return "string";
+        return "unknown";
+      }
 
-      // vector<vector<...>> baseVar;
-      const nestedVec = line.match(
+      // vector<vector<T>> baseVar (primitive like int, double, char, etc.)
+      if (
         new RegExp(
           `\\b(?:std::)?vector\\s*<\\s*(?:std::)?vector\\s*<[^>]+>\\s*>\\s*(?:&|\\*)?\\s*${baseVar}\\b`,
-        ),
-      );
-      if (nestedVec) return "vector";
+        ).test(line)
+      ) {
+        if (subDepth === 1) return "vector";
+        if (subDepth === 2) return "primitive";
+        return "unknown";
+      }
 
-      // string[] or string baseVar[...]
-      const strArr = line.match(new RegExp(`\\b(?:std::)?string\\s+${baseVar}\\s*\\[[^\\]]*\\]`));
-      if (strArr) return "string";
+      // vector<string> baseVar
+      if (
+        new RegExp(
+          `\\b(?:std::)?vector\\s*<\\s*(?:std::)?string\\s*>\\s*(?:&|\\*)?\\s*${baseVar}\\b`,
+        ).test(line)
+      ) {
+        if (subDepth === 1) return "string";
+        return "unknown";
+      }
+
+      // vector<pair<...>> baseVar
+      if (
+        new RegExp(
+          `\\b(?:std::)?vector\\s*<\\s*(?:std::)?(?:pair|make_pair)\\s*<[^>]+>\\s*>\\s*(?:&|\\*)?\\s*${baseVar}\\b`,
+        ).test(line)
+      ) {
+        if (subDepth === 1) return "pair";
+        return "unknown";
+      }
+
+      // vector<ListNode*> baseVar
+      if (
+        new RegExp(
+          `\\b(?:std::)?vector\\s*<\\s*ListNode\\s*\\*\\s*>\\s*(?:&|\\*)?\\s*${baseVar}\\b`,
+        ).test(line)
+      ) {
+        if (subDepth === 1) return "ListNode";
+        return "unknown";
+      }
+
+      // vector<TreeNode*> baseVar
+      if (
+        new RegExp(
+          `\\b(?:std::)?vector\\s*<\\s*TreeNode\\s*\\*\\s*>\\s*(?:&|\\*)?\\s*${baseVar}\\b`,
+        ).test(line)
+      ) {
+        if (subDepth === 1) return "TreeNode";
+        return "unknown";
+      }
+
+      // vector<primitive> baseVar (e.g. vector<int> nums)
+      if (
+        new RegExp(
+          `\\b(?:std::)?vector\\s*<\\s*(?:int|long|long long|double|float|char|bool|short|size_t)\\s*>\\s*(?:&|\\*)?\\s*${baseVar}\\b`,
+        ).test(line)
+      ) {
+        if (subDepth === 1) return "primitive";
+        return "unknown";
+      }
+
+      // string baseVar: indexing a string s[0] yields primitive char
+      if (new RegExp(`\\b(?:std::)?string\\s+(?:&|\\*)?${baseVar}\\b`).test(line)) {
+        if (subDepth === 1) return "primitive";
+        return "unknown";
+      }
+
+      // Raw array: Type baseVar [N] or Type baseVar [N][M]
+      const arrMatch = line.match(
+        new RegExp(`\\b([a-zA-Z_]\\w*)\\s+${baseVar}\\s*((?:\\[[^\\]]*\\])+)`),
+      );
+      if (arrMatch) {
+        const declaredDim = (arrMatch[2].match(/\[/g) || []).length;
+        const elemType = arrMatch[1].replace(/^std::/, "").trim();
+        if (subDepth === declaredDim) {
+          if (elemType === "string") return "string";
+          if (PRIMITIVE_TYPES.has(elemType)) return "primitive";
+          if (elemType === "ListNode") return "ListNode";
+          if (elemType === "TreeNode") return "TreeNode";
+        } else if (subDepth < declaredDim) {
+          return "array";
+        }
+        return "unknown";
+      }
     }
+
+    // Heuristics for common competitive programming array/vector names:
+    if (/^(?:matrix|grid|board)\d*$/i.test(baseVar)) {
+      if (subDepth === 1) return "vector";
+      if (subDepth === 2) return "primitive";
+    }
+    if (/^(?:nums|arr|vals)\d*$/i.test(baseVar)) {
+      if (subDepth === 1) return "primitive";
+    }
+    if (/^(?:words|strs|names)\d*$/i.test(baseVar)) {
+      if (subDepth === 1) return "string";
+    }
+
     return "unknown";
+  }
+
+  // Chained container element access: e.g. words.front()., words.back()., words.at(0).
+  const frontBackMatch = expr.match(
+    /^([a-zA-Z_]\w*)\.(?:at\s*\([^)]*\)|front\s*\(\s*\)|back\s*\(\s*\))$/,
+  );
+  if (frontBackMatch) {
+    const baseVar = frontBackMatch[1];
+    for (let ln = position.lineNumber; ln >= 1; ln--) {
+      const line = stripCppComment(model.getLineContent(ln)).trim();
+      if (!line) continue;
+
+      if (
+        new RegExp(
+          `\\b(?:std::)?vector\\s*<\\s*(?:std::)?string\\s*>\\s*(?:&|\\*)?\\s*${baseVar}\\b`,
+        ).test(line)
+      ) {
+        return "string";
+      }
+      if (
+        new RegExp(
+          `\\b(?:std::)?vector\\s*<\\s*(?:int|long|long long|double|float|char|bool|short|size_t)\\s*>\\s*(?:&|\\*)?\\s*${baseVar}\\b`,
+        ).test(line)
+      ) {
+        return "primitive";
+      }
+      if (
+        new RegExp(
+          `\\b(?:std::)?vector\\s*<\\s*(?:std::)?(?:pair|make_pair)\\s*<[^>]+>\\s*>\\s*(?:&|\\*)?\\s*${baseVar}\\b`,
+        ).test(line)
+      ) {
+        return "pair";
+      }
+      if (
+        new RegExp(
+          `\\b(?:std::)?vector\\s*<\\s*(?:std::)?vector\\s*<[^>]+>\\s*>\\s*(?:&|\\*)?\\s*${baseVar}\\b`,
+        ).test(line)
+      ) {
+        return "vector";
+      }
+    }
   }
 
   // Extract identifier immediately before operator
@@ -1839,6 +2109,40 @@ export function registerCppCompletions(mInstance?: Monaco) {
 
       // Check if user is typing immediately after a pointer operator `->`
       if (textBeforeWord.endsWith("->")) {
+        // Handle this-> member access
+        if (textBeforeWord.endsWith("this->")) {
+          const classMembers = extractEnclosingClassMembers(model, position.lineNumber);
+          const thisSuggestions: monacoDefault.languages.CompletionItem[] = [];
+
+          for (const mItem of classMembers) {
+            if (mItem.kind === "method") {
+              thisSuggestions.push({
+                label: mItem.name,
+                kind: m.languages.CompletionItemKind.Method,
+                insertText: `${mItem.name}()`,
+                detail: mItem.detail,
+                documentation: mItem.documentation,
+                range,
+                sortText: `0_${mItem.name}`,
+              });
+            } else {
+              thisSuggestions.push({
+                label: mItem.name,
+                kind: m.languages.CompletionItemKind.Field,
+                insertText: mItem.name,
+                detail: `${mItem.detail} (field)`,
+                documentation: mItem.documentation,
+                range,
+                sortText: `0_${mItem.name}`,
+              });
+            }
+          }
+
+          return {
+            suggestions: deduplicateSuggestions(thisSuggestions),
+          };
+        }
+
         const inferred = inferCppType(model, position, textBeforeWord, "->");
         if (inferred === "ListNode") {
           return {
@@ -1883,6 +2187,40 @@ export function registerCppCompletions(mInstance?: Monaco) {
 
       // Check if user is typing immediately after a dot `.`
       if (textBeforeWord.endsWith(".")) {
+        // Handle this. member access
+        if (textBeforeWord.endsWith("this.")) {
+          const classMembers = extractEnclosingClassMembers(model, position.lineNumber);
+          const thisSuggestions: monacoDefault.languages.CompletionItem[] = [];
+
+          for (const mItem of classMembers) {
+            if (mItem.kind === "method") {
+              thisSuggestions.push({
+                label: mItem.name,
+                kind: m.languages.CompletionItemKind.Method,
+                insertText: `${mItem.name}()`,
+                detail: mItem.detail,
+                documentation: mItem.documentation,
+                range,
+                sortText: `0_${mItem.name}`,
+              });
+            } else {
+              thisSuggestions.push({
+                label: mItem.name,
+                kind: m.languages.CompletionItemKind.Field,
+                insertText: mItem.name,
+                detail: `${mItem.detail} (field)`,
+                documentation: mItem.documentation,
+                range,
+                sortText: `0_${mItem.name}`,
+              });
+            }
+          }
+
+          return {
+            suggestions: deduplicateSuggestions(thisSuggestions),
+          };
+        }
+
         // If preceded by a numeric literal (e.g. 5. or 3.14.), do not suggest members
         if (/\b\d+\.$/.test(textBeforeWord)) {
           return { suggestions: [] };
@@ -2078,7 +2416,31 @@ export function registerCppCompletions(mInstance?: Monaco) {
         }
       }
 
-      // Check pointer or member access: `node->next` or `nums.size`
+      // Check pointer or member access: `this->field`, `node->next` or `nums.size`
+      if (textBefore.endsWith("this->") || textBefore.endsWith("this.")) {
+        const classMembers = extractEnclosingClassMembers(model, position.lineNumber);
+        const match = classMembers.find((item) => item.name === word.word);
+        if (match) {
+          return {
+            range: new m.Range(
+              position.lineNumber,
+              word.startColumn,
+              position.lineNumber,
+              word.endColumn,
+            ),
+            contents: [
+              { value: `\`\`\`cpp\n${match.detail}\n\`\`\`` },
+              {
+                value:
+                  match.kind === "field"
+                    ? "*Field of current class.*"
+                    : "*Method of current class.*",
+              },
+            ],
+          };
+        }
+      }
+
       if (textBefore.endsWith("->")) {
         const inferred = inferCppType(model, position, textBefore, "->");
         let list: CompletionItemDef[] = COMMON_CONTAINER_MEMBERS;
@@ -2319,9 +2681,26 @@ export function registerCppCompletions(mInstance?: Monaco) {
       }
 
       // Check if call target is a known function or method
-      let found: CompletionItemDef | undefined = STD_MEMBERS.find(
-        (item) => item.label === methodName,
-      );
+      let found: CompletionItemDef | undefined;
+
+      // If method is called on this-> or this., check enclosing class methods
+      if (fullCall.startsWith("this->") || fullCall.startsWith("this.")) {
+        const classMembers = extractEnclosingClassMembers(model, position.lineNumber);
+        const mFound = classMembers.find(
+          (mItem) => mItem.kind === "method" && mItem.name === methodName,
+        );
+        if (mFound && mFound.detail) {
+          found = {
+            label: methodName,
+            detail: mFound.detail,
+            documentation: mFound.documentation,
+          };
+        }
+      }
+
+      if (!found) {
+        found = STD_MEMBERS.find((item) => item.label === methodName);
+      }
       if (!found) {
         const ALL_METHODS: CompletionItemDef[] = [
           ...STRING_MEMBERS,
