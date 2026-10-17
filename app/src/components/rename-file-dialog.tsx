@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -27,7 +28,7 @@ export function RenameFileDialog({
   existingFiles: string[];
   onClose: () => void;
   /** Runs right before renaming, e.g. to save pending edits first. */
-  beforeRename: () => void;
+  beforeRename: () => Promise<void> | void;
   onRenamed: (oldFilename: string, newFilename: string) => void;
 }) {
   return (
@@ -62,7 +63,7 @@ function RenameFileForm({
   filename: string;
   userId: string;
   existingFiles: string[];
-  beforeRename: () => void;
+  beforeRename: () => Promise<void> | void;
   onRenamed: (oldFilename: string, newFilename: string) => void;
 }) {
   const extension = extensionOf(filename);
@@ -82,10 +83,17 @@ function RenameFileForm({
   const canRename = trimmed !== "" && !unchanged && !nameError && !rename.isPending;
   const error = nameError ?? (rename.isError ? String(rename.error) : null);
 
-  function handleSubmit(e: React.FormEvent) {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!canRename) return;
-    beforeRename();
+    try {
+      await beforeRename();
+    } catch (err) {
+      toast.error("Cannot rename: failed to save pending edits", {
+        description: err instanceof Error ? err.message : String(err),
+      });
+      return;
+    }
     rename.mutate(
       { filename, newName: trimmed },
       { onSuccess: (renamed) => onRenamed(filename, renamed) },

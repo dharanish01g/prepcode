@@ -23,9 +23,10 @@ import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/componen
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useSidebar } from "@/components/ui/sidebar";
 import { useIsDark } from "@/hooks/use-theme";
-import { readPractice, writePractice } from "@/lib/files";
+import { readPractice, whenSavesSettled, writePractice } from "@/lib/files";
 import { queryKeys, useSolvedQuery } from "@/lib/queries";
 import { queryClient } from "@/lib/query-client";
+import { createEditorSaveCoordinator } from "@/lib/save-queue";
 import type { Language } from "@/lib/languages";
 import {
   blockClipboard,
@@ -189,8 +190,8 @@ export function QuestionView({
                 <div className="min-h-0 flex-1">
                   {language ? (
                     <PracticeEditor
-                      // Remounted per language, so each loads its own saved code.
-                      key={language.extension}
+                      // Remounted per question and language, so each loads its own saved code.
+                      key={`${question.slug}.${language.extension}`}
                       userId={userId}
                       question={question.slug}
                       language={language}
@@ -305,20 +306,46 @@ function PracticeEditor({
     queryFn: () => readPractice(question, extension),
   });
 
-  const pending = useRef<string | null>(null);
+  const fileKey = `${question}.${extension}`;
+  const fileTargets = useRef(
+    new Map<string, { question: string; extension: string; userId: string }>(),
+  );
+  useLayoutEffect(() => {
+    fileTargets.current.set(fileKey, { question, extension, userId });
+  });
+
+  const coordinator = useRef<ReturnType<typeof createEditorSaveCoordinator> | null>(null);
+  if (!coordinator.current) {
+    coordinator.current = createEditorSaveCoordinator(async (edit) => {
+      const target = fileTargets.current.get(edit.filename) ?? { question, extension, userId };
+      try {
+        await writePractice(target.question, target.extension, edit.content);
+        queryClient.setQueryData(
+          queryKeys.practice(target.userId, target.question, target.extension),
+          edit.content,
+        );
+        // So the unsynced count, and the sync on close, include it (do not await so flushes stay fast).
+        void queryClient.invalidateQueries({ queryKey: queryKeys.syncStatus(target.userId) });
+      } catch (err) {
+        queryClient.invalidateQueries({
+          queryKey: queryKeys.practice(target.userId, target.question, target.extension),
+        });
+        toast.error("Couldn't save your code", {
+          description: err instanceof Error ? err.message : String(err),
+        });
+        throw err;
+      }
+    });
+  }
+
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
-  const flush = useCallback(() => {
+  const flush = useCallback(async () => {
     clearTimeout(timer.current);
-    const content = pending.current;
-    if (content === null) return;
-    pending.current = null;
-    writePractice(question, extension, content).then(
-      // So the unsynced count, and the sync on close, include it.
-      () => queryClient.invalidateQueries({ queryKey: queryKeys.syncStatus(userId) }),
-      (err) => toast.error("Couldn't save your code", { description: String(err) }),
-    );
-  }, [question, extension, userId]);
+    if (!coordinator.current) return;
+    await coordinator.current.flush();
+    await whenSavesSettled();
+  }, []);
 
   // Layout effects so the cleanups run synchronously: edits are saved when the
   // question or language changes, and when the editor unmounts.
@@ -339,17 +366,16 @@ function PracticeEditor({
       // Saved even if untouched, so the starter code is kept too.
       const content = editorRef.current?.getValue();
       if (content === undefined) return null;
-      pending.current = content;
-      flush();
+      coordinator.current?.recordEdit(fileKey, content);
       return content;
     };
     return () => {
-      flush();
+      void flush().catch(() => {});
       flushRef.current = () => {};
       codeRef.current = () => null;
       resetRef.current = () => {};
     };
-  }, [flush, flushRef, codeRef, resetRef, starter]);
+  }, [flush, flushRef, codeRef, resetRef, starter, fileKey]);
 
   if (saved.isError) {
     return (
@@ -375,9 +401,9 @@ function PracticeEditor({
         blockClipboard(editor);
       }}
       onChange={(value) => {
-        pending.current = value ?? "";
+        coordinator.current?.recordEdit(fileKey, value ?? "");
         clearTimeout(timer.current);
-        timer.current = setTimeout(flush, AUTOSAVE_DELAY_MS);
+        timer.current = setTimeout(() => void flush().catch(() => {}), AUTOSAVE_DELAY_MS);
       }}
       options={{
         ...NO_CLIPBOARD_OPTIONS,

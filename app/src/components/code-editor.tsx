@@ -9,14 +9,15 @@ import {
   NO_CLIPBOARD_OPTIONS,
 } from "@/lib/monaco";
 import { useIsDark } from "@/hooks/use-theme";
-import { monacoLanguageOf } from "@/lib/files";
+import { monacoLanguageOf, whenSavesSettled } from "@/lib/files";
 import { formatCode, NoFormatterError } from "@/lib/format";
 import { useFileContentQuery, useSaveFileMutation } from "@/lib/queries";
+import { createEditorSaveCoordinator } from "@/lib/save-queue";
 
 /** How long to wait after the last keystroke before saving. */
 export const AUTOSAVE_DELAY_MS = 500;
 
-export type FlushRef = React.RefObject<() => void>;
+export type FlushRef = React.RefObject<() => Promise<void> | void>;
 export type FormatRef = React.RefObject<() => Promise<void>>;
 export type CursorLineRef = React.RefObject<() => number | null>;
 
@@ -73,32 +74,45 @@ function FileEditor({
   const isDark = useIsDark();
   const editorRef = useRef<MonacoEditor | null>(null);
   const content = useFileContentQuery(userId, filename);
-  const { mutate: save } = useSaveFileMutation(userId);
+  const { mutateAsync: saveAsync } = useSaveFileMutation(userId);
 
-  // Remembers which file the unsaved text belongs to, so a flush after
-  // switching files still saves to the right place.
-  const pending = useRef<{ filename: string; content: string } | null>(null);
+  const saveAsyncRef = useRef(saveAsync);
+  useLayoutEffect(() => {
+    saveAsyncRef.current = saveAsync;
+  });
+
+  const coordinator = useRef<ReturnType<typeof createEditorSaveCoordinator> | null>(null);
+  if (!coordinator.current) {
+    coordinator.current = createEditorSaveCoordinator((edit) => saveAsyncRef.current(edit));
+  }
+
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
-  const flush = useCallback(() => {
+  const flush = useCallback(async () => {
     clearTimeout(timer.current);
-    const edit = pending.current;
-    if (!edit) return;
-    pending.current = null;
-    save(edit);
-  }, [save]);
+    if (!coordinator.current) return;
+    await coordinator.current.flush();
+    await whenSavesSettled();
+  }, []);
 
   // Layout effects so the cleanups run synchronously: the previous file's edits
   // are saved on switch, and everything is saved when the editor unmounts.
   useLayoutEffect(() => {
     flushRef.current = flush;
     return () => {
-      flush();
+      void flush().catch(() => {});
       flushRef.current = () => {};
     };
   }, [flush, flushRef]);
 
-  useLayoutEffect(() => () => flush(), [filename, flush]);
+  useLayoutEffect(
+    () => () => {
+      if (coordinator.current) {
+        void coordinator.current.flushFile(filename).catch(() => {});
+      }
+    },
+    [filename],
+  );
 
   // Replaces the text with the formatted version as one edit, so a single
   // Ctrl/Cmd+Z undoes it. The change then autosaves like any other edit.
@@ -180,9 +194,9 @@ function FileEditor({
         });
       }}
       onChange={(value) => {
-        pending.current = { filename, content: value ?? "" };
+        coordinator.current?.recordEdit(filename, value ?? "");
         clearTimeout(timer.current);
-        timer.current = setTimeout(flush, AUTOSAVE_DELAY_MS);
+        timer.current = setTimeout(() => void flush().catch(() => {}), AUTOSAVE_DELAY_MS);
       }}
       options={{
         ...NO_CLIPBOARD_OPTIONS,
