@@ -5,6 +5,7 @@ mod databases;
 mod db;
 mod files;
 mod github;
+mod identifier;
 mod reporting;
 mod run;
 mod runtimes;
@@ -46,7 +47,12 @@ pub fn run() {
         .manage(sql::Servers::default())
         .manage(files::WorkspaceLock::default())
         .setup(|app| {
+            // Before anything opens the folders, logging's included.
+            let moved = identifier::move_old_folders(app.handle());
             reporting::init_logging(app.handle())?;
+            for (level, message) in moved {
+                log::log!(level, "{message}");
+            }
             // The window starts hidden (tauri.conf.json) and is shown once its
             // webview exists. On Windows, creating the webview waits in a
             // message loop, and a visible window repainting during that wait
