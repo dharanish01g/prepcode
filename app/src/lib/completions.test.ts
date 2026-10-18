@@ -1051,3 +1051,38 @@ SELECT * FROM logs l LEFT OUTER JOIN audit a ON l.id = a.audit_id WHERE l.`;
   assert.ok(auditLabels.includes("action"), "a. suggests audit.action");
   assert.ok(!auditLabels.includes("msg"), "a. does not suggest logs.msg");
 });
+
+test("SQL Issue 15: tables and aliases ending with digits are not mistaken for numeric literals", () => {
+  const doc = `CREATE TABLE t0 (col0 INT PRIMARY KEY);
+CREATE TABLE table1 (val1 VARCHAR(50));
+SELECT t0.`;
+  const labels0 = sqlLabels(doc);
+  assert.ok(labels0.includes("col0"), "t0. suggests col0 despite ending with digit");
+
+  const labels1 = sqlLabels(`${doc}\nSELECT table1.`);
+  assert.ok(labels1.includes("val1"), "table1. suggests val1 despite ending with digit");
+
+  // Pure numeric literals still return empty
+  assert.deepEqual(sqlLabels("SELECT 10."), [], "Numeric literal 10. returns empty");
+  assert.deepEqual(sqlLabels("SELECT 10.5."), [], "Numeric literal 10.5. returns empty");
+});
+
+test("SQL Issue 16: double-quoted and backtick-quoted table and column identifiers", () => {
+  const doc = `CREATE TABLE "settings" (
+    "key" VARCHAR(50) PRIMARY KEY,
+    "value" TEXT
+);
+CREATE TABLE \`devices\` (
+    \`dev_id\` INT PRIMARY KEY,
+    \`model\` TEXT
+);
+SELECT settings.`;
+  const labels = sqlLabels(doc);
+  assert.ok(labels.includes("key"), "Double-quoted column suggested");
+  assert.ok(labels.includes("value"), "Double-quoted column suggested");
+
+  const devLabels = sqlLabels(`${doc}\nSELECT \`devices\`.`);
+  assert.ok(devLabels.includes("dev_id"), "Backtick-quoted table dot suggests columns");
+  assert.ok(devLabels.includes("model"), "Backtick-quoted table dot suggests model");
+});
+

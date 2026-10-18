@@ -874,8 +874,8 @@ export function stripSqlCommentsAndStrings(code: string): string {
       continue;
     }
 
-    // Check string start
-    if (ch === "'" || ch === '"') {
+    // Check string literal start (in SQL, string literals are single-quoted '...')
+    if (ch === "'") {
       inQuote = ch;
       result += " ";
       continue;
@@ -1346,13 +1346,14 @@ export function registerSqlCompletions(mInstance?: Monaco) {
 
         // Check if typing after a dot `.` (e.g. `u.`, `students.`, `table.`)
         if (textBeforeWordTrimmed.endsWith(".")) {
-          // If preceded by a numeric literal (e.g. 5. or 10.5.), do not suggest columns
-          if (/\d+\s*\.$/.test(textBeforeWordTrimmed)) {
+          // If preceded by a numeric literal (e.g. 5. or 10.5. or 10 .), do not suggest columns.
+          // Preceding character must NOT be an identifier word character (e.g. t0. or table1. must not match).
+          if (/(?:^|[^\w])\d+(?:\.\d+)?\s*\.$/.test(textBeforeWordTrimmed)) {
             return { suggestions: [] };
           }
 
           const dotPrefix = textBeforeWordTrimmed.slice(0, -1).trim();
-          const targetMatch = dotPrefix.match(/([a-zA-Z_]\w*)$/);
+          const targetMatch = dotPrefix.match(/(?:`|")?([a-zA-Z_]\w*)(?:`|")?$/);
           if (!targetMatch) return { suggestions: [] };
 
           const target = targetMatch[1].toLowerCase();
@@ -1512,7 +1513,7 @@ export function registerSqlCompletions(mInstance?: Monaco) {
           const targetMatch = textBefore
             .slice(0, -1)
             .trim()
-            .match(/([a-zA-Z_]\w*)$/);
+            .match(/(?:`|")?([a-zA-Z_]\w*)(?:`|")?$/);
           if (targetMatch) {
             const target = targetMatch[1].toLowerCase();
             const fullDoc = model.getValue();
