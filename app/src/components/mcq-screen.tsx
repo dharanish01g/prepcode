@@ -1,10 +1,26 @@
-import { useEffect, useState, type Dispatch, type ReactNode, type SetStateAction } from "react";
-import { CheckIcon, LightbulbIcon, LockIcon, XIcon } from "lucide-react";
+import {
+  Fragment,
+  useEffect,
+  useState,
+  type Dispatch,
+  type ReactNode,
+  type SetStateAction,
+} from "react";
+import {
+  CheckCheckIcon,
+  CheckIcon,
+  LightbulbIcon,
+  LockIcon,
+  WifiOffIcon,
+  XIcon,
+} from "lucide-react";
 import {
   Breadcrumb,
   BreadcrumbItem,
+  BreadcrumbLink,
   BreadcrumbList,
   BreadcrumbPage,
+  BreadcrumbSeparator,
 } from "@/components/ui/breadcrumb";
 import {
   Accordion,
@@ -14,290 +30,23 @@ import {
 } from "@/components/ui/accordion";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
+import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty";
 import { Markdown } from "@/components/markdown";
 import { CategoryIcon } from "@/components/practice-categories";
+import type { Crumb } from "@/components/questions-screen";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Spinner } from "@/components/ui/spinner";
+import { useCategoryMcqsQuery, type Mcq } from "@/lib/mcq";
+import type { Category } from "@/lib/practice";
 import { cn } from "@/lib/utils";
-
-/** An MCQ as user_doc/practice-mcq.md §4 describes it. The question and each option are markdown. */
-interface Mcq {
-  /** The category (card) it's in, with its Lucide icon name as in pc_categories, e.g. "calculator". */
-  category: { title: string; icon: string | null };
-  title: string;
-  difficulty: "easy" | "medium" | "hard";
-  topic: string;
-  description: string;
-  /** Nudges towards the method, each a little stronger than the last, never the answer. Markdown. */
-  hints: string[];
-  options: { id: string; body: string; explanation: string; is_correct: boolean }[];
-}
-
-// Sample data until the question tables are in prepwisely.
-const SAMPLES: Mcq[] = [
-  {
-    category: { title: "Quantitative Aptitude", icon: "calculator" },
-    title: "Train Crossing a Platform",
-    difficulty: "easy",
-    topic: "Time and Distance",
-    description: `**RailMitra**, a train-tracking app, shows passengers how long a train takes to clear a station. At
-**Vijayawada Junction**, an express train has these details:
-
-| Detail          | Value   |
-| --------------- | ------- |
-| Train length    | 150 m   |
-| Speed           | 54 km/h |
-| Platform length | 300 m   |
-
-The train has cleared the platform once its **last coach** leaves the far end.
-
-How long does the train take to cross the platform completely?`,
-    hints: [
-      "To clear the platform, how far does the train's **front** have to travel?",
-      "It travels the platform's length **plus its own length**: 300 m + 150 m.",
-      "Convert the speed to m/s first: multiply km/h by `5/18`. Then time = distance ÷ speed.",
-    ],
-    options: [
-      {
-        id: "a",
-        body: "20 seconds",
-        explanation:
-          "That's 300 ÷ 15: only the platform's length. The train must cover its own length too.",
-        is_correct: false,
-      },
-      {
-        id: "b",
-        body: "30 seconds",
-        explanation:
-          "Right. 54 km/h = 15 m/s, and the train covers 150 + 300 = 450 m, so 450 ÷ 15 = **30 seconds**.",
-        is_correct: true,
-      },
-      {
-        id: "c",
-        body: "10 seconds",
-        explanation:
-          "That's 150 ÷ 15: only the train's length. It must also cover the whole platform.",
-        is_correct: false,
-      },
-      {
-        id: "d",
-        body: "8.3 seconds",
-        explanation:
-          "This uses 54 m/s. Convert km/h to m/s first: multiply by `5/18`, so 54 km/h = 15 m/s.",
-        is_correct: false,
-      },
-      {
-        id: "e",
-        body: "15 seconds",
-        explanation:
-          "15 is the speed in m/s, not a time. Divide the distance the train covers, 450 m, by it.",
-        is_correct: false,
-      },
-    ],
-  },
-  {
-    category: { title: "Quantitative Aptitude", icon: "calculator" },
-    title: "Price Up, Price Down",
-    difficulty: "easy",
-    topic: "Percentages",
-    description: `During a festival sale, **ShopKart** raised a phone's price by **20%** on Monday, then cut the new price
-by **20%** on Friday.
-
-Compared with the price before Monday, what is the price on Friday?`,
-    hints: [
-      "Start with a price of **₹100** and apply each change in turn.",
-      "After Monday's rise the price is ₹120. Friday's 20% is taken off **₹120**, not ₹100.",
-    ],
-    options: [
-      {
-        id: "a",
-        body: "The same as before",
-        explanation:
-          "The 20% cut is on the **raised** price, which is bigger, so it takes away more than the rise added.",
-        is_correct: false,
-      },
-      {
-        id: "b",
-        body: "4% lower",
-        explanation:
-          "Right. Take ₹100: up 20% is ₹120, and 20% off ₹120 is ₹24, leaving **₹96**. That's 4% lower.",
-        is_correct: true,
-      },
-      {
-        id: "c",
-        body: "4% higher",
-        explanation:
-          "The size is right, the direction isn't: ₹100 becomes ₹120, then ₹96, which is **below** ₹100.",
-        is_correct: false,
-      },
-      {
-        id: "d",
-        body: "20% lower",
-        explanation:
-          "That counts only Friday's cut, as if Monday's rise never happened. Work through both: ₹100 → ₹120 → ₹96.",
-        is_correct: false,
-      },
-    ],
-  },
-  {
-    category: { title: "Quantitative Aptitude", icon: "calculator" },
-    title: "Two Painters, One Wall",
-    difficulty: "medium",
-    topic: "Time and Work",
-    description: `A housing society in **Coimbatore** hires two painters for its compound wall:
-
-| Painter | Alone, the wall takes |
-| ------- | --------------------- |
-| Ravi    | 12 days               |
-| Suresh  | 18 days               |
-
-If both work on it together every day, how long will the wall take?`,
-    hints: [
-      "Work out what **part of the wall** each painter finishes in one day.",
-      "Ravi does `1/12` of the wall a day and Suresh `1/18`. Add them to get what both do in a day.",
-      "Use 36 as the common denominator. If together they do `x/36` of the wall a day, the wall takes `36/x` days.",
-      "Check your answer: it must be **less than 12 days**, the time the faster painter needs alone.",
-    ],
-    options: [
-      {
-        id: "a",
-        body: "15 days",
-        explanation:
-          "That's the average of 12 and 18. Two people working together finish **sooner** than even the faster one alone.",
-        is_correct: false,
-      },
-      {
-        id: "b",
-        body: "30 days",
-        explanation:
-          "That adds the days. Add the **work per day** instead: each painter's share makes the job faster, not slower.",
-        is_correct: false,
-      },
-      {
-        id: "c",
-        body: "7.2 days",
-        explanation:
-          "Right. Per day, Ravi does `1/12` and Suresh `1/18`. Together that's `3/36 + 2/36 = 5/36`, so the wall takes `36/5` = **7.2 days**.",
-        is_correct: true,
-      },
-      {
-        id: "d",
-        body: "6 days",
-        explanation:
-          "That's 12 ÷ 2, as if Suresh were as fast as Ravi. He's slower, so together they take a little longer than 6 days.",
-        is_correct: false,
-      },
-      {
-        id: "e",
-        body: "12 days",
-        explanation: "That's Ravi alone. With Suresh helping, the wall is finished **sooner**.",
-        is_correct: false,
-      },
-      {
-        id: "f",
-        body: "9 days",
-        explanation:
-          "That's 18 ÷ 2, as if Ravi were as slow as Suresh. He's faster, so together they need less than 9 days.",
-        is_correct: false,
-      },
-    ],
-  },
-  {
-    category: { title: "Logical Reasoning", icon: "puzzle" },
-    title: "The Girl in the Photo",
-    difficulty: "medium",
-    topic: "Blood Relations",
-    description: `Pointing to a girl in a photo, **Arjun** says:
-
-> "She is the daughter of my father's father's **only son**."
-
-How is the girl related to Arjun?`,
-    hints: ["Who is Arjun's father's father's only son **to Arjun**? Work back from there."],
-    options: [
-      {
-        id: "a",
-        body: "Cousin",
-        explanation:
-          "A cousin would be the child of an uncle or aunt. Arjun's father's father has **only one son**, Arjun's father, so there's no uncle on this side.",
-        is_correct: false,
-      },
-      {
-        id: "b",
-        body: "Sister",
-        explanation:
-          "Right. Arjun's father's father's only son is Arjun's **father**, and his father's daughter is Arjun's **sister**.",
-        is_correct: true,
-      },
-      {
-        id: "c",
-        body: "Mother",
-        explanation:
-          "His mother would be the son's **wife**, not his daughter. Read each link of the relation in turn.",
-        is_correct: false,
-      },
-      {
-        id: "d",
-        body: "Aunt",
-        explanation:
-          "An aunt would be his father's father's **daughter**. Here she is the daughter of that man's son, one generation lower.",
-        is_correct: false,
-      },
-    ],
-  },
-  {
-    category: { title: "Quantitative Aptitude", icon: "calculator" },
-    title: "Mark Up, Then Discount",
-    difficulty: "medium",
-    topic: "Profit and Loss",
-    description: `A shopkeeper in **Madurai** buys a mixer grinder for **₹400**. He marks it **25%** above that, then gives a
-customer a **10%** discount on the marked price.
-
-What is his profit percentage?`,
-    hints: [
-      "Find the marked price first: ₹400 plus 25% of ₹400.",
-      "The 10% discount is taken off the **marked** price, which gives the selling price.",
-      "Profit percentage = profit ÷ **cost price** × 100.",
-    ],
-    options: [
-      {
-        id: "a",
-        body: "15%",
-        explanation:
-          "That's 25 − 10. The discount is on the **marked** price (₹500), not the cost, so percentages can't be subtracted like that.",
-        is_correct: false,
-      },
-      {
-        id: "b",
-        body: "10%",
-        explanation:
-          "That's ₹50 as a share of the **marked** price, ₹500. Profit percentage is always worked out on the **cost**.",
-        is_correct: false,
-      },
-      {
-        id: "c",
-        body: "11.1%",
-        explanation:
-          "That's ₹50 as a share of the **selling** price, ₹450. Profit percentage is always worked out on the **cost**.",
-        is_correct: false,
-      },
-      {
-        id: "d",
-        body: "12.5%",
-        explanation:
-          "Right. Marked price = ₹400 + 25% = ₹500. After 10% off he sells at ₹450, a profit of ₹50 on ₹400 = **12.5%**.",
-        is_correct: true,
-      },
-      {
-        id: "e",
-        body: "25%",
-        explanation:
-          "That's only the mark-up. The 10% discount takes part of it back before the customer pays.",
-        is_correct: false,
-      },
-    ],
-  },
-];
 
 const DIFFICULTY_LABEL: Record<Mcq["difficulty"], string> = {
   easy: "Easy",
@@ -378,12 +127,17 @@ const HINT_PENALTY_SECONDS = 30;
 const HINTS_RESET_MS = 5 * 60 * 1000;
 
 /**
- * Where the student is in MCQ. WorkspaceScreen keeps it, so leaving MCQ and coming back carries on where it was: the
- * same question, its waits still running (leaving doesn't skip them), and the same hints opened.
+ * Where the student is in an MCQ card. WorkspaceScreen keeps it, so leaving the card and coming back carries on where
+ * it was: the same question, its waits still running (leaving doesn't skip them), and the same hints opened. Opening
+ * another card starts that one afresh.
  */
 export interface McqProgress {
-  /** Which of SAMPLES. */
+  /** The card's slug. */
+  category: string;
+  /** Which of the card's questions. */
   index: number;
+  /** Every question has been answered: the card shows it's finished. */
+  finished: boolean;
   /** The option ids in the order shown: shuffled when the question is first shown, and again on every Try again. */
   order: string[];
   /** Each option's colour (an index into COLORS), drawn again with every shuffle. */
@@ -407,11 +161,18 @@ export interface McqProgress {
   lastHintAt: number;
 }
 
-/** A fresh start on question `index`, its options in a different order and colours from `previous`'s. */
-export function startMcq(index = 0, previous?: McqProgress): McqProgress {
-  const ids = SAMPLES[index].options.map((o) => o.id);
+/** A fresh start on question `index` of a card, its options in a different order and colours from `previous`'s. */
+function startMcq(
+  category: string,
+  questions: Mcq[],
+  index: number,
+  previous?: McqProgress,
+): McqProgress {
+  const ids = questions[index].options.map((o) => o.id);
   return {
+    category,
     index,
+    finished: false,
     order: shuffled(ids, previous?.order),
     colors: colored(ids, previous?.colors),
     selected: null,
@@ -439,22 +200,152 @@ function useSecondsLeft(until: number): number {
   return Math.max(0, Math.ceil((until - Date.now()) / 1000));
 }
 
+/** Whether `progress` still fits `questions`: a refetch can bring fewer questions, or a question's options changed. */
+function fits(progress: McqProgress, questions: Mcq[]): boolean {
+  const question = questions[progress.index];
+  if (!question) return false;
+  const ids = new Set(question.options.map((o) => o.id));
+  return progress.order.length === ids.size && progress.order.every((id) => ids.has(id));
+}
+
 /**
- * MCQ: multiple-choice questions (aptitude first), answered one at a time
- * until the right option is picked. Always uses the whole main area, with no
- * sidebar column: a card in the middle, with the question on the left and
- * its options on the right. See user_doc/practice-mcq.md.
+ * A Practice card of multiple-choice questions (aptitude first), answered one
+ * at a time, in order, until the right option is picked. Always uses the whole
+ * main area, with no sidebar column: there's no skipping. See
+ * user_doc/practice-mcq.md.
  */
 export function McqScreen({
+  category,
+  parents,
   progress,
   onChange,
 }: {
+  category: Category;
+  /** The breadcrumb before the card's title, e.g. Practice. */
+  parents: Crumb[];
+  /** Null, or another card's, until this card's questions load and it starts. */
+  progress: McqProgress | null;
+  onChange: Dispatch<SetStateAction<McqProgress | null>>;
+}) {
+  const questions = useCategoryMcqsQuery(category.slug);
+  const data = questions.data;
+  const current =
+    data && progress?.category === category.slug && fits(progress, data) ? progress : null;
+  // Start at question 1, or where the student was if the questions changed under them.
+  useEffect(() => {
+    if (!data?.length || current) return;
+    const index =
+      progress?.category === category.slug ? Math.min(progress.index, data.length - 1) : 0;
+    onChange(startMcq(category.slug, data, index));
+  }, [data, current, progress, category.slug, onChange]);
+
+  return (
+    <>
+      <header className="flex h-16 shrink-0 items-center gap-2 border-b bg-background px-4">
+        <Breadcrumb className="min-w-0">
+          <BreadcrumbList>
+            {parents.map((parent) => (
+              <Fragment key={parent.label}>
+                <BreadcrumbItem>
+                  <BreadcrumbLink
+                    render={
+                      <button type="button" className="cursor-pointer" onClick={parent.onClick} />
+                    }
+                  >
+                    {parent.label}
+                  </BreadcrumbLink>
+                </BreadcrumbItem>
+                <BreadcrumbSeparator />
+              </Fragment>
+            ))}
+            <BreadcrumbItem>
+              <BreadcrumbPage>{category.title}</BreadcrumbPage>
+            </BreadcrumbItem>
+          </BreadcrumbList>
+        </Breadcrumb>
+      </header>
+      {questions.isError ? (
+        // Most likely offline: questions come from Supabase.
+        <Empty className="pb-24">
+          <EmptyHeader>
+            <EmptyMedia variant="icon">
+              <WifiOffIcon />
+            </EmptyMedia>
+            <EmptyTitle>Couldn't load {category.title}</EmptyTitle>
+            <EmptyDescription>{questions.error.message}</EmptyDescription>
+          </EmptyHeader>
+          <EmptyContent>
+            <Button variant="outline" onClick={() => questions.refetch()}>
+              Try again
+            </Button>
+          </EmptyContent>
+        </Empty>
+      ) : data?.length === 0 ? (
+        <Empty className="pb-24">
+          <EmptyHeader>
+            <EmptyTitle>Coming soon</EmptyTitle>
+            <EmptyDescription>
+              {category.title} questions are on their way. Check back soon.
+            </EmptyDescription>
+          </EmptyHeader>
+        </Empty>
+      ) : data && current?.finished ? (
+        <Empty className="pb-24">
+          <EmptyHeader>
+            <EmptyMedia variant="icon">
+              <CheckCheckIcon />
+            </EmptyMedia>
+            <EmptyTitle>All done</EmptyTitle>
+            <EmptyDescription>
+              You've answered all {data.length} {category.title} questions.
+            </EmptyDescription>
+          </EmptyHeader>
+          <EmptyContent className="flex-row justify-center">
+            <Button
+              variant="outline"
+              onClick={() => onChange(startMcq(category.slug, data, 0, current))}
+            >
+              Start again
+            </Button>
+            {parents[0]?.onClick && (
+              <Button onClick={parents[0].onClick}>Back to {parents[0].label}</Button>
+            )}
+          </EmptyContent>
+        </Empty>
+      ) : data && current ? (
+        <McqQuestion
+          category={category}
+          questions={data}
+          progress={current}
+          onChange={(action) =>
+            onChange((p) => p && (typeof action === "function" ? action(p) : action))
+          }
+        />
+      ) : (
+        <div className="flex min-h-0 flex-1 items-center justify-center">
+          <Spinner className="text-muted-foreground" />
+        </div>
+      )}
+    </>
+  );
+}
+
+/** The card's current question: the question on the left, its options on the right. */
+function McqQuestion({
+  category,
+  questions,
+  progress,
+  onChange,
+}: {
+  category: Category;
+  questions: Mcq[];
   progress: McqProgress;
   onChange: Dispatch<SetStateAction<McqProgress>>;
 }) {
   const { index, order, colors, selected, missed, solved, hintsOpen, hintsShown, lastHintAt } =
     progress;
-  const question = SAMPLES[index];
+  const question = questions[index];
+  const last = index === questions.length - 1;
   const ids = question.options.map((o) => o.id);
   const update = (change: Partial<McqProgress>) => onChange((p) => ({ ...p, ...change }));
   const reshuffle = (p: McqProgress) => ({
@@ -523,23 +414,15 @@ export function McqScreen({
     onChange((p) => ({ ...p, ...reshuffle(p), missed: null }));
   }
 
-  // The next sample, back to the first after the last.
+  // The next question in order, or, after the last, the card is finished.
   function next() {
-    onChange((p) => startMcq((p.index + 1) % SAMPLES.length, p));
+    onChange((p) =>
+      last ? { ...p, finished: true } : startMcq(category.slug, questions, p.index + 1, p),
+    );
   }
 
   return (
     <>
-      <header className="flex h-16 shrink-0 items-center gap-2 border-b bg-background px-4">
-        <Breadcrumb>
-          {/* Same size as the Programs, Database and Sync column headings. */}
-          <BreadcrumbList className="text-base">
-            <BreadcrumbItem>
-              <BreadcrumbPage className="font-medium">MCQ</BreadcrumbPage>
-            </BreadcrumbItem>
-          </BreadcrumbList>
-        </Breadcrumb>
-      </header>
       {/* A card in the middle, three quarters of the area's width and height. */}
       <div className="flex min-h-0 flex-1 items-center justify-center">
         <Card className="h-3/4 w-3/4 gap-0 py-0">
@@ -548,13 +431,17 @@ export function McqScreen({
               <McqPanel
                 title={
                   <>
-                    <CategoryIcon name={question.category.icon} />
-                    {question.category.title}
+                    {category.logoUrl ? (
+                      <img src={category.logoUrl} alt="" />
+                    ) : (
+                      <CategoryIcon name={category.icon} />
+                    )}
+                    {category.title}
                   </>
                 }
                 footer={
                   <span className="mr-auto text-sm text-muted-foreground tabular-nums">
-                    Question {index + 1} of {SAMPLES.length}
+                    Question {index + 1} of {questions.length}
                   </span>
                 }
               >
@@ -611,10 +498,10 @@ export function McqScreen({
                 title="Options"
                 footer={
                   broken ? (
-                    <Button onClick={next}>Next</Button>
+                    <Button onClick={next}>{last ? "Finish" : "Next"}</Button>
                   ) : solved ? (
                     <Button disabled={wait > 0} onClick={next}>
-                      Next
+                      {last ? "Finish" : "Next"}
                       {wait > 0 && <span className="tabular-nums">({wait})</span>}
                     </Button>
                   ) : missed ? (

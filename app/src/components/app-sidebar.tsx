@@ -35,7 +35,6 @@ import {
   BookCheckIcon,
   CodeXmlIcon,
   DatabaseIcon,
-  ListChecksIcon,
   PlusIcon,
   MoonIcon,
   RefreshCwIcon,
@@ -45,7 +44,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { useTheme } from "@/hooks/use-theme";
 import logo from "@/assets/logo.png";
 
-export type View = "Programs" | "Database" | "Sync" | "Practice" | "MCQ" | "Jobs";
+export type View = "Programs" | "Database" | "Sync" | "Practice" | "Jobs";
 
 const data: { navMain: { title: View; icon: React.ReactNode }[] } = {
   navMain: [
@@ -58,9 +57,6 @@ const data: { navMain: { title: View; icon: React.ReactNode }[] } = {
     // Questions to solve, by category. The categories take the whole main
     // area, so this column hides; an open category lists its questions here.
     { title: "Practice", icon: <BookCheckIcon /> },
-    // Multiple-choice questions, e.g. aptitude. Takes the whole main area,
-    // with no column, even inside a card.
-    { title: "MCQ", icon: <ListChecksIcon /> },
     // Openings to search and apply to. Also takes the whole main area.
     { title: "Jobs", icon: <BriefcaseBusinessIcon /> },
   ],
@@ -233,7 +229,7 @@ export function AppSidebar({
       {/* This is the second sidebar */}
       {/* We disable collapsible and give it its full open width, so opening
           reveals it instead of squeezing (and re-wrapping) its text. Hidden
-          while collapsed (Practice, MCQ, Jobs) so none of it shows beside the icons. */}
+          while collapsed (Practice, Jobs) so none of it shows beside the icons. */}
       <Sidebar
         collapsible="none"
         className="flex w-[calc(var(--sidebar-width)-var(--sidebar-width-icon)-1px)]! shrink-0 group-data-[collapsible=icon]:hidden"

@@ -8,7 +8,7 @@ import { ConsolePanel } from "@/components/console-panel";
 import { ResultsPanel } from "@/components/results-panel";
 import { GuestLogoutDialog } from "@/components/guest-logout-dialog";
 import { JobsScreen } from "@/components/jobs-screen";
-import { McqScreen, startMcq } from "@/components/mcq-screen";
+import { McqScreen, type McqProgress } from "@/components/mcq-screen";
 import { PracticeScreen } from "@/components/practice-screen";
 import { QuestionsScreen } from "@/components/questions-screen";
 import { RepoSetupSteps } from "@/components/repo-setup";
@@ -55,7 +55,7 @@ import { useCategoryQuestionsQuery, type Question } from "@/lib/questions";
 import { unsyncedCount } from "@/lib/sync";
 import logo from "@/assets/logo.png";
 
-const FULL_SCREEN_VIEWS: View[] = ["Practice", "MCQ", "Jobs"];
+const FULL_SCREEN_VIEWS: View[] = ["Practice", "Jobs"];
 
 /** How often unsynced work is sent to GitHub on its own (see useSync). */
 const AUTO_SYNC_MS = 15 * 60 * 1000;
@@ -71,21 +71,26 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
   const [practice, setPractice] = useState<{ category: Category; question: string | null } | null>(
     null,
   );
-  // Where the student is in MCQ, kept here so leaving MCQ and coming back carries on (see McqProgress).
-  const [mcq, setMcq] = useState(() => startMcq());
-  // Practice, MCQ and Jobs use the whole main area, so the sidebar's second column
+  // Where the student is in an MCQ card, kept here so leaving it and coming back carries on (see McqProgress).
+  const [mcq, setMcq] = useState<McqProgress | null>(null);
+  // Practice and Jobs use the whole main area, so the sidebar's second column
   // stays hidden there, and comes back as it was when leaving.
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  // Practice is full screen for its categories, but lists a category's
-  // questions in the sidebar once one is open.
-  const fullScreen = FULL_SCREEN_VIEWS.includes(view) && !(view === "Practice" && practice);
+  // An MCQ card is answered one question at a time, with no list to pick from.
+  const mcqCategory = practice?.category.questionKind === "mcq" ? practice.category : null;
+  // Practice is full screen for its categories and MCQ cards, but lists a
+  // coding category's questions in the sidebar once one is open.
+  const fullScreen =
+    FULL_SCREEN_VIEWS.includes(view) && !(view === "Practice" && practice && !mcqCategory);
   const solved = useSolvedQuery(session.id);
-  const categoryQuestions = useCategoryQuestionsQuery(practice?.category.slug ?? null);
+  const categoryQuestions = useCategoryQuestionsQuery(
+    practice && !mcqCategory ? practice.category.slug : null,
+  );
   const questionList = categoryQuestions.data ?? [];
   const selectedQuestion =
     practice?.question ?? questionList.find((question) => !question.locked)?.slug ?? null;
   const questionColumn: QuestionColumn | null =
-    view === "Practice" && practice
+    view === "Practice" && practice && !mcqCategory
       ? {
           title: practice.category.title,
           list: questionList,
@@ -277,7 +282,14 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
           Monaco's pixel width (set while collapsed) holds it wide and pushes
           the header, including Run, off screen. */}
       <SidebarInset className="min-h-0 min-w-0">
-        {view === "Practice" && practice ? (
+        {view === "Practice" && mcqCategory ? (
+          <McqScreen
+            category={mcqCategory}
+            parents={[{ label: "Practice", onClick: () => setPractice(null) }]}
+            progress={mcq}
+            onChange={setMcq}
+          />
+        ) : view === "Practice" && practice ? (
           // A category's questions, in the same screen as Questions.
           <QuestionsScreen
             key={practice.category.slug}
@@ -313,8 +325,6 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
               setSidebarOpen(true);
             }}
           />
-        ) : view === "MCQ" ? (
-          <McqScreen progress={mcq} onChange={setMcq} />
         ) : view === "Jobs" ? (
           // A guest logs in by logging out of the guest session.
           <JobsScreen guest={session.guest} onLogin={() => setGuestAction("log out")} />
