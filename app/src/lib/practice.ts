@@ -14,6 +14,8 @@ export type Category = {
   details: string | null;
   /** Paid content, marked with a star. */
   premium: boolean;
+  /** Which screen its questions open in: "coding" or "mcq". A card never mixes the two. */
+  questionKind: string;
 };
 
 /** A heading on the Practice screen, e.g. "Indian Company Exams", with its categories. */
@@ -31,7 +33,7 @@ async function fetchSections(): Promise<Section[]> {
   const { data, error } = await supabase
     .from("pc_domains")
     .select(
-      "slug, title, categories:pc_categories (slug, title, description, icon, logoUrl:logo_url, details)",
+      "slug, title, categories:pc_categories (slug, title, description, icon, logoUrl:logo_url, details, questionKind:question_kind)",
     )
     .order("position")
     .order("position", { referencedTable: "categories" });

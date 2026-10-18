@@ -15,7 +15,7 @@ const ICON_NAMES: ReadonlySet<string> = new Set(iconNames);
  * "baby"), loaded when first shown. A name Lucide doesn't have, or none,
  * shows a folder, as does any icon while it loads.
  */
-function CategoryIcon({ name }: { name: string | null }) {
+export function CategoryIcon({ name }: { name: string | null }) {
   if (!name || !ICON_NAMES.has(name)) return <FolderIcon />;
   return <DynamicIcon name={name as IconName} fallback={() => <FolderIcon />} />;
 }

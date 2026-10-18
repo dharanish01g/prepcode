@@ -872,6 +872,9 @@ pub fn delete_guest_files(app: &AppHandle) {
             }
         }
     }
+    if let Some(db) = app.try_state::<Db>() {
+        crate::mcq::delete_guest_events(&db);
+    }
 }
 
 #[cfg(test)]
