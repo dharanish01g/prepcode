@@ -14,6 +14,8 @@ export type Category = {
   details: string | null;
   /** Paid content, marked with a star. */
   premium: boolean;
+  /** Which screen its questions open in: "coding" or "mcq". A card never mixes the two. */
+  questionKind: string;
 };
 
 /** A heading on the Practice screen, e.g. "Indian Company Exams", with its categories. */
@@ -24,23 +26,23 @@ export type Section = {
 };
 
 /**
- * Every section (a prepwisely domain) with its categories, in display order.
+ * Every section (a domain in the database) with its categories, in display order.
  * The database returns only active ones.
  */
 async function fetchSections(): Promise<Section[]> {
   const { data, error } = await supabase
     .from("pc_domains")
     .select(
-      "slug, title, categories:pc_categories (slug, title, description, icon, logoUrl:logo_url, details)",
+      "slug, title, categories:pc_categories (slug, title, description, icon, logoUrl:logo_url, details, questionKind:question_kind)",
     )
     .order("position")
     .order("position", { referencedTable: "categories" });
-  if (error) throw new Error(error.message);
   type FetchedSection = {
     slug: string;
     title: string;
     categories: Omit<Category, "premium">[];
   };
+  // There are no paid categories yet.
   return (data as unknown as FetchedSection[]).map((section) => ({
     ...section,
     categories: section.categories.map((category) => ({ ...category, premium: false })),

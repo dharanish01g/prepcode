@@ -1,5 +1,5 @@
-//! Talking to the account system: Supabase Auth in the prepwisely project,
-//! which prepcode (students) and prepwisely (staff) share.
+//! Talking to the account system: Supabase Auth in prepcode's project,
+//! shared by the student app and the staff tools.
 //!
 //! A student signs in with GitHub in their browser, through Supabase. The
 //! browser then comes back to a one-off address on this computer,
@@ -289,7 +289,7 @@ pub async fn user(access_token: &str) -> Result<Account, AccountError> {
 }
 
 /// The roles of the signed-in account (staff roles, "faculty", "tpo",
-/// "student"), from the same function prepwisely uses.
+/// "student"), from the same function the staff tools use.
 pub async fn role_ids(access_token: &str) -> Result<Vec<String>, AccountError> {
     let body = send(post("/rest/v1/rpc/my_role_ids")?.bearer_auth(access_token).json(&json!({}))).await?;
     Ok(body.as_array().into_iter().flatten().filter_map(|role| role.as_str().map(str::to_owned)).collect())
@@ -457,6 +457,49 @@ pub async fn repo_token(access_token: &str) -> Result<RepoToken, AccountError> {
         expires_at,
         github_login: field("github_login").ok_or_else(unexpected)?,
     })
+}
+
+/// Adds MCQ events (rows of `pc_mcq_events`) as the signed-in student. One
+/// already there, e.g. sent again after a lost reply, is kept once. Rejected
+/// means the database refused the rows themselves, so they never will be
+/// accepted; Offline covers everything worth trying again later, an expired
+/// sign-in or too many requests included.
+pub async fn add_mcq_events(access_token: &str, events: &Value) -> Result<(), AccountError> {
+    let request = post("/rest/v1/pc_mcq_events?on_conflict=id")?
+        .bearer_auth(access_token)
+        .header("Prefer", "resolution=ignore-duplicates,return=minimal")
+        .json(events);
+    let response = request.send().await.map_err(|_| AccountError::Offline)?;
+    let status = response.status().as_u16();
+    if (200..300).contains(&status) {
+        return Ok(());
+    }
+    let body: Value = response.json().await.unwrap_or(Value::Null);
+    match status {
+        400..=499 if ![401, 408, 429].contains(&status) => {
+            Err(AccountError::Rejected(body["message"].as_str().unwrap_or("Refused").to_owned()))
+        }
+        _ => Err(AccountError::Offline),
+    }
+}
+
+/// The MCQs the signed-in student has answered right, by slug. Questions no
+/// longer open (made private, or unpublished) aren't counted.
+pub async fn mcq_solved(access_token: &str) -> Result<Vec<String>, AccountError> {
+    let url = format!(
+        "{SUPABASE}/rest/v1/pc_mcq_events?select=question:pc_questions(slug)&kind=eq.submit&correct=is.true"
+    );
+    let request = client()?.get(url).header("apikey", PUBLISHABLE_KEY).bearer_auth(access_token);
+    let body = send(request).await?;
+    let mut slugs: Vec<String> = body
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|row| row["question"]["slug"].as_str().map(str::to_owned))
+        .collect();
+    slugs.sort();
+    slugs.dedup();
+    Ok(slugs)
 }
 
 fn post(path: &str) -> Result<RequestBuilder, AccountError> {

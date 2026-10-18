@@ -1,8 +1,8 @@
 //! Finding out what went wrong on a student's computer.
 //!
 //! Everything logged goes to a log file in the OS's logs folder (macOS:
-//! `~/Library/Logs/in.prepwisely.code`, Windows:
-//! `%LOCALAPPDATA%\in.prepwisely.code\logs`). Panics, frontend crashes and
+//! `~/Library/Logs/dev.prepcode.desktop`, Windows:
+//! `%LOCALAPPDATA%\dev.prepcode.desktop\logs`). Panics, frontend crashes and
 //! anything logged as an error also go to Sentry, with the log lines before
 //! them as breadcrumbs.
 //!

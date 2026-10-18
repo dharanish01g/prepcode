@@ -48,7 +48,7 @@ export type Example = {
   note: string;
 };
 
-// The rows as prepwisely returns them.
+// The rows as the database returns them.
 type SummaryRow = {
   slug: string;
   title: string;
