@@ -2552,8 +2552,17 @@ export function extractGoDocumentSymbols(
       continue;
     }
 
+    let lineToParse = rawLine;
+    if (/\bfunc\b/.test(rawLine) && !rawLine.includes(")")) {
+      for (let fwd = ln + 1; fwd <= Math.min(lines.length - 1, ln + 10); fwd++) {
+        const nextL = lines[fwd].trim();
+        lineToParse += " " + nextL;
+        if (nextL.includes(")")) break;
+      }
+    }
+
     // 2. Method declaration with receiver: func (r *Receiver) Method(params) returnType
-    const methodMatch = rawLine.match(
+    const methodMatch = lineToParse.match(
       /\bfunc\s*\(\s*(?:[A-Za-z_]\w*\s+)?(\*?[A-Za-z_]\w*)\s*\)\s*([A-Za-z_]\w*)\s*\(([^)]*)\)(?:\s*([^{]+))?/,
     );
     if (methodMatch) {
@@ -2581,7 +2590,7 @@ export function extractGoDocumentSymbols(
     }
 
     // 3. Regular function declaration: func FuncName(params) returnType
-    const funcMatch = rawLine.match(/\bfunc\s+([A-Za-z_]\w*)\s*\(([^)]*)\)(?:\s*([^{]+))?/);
+    const funcMatch = lineToParse.match(/\bfunc\s+([A-Za-z_]\w*)\s*\(([^)]*)\)(?:\s*([^{]+))?/);
     if (funcMatch) {
       const fname = funcMatch[1];
       const params = funcMatch[2].trim();
@@ -2599,6 +2608,71 @@ export function extractGoDocumentSymbols(
   }
 
   return { structs, functions };
+}
+
+/**
+ * Parses Go parameter list, supporting grouped parameters sharing a type (e.g. "a, b int, s, t string")
+ * and nested delimiters in parameter types like "cb func(x, y int) bool".
+ */
+export function parseGoParams(paramsRaw: string): Array<{ name: string; type: string }> {
+  if (!paramsRaw.trim()) return [];
+
+  // Split by top-level commas (ignoring commas inside nested (), [], {})
+  const tokens: string[] = [];
+  let depthParen = 0;
+  let depthBracket = 0;
+  let depthBrace = 0;
+  let currentToken = "";
+
+  for (let i = 0; i < paramsRaw.length; i++) {
+    const ch = paramsRaw[i];
+    if (ch === "(") depthParen++;
+    else if (ch === ")") depthParen = Math.max(0, depthParen - 1);
+    else if (ch === "[") depthBracket++;
+    else if (ch === "]") depthBracket = Math.max(0, depthBracket - 1);
+    else if (ch === "{") depthBrace++;
+    else if (ch === "}") depthBrace = Math.max(0, depthBrace - 1);
+
+    if (ch === "," && depthParen === 0 && depthBracket === 0 && depthBrace === 0) {
+      tokens.push(currentToken.trim());
+      currentToken = "";
+    } else {
+      currentToken += ch;
+    }
+  }
+  if (currentToken.trim()) {
+    tokens.push(currentToken.trim());
+  }
+
+  const result: Array<{ name: string; type: string }> = [];
+  const pendingNames: string[] = [];
+
+  for (const token of tokens) {
+    if (!token) continue;
+    // Check if token has both name and type: "name Type" e.g. "b int" or "cb func(x, y int)"
+    const match = token.match(/^([a-zA-Z_]\w*)\s+(.+)$/);
+    if (match) {
+      const name = match[1];
+      const type = match[2].trim();
+      for (const pName of pendingNames) {
+        result.push({ name: pName, type });
+      }
+      pendingNames.length = 0;
+      result.push({ name, type });
+    } else {
+      // Just a name in a grouped declaration: "a" in "a, b int"
+      const nameMatch = token.match(/^([a-zA-Z_]\w*)$/);
+      if (nameMatch) {
+        pendingNames.push(nameMatch[1]);
+      }
+    }
+  }
+
+  for (const pName of pendingNames) {
+    result.push({ name: pName, type: "" });
+  }
+
+  return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -2654,11 +2728,16 @@ export function inferGoType(
     return "string";
   }
 
-  // Index access e.g. words[0] or m["key"]
-  const indexMatch = expr.match(/^([a-zA-Z_]\w*)\[.*\]$/);
+  // Direct constructor / function call expressions
+  if (/^strings\.(?:Split|Fields)\b/.test(expr)) return "[]string";
+  if (/^bufio\.NewScanner\b/.test(expr)) return "*bufio.Scanner";
+  if (/^time\.Now\b/.test(expr)) return "time.Time";
+
+  // Index access e.g. words[0], matrix[0][0], or m["key"]
+  const indexMatch = expr.match(/^(.+)\[[^\[\]]*\]$/);
   if (indexMatch) {
-    const baseVar = indexMatch[1];
-    const baseType = inferGoType(model, position, baseVar);
+    const baseExpr = indexMatch[1].trim();
+    const baseType = inferGoType(model, position, baseExpr);
     if (baseType === "[]string") return "string";
     if (baseType === "[]int") return "int";
     if (baseType === "[]float64") return "float64";
@@ -2690,7 +2769,7 @@ export function inferGoType(
 
     // 1. For range loops: for idx, val := range items OR for idx := range items
     const forRangeMatch = maskedLine.match(
-      /\bfor\s+([A-Za-z_]\w*)(?:\s*,\s*([A-Za-z_]\w*))?\s*:=\s*range\s+([A-Za-z_]\w*)/,
+      /\bfor\s+([A-Za-z_]\w*)(?:\s*,\s*([A-Za-z_]\w*))?\s*:=\s*range\s+([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)?(?:\([^)]*\))?)/,
     );
     if (forRangeMatch) {
       const firstVar = forRangeMatch[1];
@@ -2722,10 +2801,12 @@ export function inferGoType(
       return "bool";
     }
 
-    // 3. Short variable assignment: x := ... or x, err := ... (not in for loops)
+    // 3. Short or standard variable assignment: x := ... or var x = ... or x = ...
     if (!/^\s*for\b/.test(maskedLine)) {
       const shortAssign = maskedLine.match(
-        new RegExp(`\\b${varName}\\s*(?:,\\s*(?:err|ok|[a-zA-Z_]\\w*))?\\s*:=\\s*(.+)`),
+        new RegExp(
+          `(?:\\bvar\\s+)?\\b${varName}\\s*(?:,\\s*(?:err|ok|[a-zA-Z_]\\w*))?\\s*(?::=|=)\\s*(.+)`,
+        ),
       );
       if (shortAssign) {
         const rhs = shortAssign[1].trim();
@@ -2753,15 +2834,11 @@ export function inferGoType(
         if (/^(?:true|false)\b/.test(rhs)) return "bool";
         if (/^strings\.(?:Contains|HasPrefix|HasSuffix)\b/.test(rhs)) return "bool";
 
-        // Slices
-        if (/^strings\.(?:Split|Fields)\b/.test(rhs)) return "[]string";
-        if (/^\[\]string\b/.test(rhs)) return "[]string";
-        if (/^\[\]int\b/.test(rhs)) return "[]int";
-        if (/^\[\]float64\b/.test(rhs)) return "[]float64";
-        if (/^\[\]byte\b/.test(rhs)) return "[]byte";
-        if (/^make\s*\(\s*\[\]string\b/.test(rhs)) return "[]string";
-        if (/^make\s*\(\s*\[\]int\b/.test(rhs)) return "[]int";
-        if (/^make\s*\(\s*\[\]float64\b/.test(rhs)) return "[]float64";
+        // Slices & arrays: [][]int{}, []string{}, make([][]int, 5), []*Node{}
+        const sliceTypeMatch = rhs.match(/^(?:make\s*\(\s*)?((?:\[\])+[*]?\w+(?:\.\w+)?)/);
+        if (sliceTypeMatch) {
+          return sliceTypeMatch[1];
+        }
 
         // Map
         if (/^make\s*\(\s*map\[/.test(rhs)) {
@@ -2782,8 +2859,8 @@ export function inferGoType(
         // OS File
         if (/^os\.(?:Open|Create)\b/.test(rhs)) return "*os.File";
 
-        // User Struct instantiation: &Person{...} or Person{...}
-        const structInst = rhs.match(/&?([A-Za-z_]\w*)\s*\{/);
+        // User Struct or Package struct instantiation: &Person{...} or strings.Builder{}
+        const structInst = rhs.match(/&?([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)?)\s*\{/);
         if (structInst && !GO_KEYWORD_SET.has(structInst[1])) {
           return structInst[1];
         }
@@ -2805,28 +2882,32 @@ export function inferGoType(
       }
     }
 
-    // 4. Function parameter in enclosing function or method
-    const funcHeaderMatch = maskedLine.match(
+    // 5. Function parameter in enclosing function or method (with multiline accumulation)
+    let funcLineToParse = maskedLine;
+    if (/\bfunc\b/.test(maskedLine) && !maskedLine.includes(")")) {
+      for (let fwd = ln + 1; fwd <= Math.min(model.getLineCount(), ln + 10); fwd++) {
+        const nextL = maskGoCommentsAndStrings(model.getLineContent(fwd)).trim();
+        funcLineToParse += " " + nextL;
+        if (nextL.includes(")")) break;
+      }
+    }
+
+    const funcHeaderMatch = funcLineToParse.match(
       /\bfunc\s*(?:\([^)]*\)\s*)?[A-Za-z_]\w*\s*\(([^)]*)\)/,
     );
     if (funcHeaderMatch) {
       const paramsRaw = funcHeaderMatch[1].trim();
       if (paramsRaw) {
-        // Go params can be: "a, b int, name string, items []string"
-        const segments = paramsRaw.split(/\s*,\s*/);
-        for (let s = 0; s < segments.length; s++) {
-          const seg = segments[s].trim();
-          const pMatch = seg.match(
-            new RegExp(`\\b${varName}\\s+([*]?(?:\\[\\])?[A-Za-z_]\\w*(?:\\.[A-Za-z_]\\w*)?)`),
-          );
-          if (pMatch) {
-            return pMatch[1].trim();
+        const parsed = parseGoParams(paramsRaw);
+        for (const p of parsed) {
+          if (p.name === varName && p.type) {
+            return p.type;
           }
         }
       }
     }
 
-    // 5. Method receiver parameter: func (s *Student) Method()
+    // 6. Method receiver parameter: func (s *Student) Method()
     const recvMatch = maskedLine.match(/\bfunc\s*\(\s*([A-Za-z_]\w*)\s+(\*?[A-Za-z_]\w*)\s*\)/);
     if (recvMatch && recvMatch[1] === varName) {
       return recvMatch[2].trim();
@@ -3189,6 +3270,179 @@ export const GO_SIGNATURES: Record<string, SignatureDef> = {
       { label: "perm: os.FileMode", doc: "File permission bits (e.g. 0644)." },
     ],
   },
+  "os.Open": {
+    label: "func os.Open(name string) (*os.File, error)",
+    doc: "Opens the named file for reading.",
+    params: [{ label: "name: string", doc: "Path to file." }],
+  },
+  "os.Create": {
+    label: "func os.Create(name string) (*os.File, error)",
+    doc: "Creates or truncates the named file.",
+    params: [{ label: "name: string", doc: "Path to file." }],
+  },
+
+  // slices
+  "slices.Reverse": {
+    label: "func slices.Reverse[S ~[]E, E any](s S)",
+    doc: "Reverses the elements of the slice in place.",
+    params: [{ label: "s: S", doc: "Slice to reverse." }],
+  },
+  "slices.Clone": {
+    label: "func slices.Clone[S ~[]E, E any](s S) S",
+    doc: "Returns a shallow copy of the slice.",
+    params: [{ label: "s: S", doc: "Slice to clone." }],
+  },
+  "slices.Compact": {
+    label: "func slices.Compact[S ~[]E, E comparable](s S) S",
+    doc: "Replaces consecutive runs of equal elements with a single copy.",
+    params: [{ label: "s: S", doc: "Slice to compact." }],
+  },
+  "slices.Equal": {
+    label: "func slices.Equal[S ~[]E, E comparable](s1, s2 S) bool",
+    doc: "Reports whether two slices are equal: same length and all elements equal.",
+    params: [
+      { label: "s1: S", doc: "First slice." },
+      { label: "s2: S", doc: "Second slice." },
+    ],
+  },
+
+  // maps
+  "maps.Keys": {
+    label: "func maps.Keys[M ~map[K]V, K comparable, V any](m M) []K",
+    doc: "Returns the keys of the map m.",
+    params: [{ label: "m: M", doc: "Map to extract keys from." }],
+  },
+  "maps.Values": {
+    label: "func maps.Values[M ~map[K]V, K comparable, V any](m M) []V",
+    doc: "Returns the values of the map m.",
+    params: [{ label: "m: M", doc: "Map to extract values from." }],
+  },
+  "maps.Clone": {
+    label: "func maps.Clone[M ~map[K]V, K comparable, V any](m M) M",
+    doc: "Returns a shallow copy of the map.",
+    params: [{ label: "m: M", doc: "Map to clone." }],
+  },
+  "maps.Equal": {
+    label: "func maps.Equal[M1, M2 ~map[K]V, K, V comparable](m1 M1, m2 M2) bool",
+    doc: "Reports whether two maps contain the same key/value pairs.",
+    params: [
+      { label: "m1: M1", doc: "First map." },
+      { label: "m2: M2", doc: "Second map." },
+    ],
+  },
+
+  // sort
+  "sort.Ints": {
+    label: "func sort.Ints(x []int)",
+    doc: "Sorts a slice of ints in increasing order.",
+    params: [{ label: "x: []int", doc: "Slice of ints to sort." }],
+  },
+  "sort.Float64s": {
+    label: "func sort.Float64s(x []float64)",
+    doc: "Sorts a slice of float64s in increasing order.",
+    params: [{ label: "x: []float64", doc: "Slice of float64s to sort." }],
+  },
+  "sort.Strings": {
+    label: "func sort.Strings(x []string)",
+    doc: "Sorts a slice of strings in increasing order.",
+    params: [{ label: "x: []string", doc: "Slice of strings to sort." }],
+  },
+  "sort.Slice": {
+    label: "func sort.Slice(x any, less func(i, j int) bool)",
+    doc: "Sorts the slice x given the provided less function.",
+    params: [
+      { label: "x: any", doc: "Slice to sort." },
+      { label: "less: func(i, j int) bool", doc: "Comparator function." },
+    ],
+  },
+  "sort.SliceStable": {
+    label: "func sort.SliceStable(x any, less func(i, j int) bool)",
+    doc: "Sorts the slice x keeping original order of equal elements.",
+    params: [
+      { label: "x: any", doc: "Slice to sort." },
+      { label: "less: func(i, j int) bool", doc: "Comparator function." },
+    ],
+  },
+  "sort.SearchInts": {
+    label: "func sort.SearchInts(a []int, x int) int",
+    doc: "Searches for x in a sorted slice of ints and returns the index.",
+    params: [
+      { label: "a: []int", doc: "Sorted slice of ints." },
+      { label: "x: int", doc: "Target value." },
+    ],
+  },
+  "sort.SearchStrings": {
+    label: "func sort.SearchStrings(a []string, x string) int",
+    doc: "Searches for x in a sorted slice of strings and returns the index.",
+    params: [
+      { label: "a: []string", doc: "Sorted slice of strings." },
+      { label: "x: string", doc: "Target string." },
+    ],
+  },
+
+  // bufio
+  "bufio.NewScanner": {
+    label: "func bufio.NewScanner(r io.Reader) *bufio.Scanner",
+    doc: "Returns a new Scanner to read from r.",
+    params: [{ label: "r: io.Reader", doc: "Reader interface source (e.g. os.Stdin)." }],
+  },
+  "bufio.NewReader": {
+    label: "func bufio.NewReader(rd io.Reader) *bufio.Reader",
+    doc: "Returns a new Reader whose buffer has the default size.",
+    params: [{ label: "rd: io.Reader", doc: "Reader interface source." }],
+  },
+  "bufio.NewWriter": {
+    label: "func bufio.NewWriter(w io.Writer) *bufio.Writer",
+    doc: "Returns a new Writer whose buffer has the default size.",
+    params: [{ label: "w: io.Writer", doc: "Writer destination." }],
+  },
+
+  // io
+  "io.ReadAll": {
+    label: "func io.ReadAll(r io.Reader) ([]byte, error)",
+    doc: "Reads from r until an error or EOF and returns the data it read.",
+    params: [{ label: "r: io.Reader", doc: "Reader to read from." }],
+  },
+  "io.Copy": {
+    label: "func io.Copy(dst io.Writer, src io.Reader) (written int64, err error)",
+    doc: "Copies from src to dst until either EOF is reached or an error occurs.",
+    params: [
+      { label: "dst: io.Writer", doc: "Destination writer." },
+      { label: "src: io.Reader", doc: "Source reader." },
+    ],
+  },
+
+  // json
+  "json.Marshal": {
+    label: "func json.Marshal(v any) ([]byte, error)",
+    doc: "Returns the JSON encoding of v.",
+    params: [{ label: "v: any", doc: "Value to encode as JSON." }],
+  },
+  "json.Unmarshal": {
+    label: "func json.Unmarshal(data []byte, v any) error",
+    doc: "Parses the JSON-encoded data and stores the result in the value pointed to by v.",
+    params: [
+      { label: "data: []byte", doc: "JSON byte slice." },
+      { label: "v: any", doc: "Pointer to receiving variable or struct." },
+    ],
+  },
+
+  // http
+  "http.Get": {
+    label: "func http.Get(url string) (resp *http.Response, err error)",
+    doc: "Issues a GET to the specified URL.",
+    params: [{ label: "url: string", doc: "URL to send GET request to." }],
+  },
+  "http.Post": {
+    label:
+      "func http.Post(url, contentType string, body io.Reader) (resp *http.Response, err error)",
+    doc: "Issues a POST to the specified URL.",
+    params: [
+      { label: "url: string", doc: "Target URL." },
+      { label: "contentType: string", doc: "MIME type header." },
+      { label: "body: io.Reader", doc: "Request body reader." },
+    ],
+  },
 };
 
 // ---------------------------------------------------------------------------
@@ -3414,26 +3668,28 @@ export function registerGoCompletions(mInstance?: Monaco) {
           }
         }
 
-        // parameters
-        const paramMatch = line.match(/\bfunc\s*(?:\([^)]*\)\s*)?[A-Za-z_]\w*\s*\(([^)]*)\)/);
+        // parameters (with multiline accumulation and grouped parameter support)
+        let funcLine = line;
+        if (/\bfunc\b/.test(line) && !line.includes(")")) {
+          for (let fwd = ln + 1; fwd <= Math.min(model.getLineCount(), ln + 10); fwd++) {
+            const nextL = maskGoCommentsAndStrings(model.getLineContent(fwd)).trim();
+            funcLine += " " + nextL;
+            if (nextL.includes(")")) break;
+          }
+        }
+
+        const paramMatch = funcLine.match(/\bfunc\s*(?:\([^)]*\)\s*)?[A-Za-z_]\w*\s*\(([^)]*)\)/);
         if (paramMatch && paramMatch[1]) {
-          const segs = paramMatch[1].split(/\s*,\s*/);
-          for (const s of segs) {
-            const pm = s
-              .trim()
-              .match(/^([a-zA-Z_]\w*)\s+([*]?(?:\[\])?[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)?)/);
-            if (pm) {
-              const vn = pm[1];
-              const vt = pm[2];
-              if (!GO_KEYWORD_SET.has(vn) && !seenVars.has(vn)) {
-                seenVars.add(vn);
-                suggestions.push({
-                  label: vn,
-                  kind: monacoDefault.languages.CompletionItemKind.Variable,
-                  detail: `${vn}: ${vt}`,
-                  documentation: "Parameter",
-                });
-              }
+          const parsed = parseGoParams(paramMatch[1]);
+          for (const p of parsed) {
+            if (!GO_KEYWORD_SET.has(p.name) && !seenVars.has(p.name)) {
+              seenVars.add(p.name);
+              suggestions.push({
+                label: p.name,
+                kind: monacoDefault.languages.CompletionItemKind.Variable,
+                detail: p.type ? `${p.name}: ${p.type}` : p.name,
+                documentation: "Parameter",
+              });
             }
           }
         }
@@ -3822,12 +4078,12 @@ export function registerGoCompletions(mInstance?: Monaco) {
 
       const callPrefix = maskedText.slice(0, activeCall.openIdx).trimEnd();
 
-      // Guardrail: Exclude control-flow statements like "for (", "if (", "switch ("
-      if (/\b(?:if|for|switch|select|go|defer|return)\s*$/.test(callPrefix)) {
+      // Guardrail: Exclude control-flow statements like "for (", "if (", "switch (", "func ("
+      if (/\b(?:if|for|switch|select|go|defer|return|func)\s*$/.test(callPrefix)) {
         return null;
       }
 
-      // Extract call target: e.g. "fmt.Println", "make", "append", "strings.Split"
+      // Extract call target: e.g. "fmt.Println", "make", "append", "strings.Split", "s.Scan", "calc.Add"
       const match = callPrefix.match(/([A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)?)$/);
       if (!match) return null;
 
@@ -3836,22 +4092,85 @@ export function registerGoCompletions(mInstance?: Monaco) {
       // Check known standard signatures
       let sigInfo = GO_SIGNATURES[callTarget];
 
-      // Also check user defined functions in document
-      if (!sigInfo) {
+      // Check method call on receiver/variable (e.g. "s.Scan", "wg.Add", "calc.Add")
+      if (!sigInfo && callTarget.includes(".")) {
+        const dotIdx = callTarget.indexOf(".");
+        const receiverExpr = callTarget.slice(0, dotIdx);
+        const methodName = callTarget.slice(dotIdx + 1);
+
+        const inferredType = inferGoType(model, position, receiverExpr);
+        const normalizedType = normalizeGoTypeName(inferredType);
+
+        let memberDef: CompletionItemDef | undefined;
+        if (normalizedType === "bufio.Scanner" || inferredType === "*bufio.Scanner") {
+          memberDef = SCANNER_INSTANCE_MEMBERS.find((m) => m.label === methodName);
+        } else if (normalizedType === "strings.Builder" || inferredType === "*strings.Builder") {
+          memberDef = BUILDER_INSTANCE_MEMBERS.find((m) => m.label === methodName);
+        } else if (normalizedType === "sync.WaitGroup" || inferredType === "*sync.WaitGroup") {
+          memberDef = WAITGROUP_INSTANCE_MEMBERS.find((m) => m.label === methodName);
+        } else if (normalizedType === "sync.Mutex" || inferredType === "*sync.Mutex") {
+          memberDef = MUTEX_INSTANCE_MEMBERS.find((m) => m.label === methodName);
+        } else if (normalizedType === "sync.RWMutex" || inferredType === "*sync.RWMutex") {
+          memberDef = RWMUTEX_INSTANCE_MEMBERS.find((m) => m.label === methodName);
+        } else if (normalizedType === "time.Time") {
+          memberDef = TIME_INSTANCE_MEMBERS.find((m) => m.label === methodName);
+        } else if (normalizedType === "os.File" || inferredType === "*os.File") {
+          memberDef = OS_FILE_INSTANCE_MEMBERS.find((m) => m.label === methodName);
+        } else if (normalizedType === "error") {
+          memberDef = ERROR_INSTANCE_MEMBERS.find((m) => m.label === methodName);
+        } else {
+          // Check user defined struct methods
+          const docSymbols = extractGoDocumentSymbols(model);
+          const userStruct = docSymbols.structs.get(normalizedType);
+          if (userStruct) {
+            memberDef = userStruct.methods.find((m) => m.label === methodName);
+          }
+        }
+
+        if (memberDef) {
+          const pMatch = memberDef.detail?.match(new RegExp(`\\b${methodName}\\s*\\(([^)]*)\\)`));
+          const rawParams = pMatch ? pMatch[1].trim() : "";
+          const parsed = parseGoParams(rawParams);
+          let varargIdx: number | undefined;
+          const params: SignatureParam[] = parsed.map((p, idx) => {
+            if (p.type.includes("...") || p.type.startsWith("...")) varargIdx = idx;
+            return {
+              label: p.type ? `${p.name}: ${p.type}` : p.name,
+              doc: p.type ? `${p.name} (${p.type})` : p.name,
+            };
+          });
+
+          sigInfo = {
+            label: memberDef.detail ?? memberDef.label,
+            doc: memberDef.documentation ?? "",
+            params,
+            varargPositionalIdx: varargIdx,
+          };
+        }
+      }
+
+      // Check user defined standalone function
+      if (!sigInfo && !callTarget.includes(".")) {
         const docSymbols = extractGoDocumentSymbols(model);
         const userFn = docSymbols.functions.get(callTarget);
         if (userFn) {
-          // Parse parameters from user function detail: func Func(a int, b string)
-          const pMatch = userFn.detail?.match(/\(([^)]*)\)/);
+          const pMatch = userFn.detail?.match(new RegExp(`\\b${callTarget}\\s*\\(([^)]*)\\)`));
           const rawParams = pMatch ? pMatch[1].trim() : "";
-          const parsedParams: SignatureParam[] = rawParams
-            ? rawParams.split(/\s*,\s*/).map((p) => ({ label: p, doc: p }))
-            : [];
+          const parsed = parseGoParams(rawParams);
+          let varargIdx: number | undefined;
+          const params: SignatureParam[] = parsed.map((p, idx) => {
+            if (p.type.includes("...") || p.type.startsWith("...")) varargIdx = idx;
+            return {
+              label: p.type ? `${p.name}: ${p.type}` : p.name,
+              doc: p.type ? `${p.name} (${p.type})` : p.name,
+            };
+          });
 
           sigInfo = {
             label: userFn.detail ?? userFn.label,
             doc: userFn.documentation ?? "",
-            params: parsedParams,
+            params,
+            varargPositionalIdx: varargIdx,
           };
         }
       }

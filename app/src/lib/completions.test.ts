@@ -1093,3 +1093,122 @@ func main() {
     "make(map[string]int, ...) parameter should be 1",
   );
 });
+
+test("Go Issue 10: Grouped parameters & multiline function headers", () => {
+  // Grouped parameters in single-line function
+  const src = `package main
+func sum(a, b int, name string) int {
+	`;
+  const items = goLabels(src);
+  assert.ok(items.includes("a"), "Grouped parameter 'a' should be suggested");
+  assert.ok(items.includes("b"), "Grouped parameter 'b' should be suggested");
+  assert.ok(items.includes("name"), "Parameter 'name' should be suggested");
+
+  const aHover = goHover(src + "a", "a");
+  assert.ok(aHover?.includes("var a int"), "Grouped parameter 'a' should infer int");
+  const bHover = goHover(src + "b", "b");
+  assert.ok(bHover?.includes("var b int"), "Grouped parameter 'b' should infer int");
+
+  // Multiline function header
+  const multilineSrc = `package main
+func process(
+	first, second int,
+	label string,
+) {
+	`;
+  const multiItems = goLabels(multilineSrc);
+  assert.ok(multiItems.includes("first"), "Multiline parameter 'first' should be suggested");
+  assert.ok(multiItems.includes("second"), "Multiline parameter 'second' should be suggested");
+  assert.ok(multiItems.includes("label"), "Multiline parameter 'label' should be suggested");
+
+  const firstHover = goHover(multilineSrc + "first", "first");
+  assert.ok(firstHover?.includes("var first int"), "Multiline parameter 'first' should infer int");
+});
+
+test("Go Issue 11: Multi-dimensional slice indexing & struct slice inference", () => {
+  // Multi-dimensional slice: matrix[0][0]
+  const matrixSrc = `package main
+func main() {
+	matrix := [][]int{}
+	matrix[0][0]`;
+  const mHover = goHover(matrixSrc, "matrix[0][0]");
+  assert.ok(mHover?.includes("int"), "matrix[0][0] should infer int");
+
+  // Slice of structs: people[0].
+  const structSliceSrc = `package main
+type Person struct {
+	Name string
+	Age  int
+}
+func main() {
+	people := []Person{}
+	people[0].`;
+  const pItems = goLabels(structSliceSrc);
+  assert.ok(pItems.includes("Name"), "people[0]. should offer Name");
+  assert.ok(pItems.includes("Age"), "people[0]. should offer Age");
+
+  // make([][]int, 5)
+  const makeMatrixSrc = `package main
+func main() {
+	grid := make([][]int, 5)
+	grid[0][0]`;
+  const gridHover = goHover(makeMatrixSrc, "grid[0][0]");
+  assert.ok(gridHover?.includes("int"), "grid[0][0] from make([][]int, 5) should infer int");
+});
+
+test("Go Issue 12: Receiver method calls in Signature Help & keyword exclusions", () => {
+  // sync.WaitGroup method
+  const wgSrc = `package main
+import "sync"
+func main() {
+	var wg sync.WaitGroup
+	wg.Add(`;
+  assert.equal(goSig(wgSrc), 0, "wg.Add( should offer signature help on param 0");
+
+  // User defined struct method
+  const calcSrc = `package main
+type Calculator struct{}
+func (c *Calculator) Add(a, b int) int { return a + b }
+func main() {
+	calc := Calculator{}
+	calc.Add(1, `;
+  assert.equal(goSig(calcSrc), 1, "calc.Add(1,  should highlight param 1");
+
+  // func keyword must not trigger signature help
+  assert.equal(goSig("go func("), null, "go func( must not trigger signature help");
+  assert.equal(goSig("func ("), null, "func ( must not trigger signature help");
+  assert.equal(goSig("defer func("), null, "defer func( must not trigger signature help");
+});
+
+test("Go Issue 13: Practice question starters & competitive programming libraries", () => {
+  // Standard coding problem template
+  const cpSrc = `package main
+
+import (
+	"bufio"
+	"fmt"
+	"os"
+	"sort"
+)
+
+func solve(n int, arr []int) int {
+	sort.`;
+  const sortItems = goLabels(cpSrc);
+  assert.ok(sortItems.includes("Ints"), "sort. should suggest Ints");
+  assert.ok(sortItems.includes("Slice"), "sort. should suggest Slice");
+  assert.ok(sortItems.includes("Strings"), "sort. should suggest Strings");
+
+  // Inside solve(): n and arr are suggested
+  const solveBody = `package main
+func solve(n int, arr []int) int {
+	`;
+  const solveItems = goLabels(solveBody);
+  assert.ok(solveItems.includes("n"), "Parameter n should be suggested");
+  assert.ok(solveItems.includes("arr"), "Parameter arr should be suggested");
+
+  // sort.Slice signature help
+  assert.equal(goSig("sort.Slice(arr, "), 1, "sort.Slice second arg is less func");
+
+  // bufio.NewScanner signature help
+  assert.equal(goSig("bufio.NewScanner("), 0, "bufio.NewScanner param 0");
+});
