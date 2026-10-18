@@ -1,4 +1,5 @@
 import * as monacoDefault from "monaco-editor";
+import { deduplicateSuggestions, toCompletionItems } from "./completion-utils.ts";
 
 type Monaco = typeof monacoDefault;
 
@@ -948,44 +949,6 @@ const STATIC_TYPES = [
     doc: "Performs operations on String instances that contain file or directory path information.",
   },
 ];
-
-/**
- * Deduplicates completion items keyed by label, kind, insertText, and detail.
- * Preserves legitimate overloads while removing identical duplicate items.
- */
-function deduplicateSuggestions(
-  items: monacoDefault.languages.CompletionItem[],
-): monacoDefault.languages.CompletionItem[] {
-  const seen = new Set<string>();
-  const unique: monacoDefault.languages.CompletionItem[] = [];
-  for (const item of items) {
-    const insertKey =
-      typeof item.insertText === "string" ? item.insertText : JSON.stringify(item.insertText);
-    const key = `${item.label}|${item.kind ?? ""}|${insertKey}|${item.detail ?? ""}`;
-    if (!seen.has(key)) {
-      seen.add(key);
-      unique.push(item);
-    }
-  }
-  return unique;
-}
-
-function toCompletionItems(
-  items: MethodItem[],
-  range: monacoDefault.IRange,
-): monacoDefault.languages.CompletionItem[] {
-  return items.map((m) => ({
-    label: m.label,
-    kind: m.kind ?? monacoDefault.languages.CompletionItemKind.Method,
-    insertText: m.snippet ?? m.label,
-    insertTextRules: m.snippet
-      ? monacoDefault.languages.CompletionItemInsertTextRule.InsertAsSnippet
-      : undefined,
-    detail: m.detail,
-    documentation: m.documentation,
-    range,
-  }));
-}
 
 const CSHARP_KEYWORD_SET = new Set(CSHARP_KEYWORDS);
 const CSHARP_TYPE_SET = new Set(CSHARP_TYPES.map((t) => t.name));

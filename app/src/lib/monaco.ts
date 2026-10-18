@@ -5,6 +5,7 @@ import * as monaco from "monaco-editor";
 import EditorWorker from "monaco-editor/editor/editor.worker?worker";
 import TypeScriptWorker from "monaco-editor/languages/features/typescript/ts.worker?worker";
 import { onZoomApplied } from "@/hooks/use-zoom";
+import { registerCCompletions } from "@/lib/c-completions";
 import { registerCppCompletions } from "@/lib/cpp-completions";
 import { registerCSharpCompletions } from "@/lib/csharp-completions";
 import { registerPythonCompletions } from "@/lib/python-completions";
@@ -22,6 +23,7 @@ self.MonacoEnvironment = {
 };
 
 loader.config({ monaco });
+registerCCompletions(monaco);
 registerCppCompletions(monaco);
 registerCSharpCompletions(monaco);
 registerPythonCompletions(monaco);

@@ -5,6 +5,8 @@ mod databases;
 mod db;
 mod files;
 mod github;
+mod identifier;
+mod mcq;
 mod reporting;
 mod run;
 mod runtimes;
@@ -45,8 +47,14 @@ pub fn run() {
         .manage(run::Runner::default())
         .manage(sql::Servers::default())
         .manage(files::WorkspaceLock::default())
+        .manage(mcq::McqSender::default())
         .setup(|app| {
+            // Before anything opens the folders, logging's included.
+            let moved = identifier::move_old_folders(app.handle());
             reporting::init_logging(app.handle())?;
+            for (level, message) in moved {
+                log::log!(level, "{message}");
+            }
             // The window starts hidden (tauri.conf.json) and is shown once its
             // webview exists. On Windows, creating the webview waits in a
             // message loop, and a visible window repainting during that wait
@@ -92,6 +100,9 @@ pub fn run() {
             files::rename_file,
             files::delete_file,
             files::export_guest_files,
+            mcq::record_mcq_event,
+            mcq::send_mcq_events,
+            mcq::list_mcq_solved,
             runtimes::list_runtimes,
             runtimes::install_runtime,
             runtimes::remove_runtime,

@@ -126,6 +126,24 @@ const MIGRATIONS: &[&str] = &[
     ALTER TABLE languages ADD COLUMN engine TEXT;
     DELETE FROM meta WHERE key = 'catalog_version';
 ",
+    "
+    -- What students do on Practice MCQs: each submit and each hint opened.
+    -- Kept here first, then sent to Supabase's pc_mcq_events with the same
+    -- id; see mcq.rs. A guest's are never sent.
+    CREATE TABLE mcq_events (
+        id          TEXT PRIMARY KEY,  -- uuid
+        user_id     TEXT NOT NULL,     -- workspace id, e.g. gh-12345678
+        question_id TEXT NOT NULL,     -- pc_questions id
+        question    TEXT NOT NULL,     -- slug, e.g. salary-raise-and-fall
+        kind        TEXT NOT NULL,     -- submit or hint
+        option_id   TEXT,              -- a submit's option
+        correct     INTEGER,           -- a submit's: 1 right, 0 wrong
+        hint_index  INTEGER,           -- a hint's, from 0
+        at          INTEGER NOT NULL,  -- milliseconds since the Unix epoch
+        sent_at     INTEGER            -- NULL until Supabase has it (or refused it for good)
+    );
+    CREATE INDEX mcq_events_unsent ON mcq_events (user_id) WHERE sent_at IS NULL;
+",
 ];
 
 fn migrate(conn: &mut Connection) -> rusqlite::Result<()> {
