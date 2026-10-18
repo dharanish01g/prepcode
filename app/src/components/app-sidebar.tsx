@@ -101,7 +101,7 @@ export function AppSidebar({
   selectedFile: string | null;
   onSelectFile: (filename: string | null) => void;
   /** Saves the editor's pending edits now (before a rename or delete). */
-  onFlushEdits: () => void;
+  onFlushEdits: () => Promise<void> | void;
   /** Still bringing down the student's files from GitHub at sign-in. */
   pulling: boolean;
   /** What isn't synced to GitHub yet; undefined for guests. */

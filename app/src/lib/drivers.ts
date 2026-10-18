@@ -55,8 +55,18 @@ export function splitOutput(stdout: string): { printed: string; returned: string
   stdout = stdout.replace(/\r\n/g, "\n");
   const marker = `\n${RESULT_MARKER}\n`;
   const at = stdout.lastIndexOf(marker);
-  if (at < 0) return { printed: stdout, returned: null };
-  return { printed: stdout.slice(0, at), returned: stdout.slice(at + marker.length).trim() };
+  if (at >= 0) {
+    return { printed: stdout.slice(0, at), returned: stdout.slice(at + marker.length).trim() };
+  }
+  // If the program printed nothing before the marker, it appears at the start of stdout.
+  const prefix = `${RESULT_MARKER}\n`;
+  if (stdout.startsWith(prefix)) {
+    return { printed: "", returned: stdout.slice(prefix.length).trim() };
+  }
+  if (stdout.trim() === RESULT_MARKER) {
+    return { printed: "", returned: null };
+  }
+  return { printed: stdout, returned: null };
 }
 
 /** The code a student starts from, for a method in a language. */
