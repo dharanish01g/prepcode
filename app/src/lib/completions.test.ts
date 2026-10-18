@@ -1182,3 +1182,132 @@ void test() {
   assert.ok(docVars.includes("total"), "total is suggested");
   assert.ok(docVars.includes("ptr"), "ptr is suggested");
 });
+
+test("C: A function taking a struct parameter does not replace the struct's fields", () => {
+  const src = `struct Student {
+    int id;
+    char name[20];
+};
+
+void show(struct Student s) {
+    int total = 0;
+    s.
+}`;
+  const labels = cLabels(src, 7, 8);
+  assert.ok(labels.includes("id"), "s. suggests id");
+  assert.ok(labels.includes("name"), "s. suggests name");
+  assert.ok(!labels.includes("total"), "the function's local total is not a field");
+
+  // Brace on the line after `struct Name`
+  const nextLine = cLabels("struct Box\n{\n    int w;\n};\nstruct Box b;\nb.");
+  assert.ok(nextLine.includes("w"), "struct with brace on next line still has its fields");
+});
+
+test("C: else-if blocks stay inside the enclosing function's scope", () => {
+  const src = `int main(int argc) {
+    int count = 0;
+    if (argc) {
+    }
+    else if (count) {
+        
+    }
+}`;
+  const labels = cLabels(src, 9, 6);
+  assert.ok(labels.includes("count"), "main's local is visible inside else-if");
+  assert.ok(labels.includes("argc"), "main's parameter is visible inside else-if");
+});
+
+test("C: A variable name is not matched inside a longer word", () => {
+  const src = `typedef struct Point2 { int x; int y; } Point2;
+Point2 *p;
+int tmp = p->`;
+  const labels = cLabels(src);
+  assert.ok(labels.includes("x"), "p-> suggests x");
+  assert.ok(labels.includes("y"), "p-> suggests y");
+});
+
+test("C: Member access works mid-expression, through (*p), and through struct fields", () => {
+  const structs = `struct Addr { int zip; };
+struct Person { int age; struct Addr addr; };
+struct Person *pp;
+struct Person me;
+`;
+  assert.ok(cLabels(`${structs}int a = me.`).includes("age"), "after `=`");
+  assert.ok(cLabels(`${structs}printf("%d", pp->`).includes("age"), "inside a call");
+  assert.ok(cLabels(`${structs}(*pp).`).includes("age"), "(*pp). works like pp->");
+  assert.ok(cLabels(`${structs}me.addr.`).includes("zip"), "me.addr. resolves the field type");
+  assert.ok(cLabels(`${structs}me.ag`).includes("age"), "partial member name after the dot");
+});
+
+test("C: Calls are not recorded as user-defined functions", () => {
+  const src = `int fact(int n) {
+    if (n < 2) return 1;
+    return fact(n - 1);
+}
+int main() {
+    int x = 1;
+    printf("%d", x);
+    
+}`;
+  const { mockMonaco, completionProviders } = setupMockMonaco();
+  registerCCompletions(mockMonaco);
+  const res = completionProviders["c"].provideCompletionItems(createMockModel(src), {
+    lineNumber: 8,
+    column: 5,
+  });
+  const printfs = res.suggestions.filter((s: any) => s.label === "printf");
+  assert.equal(printfs.length, 1, "only the standard printf");
+  const facts = res.suggestions.filter((s: any) => s.label === "fact");
+  assert.equal(facts.length, 1, "fact appears once");
+  assert.equal(facts[0].detail, "int fact(int n)", "detail is the definition");
+
+  // Signature help uses the definition, not a recursive call above the cursor
+  const sigSrc = `int fact(int n);
+int helper() { return fact(3 - 1); }
+int fact(int n) { return n; }
+int main() {
+    fact(`;
+  const sig = cSig(sigSrc);
+  assert.equal(sig.value.signatures[0].label, "int fact(int n)");
+});
+
+test("C: Text inside multi-line block comments is not parsed as code", () => {
+  const src = `/*
+ * int helper(int x) returns things
+ * struct Node *ghost is the list
+ */
+void run() {
+    
+}`;
+  const labels = cLabels(src, 5, 6);
+  assert.ok(!labels.includes("helper"), "commented helper is not a function");
+  assert.ok(!labels.includes("ghost"), "commented ghost is not a variable");
+  assert.ok(labels.includes("run"), "real function is still found");
+});
+
+test("C: Trigger characters with nothing to complete show no list", () => {
+  assert.equal(cLabels("int a = 1;\nif (a >").length, 0, "comparison >");
+  assert.equal(cLabels("int a = 1;\nif (a <").length, 0, "comparison <");
+  assert.equal(cLabels('printf("').length, 0, "opening a string");
+  assert.equal(cLabels("#include <stdio.h>").length, 0, "closing #include <...>");
+  assert.ok(cLabels("#include <").includes("stdio.h"), "#include < still lists headers");
+});
+
+test("C: No member suggestions inside strings, comments, or after calls", () => {
+  assert.equal(cLabels('printf("Done.').length, 0, "dot inside a string");
+  assert.equal(cLabels("// see the list.").length, 0, "dot inside a line comment");
+  assert.equal(cLabels("/* a\n b.").length, 0, "dot inside a block comment");
+  assert.equal(cLabels("int x = foo().").length, 0, "member of a call result");
+  assert.ok(cLabels("unknownThing->").includes("val"), "unknown variable keeps the fallback");
+});
+
+test("C: Signature help keeps function-pointer parameters whole", () => {
+  const q = cSig("int a[3];\nqsort(a, 3, sizeof(int), ");
+  const params = q.value.signatures[0].parameters.map((p: any) => p.label);
+  assert.equal(params.length, 4, "qsort has 4 parameters");
+  assert.ok(params[3].startsWith("int (*compar)("), "comparator parameter is whole");
+  assert.equal(q.value.activeParameter, 3);
+
+  const at = cSig("atexit(");
+  assert.equal(at.value.signatures[0].parameters.length, 1, "atexit has 1 parameter");
+});

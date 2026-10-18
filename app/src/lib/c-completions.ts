@@ -1,14 +1,13 @@
 import * as monacoDefault from "monaco-editor";
+import {
+  type CompletionItemDef,
+  deduplicateSuggestions,
+  toCompletionItems,
+} from "./completion-utils.ts";
 
 type Monaco = typeof monacoDefault;
 
-export interface CompletionItemDef {
-  label: string;
-  kind?: monacoDefault.languages.CompletionItemKind;
-  detail?: string;
-  documentation?: string;
-  snippet?: string;
-}
+export type { CompletionItemDef };
 
 // --- Standard C Headers ----------------------------------------------------------------
 
@@ -1331,9 +1330,10 @@ export const C_SNIPPETS: CSnippetDef[] = [
 // --- Comment & String Shielding --------------------------------------------------------
 
 /**
- * Masks C comments (// and /*...*\/) with spaces to preserve line lengths and offsets.
+ * Masks C comments (// and /*...*\/) with spaces, and string/char literals too when
+ * `maskStrings` is set. Newlines are kept so line numbers and columns stay the same.
  */
-export function maskCComments(code: string): string {
+function maskC(code: string, maskStrings: boolean): string {
   let inString: string | null = null;
   let inBlockComment = false;
   let inLineComment = false;
@@ -1350,8 +1350,8 @@ export function maskCComments(code: string): string {
         chars[i + 1] = " ";
         inBlockComment = false;
         i++;
-      } else {
-        if (ch !== "\n") chars[i] = " ";
+      } else if (ch !== "\n") {
+        chars[i] = " ";
       }
       continue;
     }
@@ -1367,10 +1367,14 @@ export function maskCComments(code: string): string {
 
     if (inString !== null) {
       if (ch === inString && !isEscaped) {
+        if (maskStrings) chars[i] = " ";
         inString = null;
       } else if (ch === "\\" && !isEscaped) {
+        if (maskStrings) chars[i] = " ";
         isEscaped = true;
         continue;
+      } else if (maskStrings && ch !== "\n") {
+        chars[i] = " ";
       }
       isEscaped = false;
       continue;
@@ -1378,6 +1382,7 @@ export function maskCComments(code: string): string {
 
     if (ch === '"' || ch === "'") {
       inString = ch;
+      if (maskStrings) chars[i] = " ";
       continue;
     }
 
@@ -1402,80 +1407,18 @@ export function maskCComments(code: string): string {
 }
 
 /**
+ * Masks C comments (// and /*...*\/) with spaces to preserve line lengths and offsets.
+ */
+export function maskCComments(code: string): string {
+  return maskC(code, false);
+}
+
+/**
  * Masks both comments and string/char literals with spaces to prevent punctuation
  * inside comments/strings from corrupting parsers.
  */
 export function maskCCommentsAndStrings(code: string): string {
-  let inString: string | null = null;
-  let inBlockComment = false;
-  let inLineComment = false;
-  let isEscaped = false;
-  const chars = code.split("");
-
-  for (let i = 0; i < chars.length; i++) {
-    const ch = chars[i];
-    const next = i + 1 < chars.length ? chars[i + 1] : "";
-
-    if (inBlockComment) {
-      if (ch === "*" && next === "/") {
-        chars[i] = " ";
-        chars[i + 1] = " ";
-        inBlockComment = false;
-        i++;
-      } else {
-        if (ch !== "\n") chars[i] = " ";
-      }
-      continue;
-    }
-
-    if (inLineComment) {
-      if (ch === "\n") {
-        inLineComment = false;
-      } else {
-        chars[i] = " ";
-      }
-      continue;
-    }
-
-    if (inString !== null) {
-      if (ch === inString && !isEscaped) {
-        chars[i] = " ";
-        inString = null;
-      } else if (ch === "\\" && !isEscaped) {
-        chars[i] = " ";
-        isEscaped = true;
-        continue;
-      } else {
-        if (ch !== "\n") chars[i] = " ";
-      }
-      isEscaped = false;
-      continue;
-    }
-
-    if (ch === '"' || ch === "'") {
-      inString = ch;
-      chars[i] = " ";
-      continue;
-    }
-
-    if (ch === "/" && next === "*") {
-      chars[i] = " ";
-      chars[i + 1] = " ";
-      inBlockComment = true;
-      i++;
-      continue;
-    }
-
-    if (ch === "/" && next === "/") {
-      chars[i] = " ";
-      chars[i + 1] = " ";
-      inLineComment = true;
-      i++;
-      continue;
-    }
-  }
-
-  return chars.join("");
+  return maskC(code, true);
 }
 
 /**
@@ -1485,40 +1428,126 @@ export function stripCComment(line: string): string {
   return maskCComments(line);
 }
 
-// --- Helpers --------------------------------------------------------------------------
-
-export function deduplicateSuggestions(
-  items: monacoDefault.languages.CompletionItem[],
-): monacoDefault.languages.CompletionItem[] {
-  const seen = new Set<string>();
-  const unique: monacoDefault.languages.CompletionItem[] = [];
-  for (const item of items) {
-    const insertKey =
-      typeof item.insertText === "string" ? item.insertText : JSON.stringify(item.insertText);
-    const key = `${item.label}|${item.kind ?? ""}|${insertKey}|${item.detail ?? ""}`;
-    if (!seen.has(key)) {
-      seen.add(key);
-      unique.push(item);
-    }
-  }
-  return unique;
+/**
+ * Whether the end of `prefix` (the document text up to the cursor) is inside a
+ * comment, string, or char literal.
+ */
+export function isInCCommentOrString(prefix: string): boolean {
+  // A sentinel character only survives masking when it sits in plain code.
+  return maskCCommentsAndStrings(`${prefix}x`).endsWith(" ");
 }
 
-export function toCompletionItems(
-  items: CompletionItemDef[],
-  range: monacoDefault.IRange,
-): monacoDefault.languages.CompletionItem[] {
-  return items.map((m) => ({
-    label: m.label,
-    kind: m.kind ?? monacoDefault.languages.CompletionItemKind.Function,
-    insertText: m.snippet ?? m.label,
-    insertTextRules: m.snippet
-      ? monacoDefault.languages.CompletionItemInsertTextRule.InsertAsSnippet
-      : undefined,
-    detail: m.detail,
-    documentation: m.documentation,
-    range,
-  }));
+/**
+ * The document's lines with comments masked. Masking the whole text (not one line at a
+ * time) is what keeps the inside of multi-line block comments out of the parsers.
+ */
+export function getMaskedCLines(model: monacoDefault.editor.ITextModel): string[] {
+  return maskCComments(model.getValue()).split("\n");
+}
+
+// --- Function Headers ------------------------------------------------------------------
+
+/** Keywords that may appear in a function's return type or specifiers. */
+const C_DECL_SPECIFIERS = new Set([
+  "auto",
+  "char",
+  "const",
+  "double",
+  "enum",
+  "extern",
+  "float",
+  "inline",
+  "int",
+  "long",
+  "register",
+  "restrict",
+  "short",
+  "signed",
+  "static",
+  "struct",
+  "union",
+  "unsigned",
+  "void",
+  "volatile",
+  "_Bool",
+]);
+
+/** Index of the ')' matching the '(' at `openIdx`, or -1 if it is not on this text. */
+function findMatchingParen(text: string, openIdx: number): number {
+  let depth = 0;
+  for (let i = openIdx; i < text.length; i++) {
+    if (text[i] === "(") depth++;
+    else if (text[i] === ")") {
+      depth--;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
+}
+
+/** Splits a parameter list on top-level commas, so `int (*cmp)(int, int)` stays whole. */
+function splitCParams(inner: string): string[] {
+  const params: string[] = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i < inner.length; i++) {
+    const ch = inner[i];
+    if (ch === "(" || ch === "[") depth++;
+    else if (ch === ")" || ch === "]") depth--;
+    else if (ch === "," && depth === 0) {
+      params.push(inner.slice(start, i).trim());
+      start = i + 1;
+    }
+  }
+  params.push(inner.slice(start).trim());
+  const list = params.filter(Boolean);
+  return list.length === 1 && list[0] === "void" ? [] : list;
+}
+
+/** Parameters of a signature such as "void qsort(void *base, ..., int (*compar)(...))". */
+export function parseCSignatureParams(signature: string): string[] {
+  const open = signature.indexOf("(");
+  if (open < 0) return [];
+  const close = findMatchingParen(signature, open);
+  return splitCParams(signature.slice(open + 1, close < 0 ? undefined : close));
+}
+
+export interface CFunctionHeader {
+  name: string;
+  /** e.g. "int add(int a, int b)" */
+  signature: string;
+  params: string[];
+  /** true for a prototype ending in ';', false for a definition */
+  isPrototype: boolean;
+}
+
+/**
+ * Parses a comment-masked line that declares or defines a function, e.g.
+ * `int add(int a, int b) {` or `struct Node *make(int v);`. Returns null for calls
+ * (`printf("x");`, `return fact(n - 1);`), control statements (`} else if (x) {`) and
+ * anything else that is not a function header.
+ */
+export function parseCFunctionHeader(line: string): CFunctionHeader | null {
+  const m = line.match(/^\s*((?:[a-zA-Z_]\w*[\s*]+)+)([a-zA-Z_]\w*)\s*\(/);
+  if (!m) return null;
+  const name = m[2];
+  if (C_KEYWORD_SET.has(name)) return null;
+  // Every word before the name must be part of a type: a type name or a specifier.
+  const typeWords = m[1].match(/[a-zA-Z_]\w*/g) ?? [];
+  if (typeWords.some((w) => C_KEYWORD_SET.has(w) && !C_DECL_SPECIFIERS.has(w))) return null;
+
+  const open = m[0].length - 1;
+  const close = findMatchingParen(line, open);
+  if (close < 0) return null;
+  const rest = line.slice(close + 1).trim();
+  if (rest !== "" && rest !== ";" && !rest.startsWith("{")) return null;
+
+  return {
+    name,
+    signature: line.slice(0, close + 1).trim(),
+    params: splitCParams(line.slice(open + 1, close)),
+    isPrototype: rest === ";",
+  };
 }
 
 // --- Scopes & Scope Analysis -----------------------------------------------------------
@@ -1551,16 +1580,10 @@ export function computeCScopes(
   for (let ln = 1; ln <= lineCount; ln++) {
     const rawLine = cleanedLines[ln - 1] ?? "";
 
-    // Check if line looks like a function definition header
-    // e.g. int solve(int a, int b) { or void print_list(ListNode* head) {
-    const isFuncDef =
-      /\b(?:(?:extern|static|inline|const|unsigned|signed|struct\s+[a-zA-Z_]\w*|[a-zA-Z_]\w*)\s+)*(?:\*+\s*)*([a-zA-Z_]\w*)\s*\([^;)]*\)\s*\{?/.test(
-        rawLine,
-      ) &&
-      !/^\s*(?:if|while|for|switch|catch)\b/.test(rawLine) &&
-      !rawLine.trim().endsWith(";");
-
-    if (isFuncDef) {
+    // Only a function definition header opens a scope, e.g. int solve(int a, int b) {
+    // Control statements such as `} else if (x) {` stay inside the enclosing function.
+    const header = parseCFunctionHeader(rawLine);
+    if (header && !header.isPrototype) {
       candidateFuncLine = ln;
     }
 
@@ -1626,11 +1649,10 @@ export interface CStructDef {
 export function extractCStructs(model: monacoDefault.editor.ITextModel): Map<string, CStructDef> {
   const result = new Map<string, CStructDef>();
   const lineCount = model.getLineCount();
-  const fullText = model.getValue();
-  const masked = maskCComments(fullText);
-  const lines = masked.split("\n");
+  const lines = getMaskedCLines(model);
 
   let inStruct = false;
+  let opened = false;
   let structName = "";
   let structStartLine = 0;
   let currentFields: CStructField[] = [];
@@ -1671,11 +1693,14 @@ export function extractCStructs(model: monacoDefault.editor.ITextModel): Map<str
       continue;
     }
 
-    // 2. Multi-line struct start: struct Student { or typedef struct Book {
+    // 2. Multi-line struct start: `struct Student {`, `typedef struct Book {`, or a bare
+    // `struct Student` with the brace on the next line. The line must be only that, so
+    // `void show(struct Student s) {` or `struct Student s;` are not struct definitions.
     if (!inStruct) {
-      const match = line.match(/\b(?:typedef\s+)?struct\s+([a-zA-Z_]\w*)?\s*\{?/);
-      if (match && !line.trim().endsWith(";")) {
+      const match = line.match(/^\s*(?:typedef\s+)?struct(?:\s+([a-zA-Z_]\w*))?\s*(\{.*)?$/);
+      if (match) {
         inStruct = true;
+        opened = false;
         structName = match[1] ?? "";
         structStartLine = ln;
         currentFields = [];
@@ -1686,6 +1711,20 @@ export function extractCStructs(model: monacoDefault.editor.ITextModel): Map<str
     if (inStruct) {
       const opens = (line.match(/\{/g) || []).length;
       const closes = (line.match(/\}/g) || []).length;
+
+      if (!opened) {
+        if (opens === 0) {
+          // Anything other than blank lines between `struct Name` and its `{` means it
+          // was not a definition after all.
+          if (ln !== structStartLine && line.trim() !== "") {
+            inStruct = false;
+            structName = "";
+          }
+          continue;
+        }
+        opened = true;
+      }
+
       braceDepth += opens - closes;
 
       // Extract field declaration inside struct only before any closing '}'
@@ -1708,7 +1747,7 @@ export function extractCStructs(model: monacoDefault.editor.ITextModel): Map<str
         }
       }
 
-      if (braceDepth <= 0 && (line.includes("}") || opens === 0)) {
+      if (braceDepth <= 0) {
         // Struct closed. Look for typedef alias name e.g. } Book;
         const closeMatch = line.match(/\}\s*([a-zA-Z_]\w*)\s*;/);
         if (closeMatch && closeMatch[1]) {
@@ -1803,6 +1842,104 @@ export function parseSubscriptExpression(
 }
 
 /**
+ * Returns the expression right before a '.' or '->' operator, e.g. "p" from
+ * "int y = p", "arr[i]" from "sum += arr[i]", or "head->next" from "x = head->next".
+ */
+export function trailingCExpression(text: string): string {
+  let i = text.length;
+  let depth = 0;
+  while (i > 0) {
+    const ch = text[i - 1];
+    if (ch === "]" || ch === ")") {
+      depth++;
+    } else if (ch === "[" || ch === "(") {
+      if (depth === 0) break;
+      depth--;
+    } else if (depth === 0) {
+      if (ch === ">" && text[i - 2] === "-") {
+        i -= 2;
+        continue;
+      }
+      if (!/[\w.]/.test(ch)) break;
+    }
+    i--;
+  }
+  return text.slice(i).trim();
+}
+
+/** Maps a declared type name to the type the member-access completions understand. */
+function classifyCTypeName(typeName: string): InferredCType {
+  const t = typeName
+    .replace(/^struct\s+/, "")
+    .replace(/\*/g, "")
+    .trim();
+  if (C_PRIMITIVE_TYPES.has(t)) return "primitive";
+  if (!t || C_KEYWORD_SET.has(t)) return "unknown";
+  return t; // ListNode, TreeNode, Node, Point, Pair, or a user-defined struct
+}
+
+/** Infers a variable's type from its declaration above the cursor. */
+function inferCVariableType(
+  lines: string[],
+  scopes: CScopes,
+  fromLine: number,
+  varName: string,
+): InferredCType {
+  // Scan backwards from position for declaration
+  for (let ln = fromLine; ln >= 1; ln--) {
+    if (!isLineVisible(scopes, ln)) continue;
+    const line = (lines[ln - 1] ?? "").trim();
+    if (!line) continue;
+
+    // 1. Primitive declaration: int x; or float y = 1.0; or int a = 1, b = 2;
+    const primMatch = line.match(
+      new RegExp(
+        `\\b(int|long|double|float|char|bool|_Bool|short|unsigned|signed|size_t|ssize_t|ptrdiff_t|uint8_t|uint16_t|uint32_t|uint64_t|int8_t|int16_t|int32_t|int64_t|intptr_t|uintptr_t|void)\\b\\s*(?:(?:\\*+\\s*)?[a-zA-Z_]\\w*(?:\\s*=\\s*[^,;]+)?\\s*,\\s*)*(?:\\*+\\s*)?\\b${varName}\\b`,
+      ),
+    );
+    if (primMatch) {
+      return "primitive";
+    }
+
+    // 2. Struct pointer declaration: struct ListNode *head = NULL, *cur; or Book *b;
+    // The type and the name must be separated by whitespace or '*', so `tmp` does not
+    // read as type `tm` followed by variable `p`.
+    const structMatch = line.match(
+      new RegExp(
+        `\\b(?:struct\\s+)?([a-zA-Z_]\\w*)(?:\\s*\\*+\\s*|\\s+)(?:(?:\\*+\\s*)?[a-zA-Z_]\\w*(?:\\s*=\\s*[^,;]+)?\\s*,\\s*)*(?:\\*+\\s*)?\\b${varName}\\b`,
+      ),
+    );
+    if (structMatch) {
+      const sType = classifyCTypeName(structMatch[1]);
+      if (sType !== "unknown" && sType !== "primitive") return sType;
+    }
+
+    // 3. Struct value declaration: struct Point p; or Point p1 = {0}, p2;
+    const structValMatch = line.match(
+      new RegExp(
+        `\\b(?:struct\\s+)?([a-zA-Z_]\\w*)\\s+(?:[a-zA-Z_]\\w*(?:\\s*=\\s*[^,;]+)?\\s*,\\s*)*\\b${varName}\\b`,
+      ),
+    );
+    if (structValMatch) {
+      const sType = classifyCTypeName(structValMatch[1]);
+      if (sType !== "unknown" && sType !== "primitive") return sType;
+    }
+  }
+
+  // Name heuristic fallbacks (if untyped or inferred from context)
+  if (/^(?:head|curr|cur|prev|next|node|tail|fast|slow)\d*$/i.test(varName)) {
+    return "ListNode";
+  }
+  if (/^(?:root|tree|leaf)\d*$/i.test(varName)) {
+    return "TreeNode";
+  }
+  if (/^(?:pt|point)\d*$/i.test(varName)) {
+    return "Point";
+  }
+  return "unknown";
+}
+
+/**
  * Infers the type of an expression preceding '.' or '->' in C.
  */
 export function inferCType(
@@ -1811,20 +1948,25 @@ export function inferCType(
   textBeforeWord: string,
   operatorKind: "." | "->",
 ): InferredCType {
-  const expr = textBeforeWord.slice(0, -operatorKind.length).trim();
-  if (!expr) return "unknown";
+  const before = textBeforeWord.slice(0, -operatorKind.length).trimEnd();
 
-  // Numeric literal: 5. or 3.14. -> primitive
-  if (/\b\d+\s*$/.test(expr)) {
+  // Literal string or char: "hello". or 'a'. -> primitive
+  if (before.endsWith('"') || before.endsWith("'")) {
     return "primitive";
   }
 
-  // Literal string or char: "hello". or 'a'. -> primitive
-  if (
-    (expr.startsWith('"') && expr.endsWith('"')) ||
-    (expr.startsWith("'") && expr.endsWith("'"))
-  ) {
+  let expr = trailingCExpression(before);
+  if (!expr) return "unknown";
+
+  // Numeric literal: 5. or 3.14. -> primitive
+  if (/^\d/.test(expr)) {
     return "primitive";
+  }
+
+  // (*p). is the same as p->
+  const derefMatch = expr.match(/^\(\s*\*\s*([a-zA-Z_]\w*)\s*\)$/);
+  if (derefMatch) {
+    expr = derefMatch[1];
   }
 
   // Recursive pointer / struct chaining:
@@ -1839,6 +1981,8 @@ export function inferCType(
     return "Node";
   }
 
+  const lines = getMaskedCLines(model);
+
   // Multi-bracket subscript / array indexing: arr[0]. or matrix[0][0]. or matrix[row[0]][col[0]].
   const subParsed = parseSubscriptExpression(expr);
   if (subParsed) {
@@ -1847,7 +1991,7 @@ export function inferCType(
 
     for (let ln = position.lineNumber; ln >= 1; ln--) {
       if (!isLineVisible(scopes, ln)) continue;
-      const line = maskCComments(model.getLineContent(ln)).trim();
+      const line = (lines[ln - 1] ?? "").trim();
       if (!line) continue;
 
       // Match array declaration e.g. int arr[10]; or struct ListNode nodes[10];
@@ -1857,95 +2001,32 @@ export function inferCType(
         ),
       );
       if (arrDecl) {
-        const rawType = arrDecl[1].replace(/^struct\s+/, "").trim();
         const declaredDim = (arrDecl[3].match(/\[/g) || []).length;
-
         if (subDepth === declaredDim) {
-          if (C_PRIMITIVE_TYPES.has(rawType)) {
-            // e.g. int arr[10]; arr[0] is primitive int!
-            return "primitive";
-          }
-          if (rawType === "ListNode") return "ListNode";
-          if (rawType === "TreeNode") return "TreeNode";
-          if (rawType === "Node") return "Node";
-          if (rawType === "Point") return "Point";
-          if (rawType === "Pair") return "Pair";
-          return rawType; // User defined struct
+          // e.g. int arr[10]; arr[0] is primitive int, struct ListNode nodes[10]; is ListNode
+          const elemType = classifyCTypeName(arrDecl[1]);
+          return elemType === "unknown" ? "primitive" : elemType;
         }
         return "primitive";
       }
     }
   }
 
-  // Direct variable access: e.g. head-> or node. or x.
-  const varMatch = expr.match(/^[a-zA-Z_]\w*$/);
-  if (varMatch) {
-    const varName = varMatch[0];
+  // Direct variable access or a member chain: head-> or s.addr. or p->pos.
+  const chain = expr.match(/^([a-zA-Z_]\w*)((?:\s*(?:->|\.)\s*[a-zA-Z_]\w*)*)$/);
+  if (chain) {
     const scopes = computeCScopes(model, position.lineNumber);
-
-    // Scan backwards from position for declaration
-    for (let ln = position.lineNumber; ln >= 1; ln--) {
-      if (!isLineVisible(scopes, ln)) continue;
-      const line = maskCComments(model.getLineContent(ln)).trim();
-      if (!line) continue;
-
-      // 1. Primitive declaration: int x; or float y = 1.0; or int a = 1, b = 2;
-      const primMatch = line.match(
-        new RegExp(
-          `\\b(int|long|double|float|char|bool|_Bool|short|unsigned|signed|size_t|ssize_t|ptrdiff_t|uint8_t|uint16_t|uint32_t|uint64_t|int8_t|int16_t|int32_t|int64_t|intptr_t|uintptr_t|void)\\b\\s*(?:(?:\\*+\\s*)?[a-zA-Z_]\\w*(?:\\s*=\\s*[^,;]+)?\\s*,\\s*)*(?:\\*+\\s*)?${varName}\\b`,
-        ),
-      );
-      if (primMatch) {
-        return "primitive";
-      }
-
-      // 2. Struct pointer declaration: struct ListNode *head = NULL, *cur; or Book *b;
-      const structMatch = line.match(
-        new RegExp(
-          `\\b(?:struct\\s+)?([a-zA-Z_]\\w*)(?:\\s*\\*+)?\\s*(?:(?:\\*+\\s*)?[a-zA-Z_]\\w*(?:\\s*=\\s*[^,;]+)?\\s*,\\s*)*(?:\\*+\\s*)?${varName}\\b`,
-        ),
-      );
-      if (structMatch) {
-        const sType = structMatch[1];
-        if (sType === "ListNode") return "ListNode";
-        if (sType === "TreeNode") return "TreeNode";
-        if (sType === "Node") return "Node";
-        if (sType === "Point") return "Point";
-        if (sType === "Pair") return "Pair";
-        if (!C_KEYWORD_SET.has(sType) && !C_PRIMITIVE_TYPES.has(sType)) {
-          return sType;
-        }
-      }
-
-      // 3. Struct value declaration: struct Point p; or Point p1 = {0}, p2;
-      const structValMatch = line.match(
-        new RegExp(
-          `\\b(?:struct\\s+)?([a-zA-Z_]\\w*)\\s+(?:[a-zA-Z_]\\w*(?:\\s*=\\s*[^,;]+)?\\s*,\\s*)*${varName}\\b`,
-        ),
-      );
-      if (structValMatch) {
-        const sType = structValMatch[1];
-        if (sType === "ListNode") return "ListNode";
-        if (sType === "TreeNode") return "TreeNode";
-        if (sType === "Node") return "Node";
-        if (sType === "Point") return "Point";
-        if (sType === "Pair") return "Pair";
-        if (!C_KEYWORD_SET.has(sType) && !C_PRIMITIVE_TYPES.has(sType)) {
-          return sType;
-        }
+    let current = inferCVariableType(lines, scopes, position.lineNumber, chain[1]);
+    const members = chain[2].match(/[a-zA-Z_]\w*/g) ?? [];
+    if (members.length > 0) {
+      const structs = extractCStructs(model);
+      for (const member of members) {
+        const field = structs.get(current)?.fields.find((f) => f.name === member);
+        if (!field) return "unknown";
+        current = classifyCTypeName(field.type);
       }
     }
-
-    // Name heuristic fallbacks (if untyped or inferred from context)
-    if (/^(?:head|curr|cur|prev|next|node|tail|fast|slow)\d*$/i.test(varName)) {
-      return "ListNode";
-    }
-    if (/^(?:root|tree|leaf)\d*$/i.test(varName)) {
-      return "TreeNode";
-    }
-    if (/^(?:pt|point)\d*$/i.test(varName)) {
-      return "Point";
-    }
+    return current;
   }
 
   return "unknown";
@@ -1961,6 +2042,15 @@ export interface CDocSymbol {
   line: number;
 }
 
+/** Splits a parameter such as "const char *s" or "int (*cmp)(int, int)" into type and name. */
+function parseCParam(param: string): { type: string; name: string } | null {
+  const funcPtr = param.match(/\(\s*\*\s*([a-zA-Z_]\w*)\s*\)/);
+  if (funcPtr) return { type: param.replace(funcPtr[1], "").trim(), name: funcPtr[1] };
+  const m = param.match(/^(.*?)\b([a-zA-Z_]\w*)\s*(?:\[[^\]]*\]\s*)*$/);
+  if (!m || !m[1].trim()) return null;
+  return { type: m[1].replace(/\s+\*/g, "*").trim(), name: m[2] };
+}
+
 /**
  * Extracts visible document symbols (functions and variables) at cursor line,
  * honoring C scope boundaries so locals do not leak across functions.
@@ -1971,30 +2061,24 @@ export function extractCDocSymbols(
 ): CDocSymbol[] {
   const lineCount = model.getLineCount();
   const scopes = computeCScopes(model, cursorLine);
+  const lines = getMaskedCLines(model);
   const symbols: CDocSymbol[] = [];
   const seen = new Set<string>();
 
   for (let ln = 1; ln <= lineCount; ln++) {
-    const rawLine = model.getLineContent(ln);
-    const masked = maskCComments(rawLine).trim();
+    const masked = (lines[ln - 1] ?? "").trim();
     if (!masked || masked.startsWith("#")) continue;
 
-    // Check function definition / declaration
-    const funcMatch = masked.match(
-      /\b(?:(?:extern|static|inline|const|unsigned|signed|struct\s+[a-zA-Z_]\w*|[a-zA-Z_]\w*)\s+)*(?:\*+\s*)*([a-zA-Z_]\w*)\s*\(([^;)]*)\)/,
-    );
-    if (
-      funcMatch &&
-      !/^\s*(?:if|while|for|switch|catch)\b/.test(masked) &&
-      !C_KEYWORD_SET.has(funcMatch[1])
-    ) {
-      const fName = funcMatch[1];
+    // Check function definition / declaration (calls such as printf(...); are not headers)
+    const header = parseCFunctionHeader(masked);
+    if (header) {
+      const fName = header.name;
       if (!seen.has(fName)) {
         seen.add(fName);
         symbols.push({
           name: fName,
           kind: monacoDefault.languages.CompletionItemKind.Function,
-          detail: funcMatch[0].trim(),
+          detail: header.signature,
           documentation: `User-defined function (line ${ln})`,
           line: ln,
         });
@@ -2002,13 +2086,10 @@ export function extractCDocSymbols(
 
       // If this is the active function enclosing cursorLine, extract its parameters
       if (ln === scopes.activeFuncLine) {
-        const rawParams = funcMatch[2];
-        const paramMatches = rawParams.matchAll(
-          /\b(?:const\s+)?([a-zA-Z_]\w*(?:\s*\*+)?)\s+([a-zA-Z_]\w*)\b/g,
-        );
-        for (const pm of paramMatches) {
-          const pType = pm[1].trim();
-          const pName = pm[2].trim();
+        for (const rawParam of header.params) {
+          const param = parseCParam(rawParam.replace(/^const\s+/, ""));
+          if (!param) continue;
+          const { type: pType, name: pName } = param;
           if (!seen.has(pName) && !C_KEYWORD_SET.has(pName)) {
             seen.add(pName);
             symbols.push({
@@ -2103,11 +2184,13 @@ export function registerCCompletions(monacoInstance?: Monaco) {
 
   // 1. Completion Provider
   m.languages.registerCompletionItemProvider("c", {
-    triggerCharacters: [".", ">", "<", '"', "/", "#"],
+    // '<' and '"' are only for #include; '>' is only for '->'.
+    triggerCharacters: [".", ">", "<", '"', "#"],
     provideCompletionItems(model, position) {
       const lineContent = model.getLineContent(position.lineNumber);
       const textBefore = lineContent.slice(0, position.column - 1);
       const word = model.getWordUntilPosition(position);
+      const textBeforeWord = textBefore.slice(0, textBefore.length - word.word.length);
 
       const defaultRange: monacoDefault.IRange = {
         startLineNumber: position.lineNumber,
@@ -2230,13 +2313,23 @@ export function registerCCompletions(monacoInstance?: Monaco) {
         return { suggestions: directiveItems };
       }
 
+      // --- Nothing to suggest inside comments, strings, or char literals ---
+      const docPrefix = model.getValueInRange({
+        startLineNumber: 1,
+        startColumn: 1,
+        endLineNumber: position.lineNumber,
+        endColumn: position.column,
+      });
+      if (isInCCommentOrString(docPrefix)) {
+        return { suggestions: [] };
+      }
+
       // --- Member Access: '.' or '->' ---
-      const dotMatch = textBefore.match(/(\.)$/);
-      const arrowMatch = textBefore.match(/(->)$/);
+      const arrowMatch = textBeforeWord.endsWith("->");
+      const dotMatch = textBeforeWord.endsWith(".");
 
       if (dotMatch || arrowMatch) {
         const opKind = arrowMatch ? "->" : ".";
-        const textBeforeWord = textBefore.slice(0, textBefore.length - word.word.length);
 
         const inferred = inferCType(model, position, textBeforeWord, opKind);
 
@@ -2276,8 +2369,13 @@ export function registerCCompletions(monacoInstance?: Monaco) {
           return { suggestions: sItems };
         }
 
-        // If unknown pointer in C, offer DSA struct fields as fallback, but NEVER global functions or keywords
-        if (inferred === "unknown") {
+        // If an unknown variable in C, offer DSA struct fields as fallback, but NEVER global functions or keywords.
+        // Calls like foo(). and other expressions get nothing rather than a guess.
+        const memberExpr = trailingCExpression(textBeforeWord.slice(0, -opKind.length).trimEnd());
+        if (
+          inferred === "unknown" &&
+          /^[a-zA-Z_]\w*(?:\s*(?:->|\.)\s*[a-zA-Z_]\w*)*$/.test(memberExpr)
+        ) {
           const fallbackMembers = deduplicateSuggestions([
             ...toCompletionItems(LISTNODE_MEMBERS, defaultRange),
             ...toCompletionItems(TREENODE_MEMBERS, defaultRange),
@@ -2285,6 +2383,11 @@ export function registerCCompletions(monacoInstance?: Monaco) {
           return { suggestions: fallbackMembers };
         }
 
+        return { suggestions: [] };
+      }
+
+      // A trigger character with nothing to complete (`a > b`, a lone `<`, `"` or `#`)
+      if (/[<>"#]$/.test(textBefore)) {
         return { suggestions: [] };
       }
 
@@ -2506,15 +2609,19 @@ export function registerCCompletions(monacoInstance?: Monaco) {
     signatureHelpTriggerCharacters: ["(", ","],
     provideSignatureHelp(model, position) {
       const startLine = Math.max(1, position.lineNumber - 50);
-      const textBefore = model.getValueInRange({
-        startLineNumber: startLine,
+      const docPrefix = model.getValueInRange({
+        startLineNumber: 1,
         startColumn: 1,
         endLineNumber: position.lineNumber,
         endColumn: position.column,
       });
 
-      // Mask comments and strings so parens or quotes inside them do not corrupt parameter parsing
-      const cleanedText = maskCComments(textBefore);
+      // Mask comments so parens or quotes inside them do not corrupt parameter parsing.
+      // Mask from the top of the file so a block comment opened above startLine is known.
+      const cleanedText = maskCComments(docPrefix)
+        .split("\n")
+        .slice(startLine - 1)
+        .join("\n");
 
       // Track block stacks for parentheses and brackets
       const blockStack: { char: string; openIdx: number; argCount: number }[] = [];
@@ -2593,22 +2700,15 @@ export function registerCCompletions(monacoInstance?: Monaco) {
         (f) => f.label === funcName,
       );
 
-      // If not in standard functions, check document-defined functions
+      // If not in standard functions, check document-defined functions (headers only, not calls)
       if (!found) {
-        const lineCount = model.getLineCount();
-        for (let ln = 1; ln <= lineCount; ln++) {
-          const rawLine = model.getLineContent(ln);
-          const line = maskCComments(rawLine).trim();
-          if (!line || line.startsWith("#")) continue;
-
-          const funcRegex = new RegExp(
-            `\\b([a-zA-Z_]\\w*(?:\\s*\\*+)?\\s+${funcName}\\s*\\(([^;)]*)\\))`,
-          );
-          const fMatch = line.match(funcRegex);
-          if (fMatch && !/^\s*(?:if|while|for|switch)\b/.test(line)) {
+        const lines = getMaskedCLines(model);
+        for (let ln = 1; ln <= lines.length; ln++) {
+          const header = parseCFunctionHeader(lines[ln - 1]);
+          if (header && header.name === funcName) {
             found = {
               label: funcName,
-              detail: fMatch[1].trim(),
+              detail: header.signature,
               documentation: `User-defined function (line ${ln})`,
             };
             break;
@@ -2617,15 +2717,8 @@ export function registerCCompletions(monacoInstance?: Monaco) {
       }
 
       if (found && found.detail) {
-        const parenMatch = found.detail.match(/\(([^)]*)\)/);
-        const paramsRaw = parenMatch ? parenMatch[1].trim() : "";
-
-        const paramList = paramsRaw
-          ? paramsRaw
-              .split(",")
-              .map((p) => p.trim())
-              .filter(Boolean)
-          : [];
+        // Split on top-level commas so function-pointer parameters (qsort, atexit) stay whole
+        const paramList = parseCSignatureParams(found.detail);
 
         return {
           value: {

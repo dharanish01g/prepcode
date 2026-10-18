@@ -1,14 +1,11 @@
 import * as monacoDefault from "monaco-editor";
+import {
+  type CompletionItemDef,
+  deduplicateSuggestions,
+  toCompletionItems,
+} from "./completion-utils.ts";
 
 type Monaco = typeof monacoDefault;
-
-interface CompletionItemDef {
-  label: string;
-  kind?: monacoDefault.languages.CompletionItemKind;
-  snippet?: string;
-  detail?: string;
-  documentation?: string;
-}
 
 const BUILTIN_FUNCTIONS: CompletionItemDef[] = [
   {
@@ -1125,47 +1122,9 @@ const SNIPPETS = [
   },
 ];
 
-function toCompletionItems(
-  items: CompletionItemDef[],
-  range: monacoDefault.IRange,
-): monacoDefault.languages.CompletionItem[] {
-  return items.map((m) => ({
-    label: m.label,
-    kind: m.kind ?? monacoDefault.languages.CompletionItemKind.Method,
-    insertText: m.snippet ?? m.label,
-    insertTextRules: m.snippet
-      ? monacoDefault.languages.CompletionItemInsertTextRule.InsertAsSnippet
-      : undefined,
-    detail: m.detail,
-    documentation: m.documentation,
-    range,
-  }));
-}
-
 const PYTHON_KEYWORD_SET = new Set(PYTHON_KEYWORDS);
 const PYTHON_BUILTIN_SET = new Set(BUILTIN_FUNCTIONS.map((f) => f.label));
 const PYTHON_MODULE_SET = new Set(PYTHON_MODULES.map((m) => m.name));
-
-/**
- * Deduplicates completion items keyed by label, kind, insertText, and detail.
- * Preserves legitimate overloads while removing identical duplicate items.
- */
-function deduplicateSuggestions(
-  items: monacoDefault.languages.CompletionItem[],
-): monacoDefault.languages.CompletionItem[] {
-  const seen = new Set<string>();
-  const unique: monacoDefault.languages.CompletionItem[] = [];
-  for (const item of items) {
-    const insertKey =
-      typeof item.insertText === "string" ? item.insertText : JSON.stringify(item.insertText);
-    const key = `${item.label}|${item.kind ?? ""}|${insertKey}|${item.detail ?? ""}`;
-    if (!seen.has(key)) {
-      seen.add(key);
-      unique.push(item);
-    }
-  }
-  return unique;
-}
 
 /**
  * Strips Python '#' comments from a single line while respecting string literals.
