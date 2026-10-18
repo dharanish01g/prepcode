@@ -24,7 +24,7 @@ export type Section = {
 };
 
 /**
- * Every section (a prepwisely domain) with its categories, in display order.
+ * Every section (a domain in the database) with its categories, in display order.
  * The database returns only active ones.
  */
 async function fetchSections(): Promise<Section[]> {
@@ -36,7 +36,7 @@ async function fetchSections(): Promise<Section[]> {
     .order("position")
     .order("position", { referencedTable: "categories" });
   if (error) throw new Error(error.message);
-  // prepwisely has no paid categories yet.
+  // There are no paid categories yet.
   return data.map((section) => ({
     ...section,
     categories: section.categories.map((category) => ({ ...category, premium: false })),
