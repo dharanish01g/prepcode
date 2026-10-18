@@ -5,6 +5,7 @@ mod databases;
 mod db;
 mod files;
 mod github;
+mod mcq;
 mod reporting;
 mod run;
 mod runtimes;
@@ -45,6 +46,7 @@ pub fn run() {
         .manage(run::Runner::default())
         .manage(sql::Servers::default())
         .manage(files::WorkspaceLock::default())
+        .manage(mcq::McqSender::default())
         .setup(|app| {
             reporting::init_logging(app.handle())?;
             // The window starts hidden (tauri.conf.json) and is shown once its
@@ -92,6 +94,9 @@ pub fn run() {
             files::rename_file,
             files::delete_file,
             files::export_guest_files,
+            mcq::record_mcq_event,
+            mcq::send_mcq_events,
+            mcq::list_mcq_solved,
             runtimes::list_runtimes,
             runtimes::install_runtime,
             runtimes::remove_runtime,

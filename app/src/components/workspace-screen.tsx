@@ -51,6 +51,7 @@ import { exportGuestFiles, extensionOf, whenSavesSettled } from "@/lib/files";
 import { findLanguage, type Language } from "@/lib/languages";
 import { useFilesQuery, useSolvedQuery, useSyncStatusQuery } from "@/lib/queries";
 import type { Category } from "@/lib/practice";
+import { sendMcqEvents } from "@/lib/mcq";
 import { useCategoryQuestionsQuery, type Question } from "@/lib/questions";
 import { unsyncedCount } from "@/lib/sync";
 import logo from "@/assets/logo.png";
@@ -179,6 +180,17 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
     const timer = setInterval(() => void backgroundSync(), AUTO_SYNC_MS);
     return () => clearInterval(timer);
   }, [session.guest, backgroundSync]);
+
+  // MCQ answers given offline wait on this computer: send them now, and with
+  // every auto-sync. Each new answer also sends what's waiting.
+  useEffect(() => {
+    if (session.guest) return;
+    const send = () =>
+      sendMcqEvents().catch((err) => console.info("MCQ answers wait to be sent:", err));
+    void send();
+    const timer = setInterval(send, AUTO_SYNC_MS);
+    return () => clearInterval(timer);
+  }, [session.guest]);
   // A Submit sends just that answer to GitHub, in its own commit.
   const { syncAnswer } = sync;
   const onSubmitted = session.guest
@@ -284,6 +296,7 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
       <SidebarInset className="min-h-0 min-w-0">
         {view === "Practice" && mcqCategory ? (
           <McqScreen
+            userId={session.id}
             category={mcqCategory}
             parents={[{ label: "Practice", onClick: () => setPractice(null) }]}
             progress={mcq}

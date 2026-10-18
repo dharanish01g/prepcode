@@ -6,6 +6,7 @@ import {
   type ReactNode,
   type SetStateAction,
 } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   CheckCheckIcon,
   CheckIcon,
@@ -44,9 +45,11 @@ import type { Crumb } from "@/components/questions-screen";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Spinner } from "@/components/ui/spinner";
-import { useCategoryMcqsQuery, type Mcq } from "@/lib/mcq";
+import { recordMcqEvent, useCategoryMcqsQuery, type Mcq, type McqEvent } from "@/lib/mcq";
 import type { Category } from "@/lib/practice";
+import { queryKeys } from "@/lib/queries";
 import { cn } from "@/lib/utils";
+import { toast } from "sonner";
 
 const DIFFICULTY_LABEL: Record<Mcq["difficulty"], string> = {
   easy: "Easy",
@@ -215,11 +218,13 @@ function fits(progress: McqProgress, questions: Mcq[]): boolean {
  * user_doc/practice-mcq.md.
  */
 export function McqScreen({
+  userId,
   category,
   parents,
   progress,
   onChange,
 }: {
+  userId: string;
   category: Category;
   /** The breadcrumb before the card's title, e.g. Practice. */
   parents: Crumb[];
@@ -314,6 +319,7 @@ export function McqScreen({
         </Empty>
       ) : data && current ? (
         <McqQuestion
+          userId={userId}
           category={category}
           questions={data}
           progress={current}
@@ -332,11 +338,13 @@ export function McqScreen({
 
 /** The card's current question: the question on the left, its options on the right. */
 function McqQuestion({
+  userId,
   category,
   questions,
   progress,
   onChange,
 }: {
+  userId: string;
   category: Category;
   questions: Mcq[];
   progress: McqProgress;
@@ -346,6 +354,19 @@ function McqQuestion({
     progress;
   const question = questions[index];
   const last = index === questions.length - 1;
+  const queryClient = useQueryClient();
+  // Every submit and every hint opened is recorded, for the student's progress and for staff.
+  function record(event: McqEvent) {
+    recordMcqEvent(event).then(
+      () => {
+        // A right answer completes the question on its card.
+        if (event.kind === "submit" && event.correct) {
+          void queryClient.invalidateQueries({ queryKey: queryKeys.solved(userId) });
+        }
+      },
+      (err) => toast.error("Couldn't save your answer", { description: String(err) }),
+    );
+  }
   const ids = question.options.map((o) => o.id);
   const update = (change: Partial<McqProgress>) => onChange((p) => ({ ...p, ...change }));
   const reshuffle = (p: McqProgress) => ({
@@ -381,6 +402,13 @@ function McqQuestion({
     const option = selected ? byId.get(selected) : undefined;
     if (!option) return;
     const readUntil = Date.now() + READ_SECONDS * 1000;
+    record({
+      questionId: question.id,
+      question: question.slug,
+      kind: "submit",
+      optionId: option.id,
+      correct: option.is_correct,
+    });
     if (option.is_correct) update({ solved: true, readUntil });
     else update({ missed: option.id, selected: null, readUntil });
   }
@@ -395,6 +423,14 @@ function McqQuestion({
       return;
     }
     const isNext = open.includes(String(hintsShown));
+    if (isNext) {
+      record({
+        questionId: question.id,
+        question: question.slug,
+        kind: "hint",
+        hintIndex: hintsShown,
+      });
+    }
     const now = Date.now();
     onChange((p) => ({
       ...p,
