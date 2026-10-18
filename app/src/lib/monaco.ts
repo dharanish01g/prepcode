@@ -7,6 +7,7 @@ import TypeScriptWorker from "monaco-editor/languages/features/typescript/ts.wor
 import { onZoomApplied } from "@/hooks/use-zoom";
 import { registerCCompletions } from "@/lib/c-completions";
 import { registerCSharpCompletions } from "@/lib/csharp-completions";
+import { registerJavaScriptCompletions } from "@/lib/javascript-completions";
 import { registerPythonCompletions } from "@/lib/python-completions";
 
 self.MonacoEnvironment = {
@@ -24,6 +25,7 @@ self.MonacoEnvironment = {
 loader.config({ monaco });
 registerCCompletions(monaco);
 registerCSharpCompletions(monaco);
+registerJavaScriptCompletions(monaco);
 registerPythonCompletions(monaco);
 
 /** Code text size in both editors. */
