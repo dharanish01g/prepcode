@@ -37,6 +37,7 @@ async function fetchSections(): Promise<Section[]> {
     )
     .order("position")
     .order("position", { referencedTable: "categories" });
+  if (error) throw new Error(error.message);
   type FetchedSection = {
     slug: string;
     title: string;
