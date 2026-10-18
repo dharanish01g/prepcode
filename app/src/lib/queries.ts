@@ -10,6 +10,7 @@ import {
   renameFile,
   writeFile,
 } from "@/lib/files";
+import { listMcqSolved } from "@/lib/mcq";
 import { listTables, tableRows } from "@/lib/sql";
 import { syncStatus } from "@/lib/sync";
 
@@ -18,7 +19,7 @@ import { syncStatus } from "@/lib/sync";
 export const queryKeys = {
   files: (userId: string) => ["files", userId] as const,
   fileContent: (userId: string, filename: string) => ["file", userId, filename] as const,
-  /** The practice questions a student has solved. */
+  /** The practice questions a student has solved, coding and MCQ. */
   solved: (userId: string) => ["practice-solved", userId] as const,
   /** A student's saved answer to a practice question in one language. */
   practice: (userId: string, question: string, extension: string) =>
@@ -103,11 +104,18 @@ function invalidateHistory(queryClient: ReturnType<typeof useQueryClient>, userI
   return queryClient.invalidateQueries({ queryKey: queryKeys.fileHistory(userId) });
 }
 
-/** The practice questions the student has solved, as a set of slugs. */
+/**
+ * The practice questions the student has solved, as a set of slugs: coding
+ * questions passed on Submit, and MCQs answered right. Slugs are unique
+ * across both.
+ */
 export function useSolvedQuery(userId: string) {
   return useQuery({
     queryKey: queryKeys.solved(userId),
-    queryFn: async () => new Set(await listPracticeSolved()),
+    queryFn: async () => {
+      const [coding, mcq] = await Promise.all([listPracticeSolved(), listMcqSolved()]);
+      return new Set([...coding, ...mcq]);
+    },
   });
 }
 
