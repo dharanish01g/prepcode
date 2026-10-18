@@ -127,7 +127,7 @@ fn open_workspace(app: &AppHandle, db: &Db, current: &CurrentUser, id: &str) -> 
 
 // --- The saved sign-in -----------------------------------------------------------
 
-const KEYRING_SERVICE: &str = "in.prepwisely.code";
+const KEYRING_SERVICE: &str = "dev.prepcode.desktop";
 /// The session's refresh token.
 const KEYRING_REFRESH_TOKEN: &str = "account-refresh-token";
 /// The account details (JSON) in the meta table.
@@ -163,6 +163,37 @@ async fn keyring_delete(key: &'static str) -> Result<(), String> {
         result => result,
     })
     .await
+}
+
+/// Moves the saved sign-in from the old identifier's secure storage, once.
+/// Best effort: without it the student only has to sign in again.
+async fn move_old_sign_in() {
+    let moved = tauri::async_runtime::spawn_blocking(|| -> keyring::Result<()> {
+        for key in [KEYRING_REFRESH_TOKEN, KEYRING_GITHUB_TOKEN] {
+            let old = keyring::Entry::new(crate::identifier::OLD, key)?;
+            let secret = match old.get_password() {
+                Ok(secret) => secret,
+                Err(keyring::Error::NoEntry) => continue,
+                Err(e) => return Err(e),
+            };
+            let new = keyring::Entry::new(KEYRING_SERVICE, key)?;
+            if matches!(new.get_password(), Err(keyring::Error::NoEntry)) {
+                new.set_password(&secret)?;
+            }
+            // Another restore may have just moved it (StrictMode runs twice).
+            match old.delete_credential() {
+                Ok(()) | Err(keyring::Error::NoEntry) => {}
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(())
+    })
+    .await;
+    match moved {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => log::warn!("Could not move the saved sign-in: {e}"),
+        Err(e) => log::warn!("Could not move the saved sign-in: {e}"),
+    }
 }
 
 fn read_meta(db: &Db, key: &str) -> Result<Option<String>, String> {
@@ -257,6 +288,7 @@ pub async fn restore_session(
     current: State<'_, CurrentUser>,
     access: State<'_, AccessToken>,
 ) -> Result<Option<Session>, String> {
+    move_old_sign_in().await;
     let refresh_token = match keyring_get(KEYRING_REFRESH_TOKEN).await {
         Ok(token) => token,
         // E.g. a locked keychain, or no secret service on Linux: show the
@@ -604,7 +636,7 @@ async fn refuse_staff(tokens: &Tokens) -> Result<(), String> {
     if let Err(e) = account::sign_out(&tokens.access_token).await {
         log::warn!("Could not end a staff session: {e:?}");
     }
-    Err("This is a staff account. Use prepwisely to sign in with it.".into())
+    Err("This is a staff account. It can't sign in here.".into())
 }
 
 // --- Email and password ------------------------------------------------------------------
@@ -700,7 +732,7 @@ pub async fn email_reset_password(
     check_new_password(&password)?;
     let tokens =
         account::verify_email_code(&email, code.trim(), EmailCode::Reset).await.map_err(|e| e.message())?;
-    // Staff change their password in prepwisely, not here.
+    // Staff change their password in the staff tools, not here.
     refuse_staff(&tokens).await?;
     account::set_password(&tokens.access_token, &password).await.map_err(|e| e.message())?;
     complete_sign_in(&app, tokens).await

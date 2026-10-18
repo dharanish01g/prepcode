@@ -1,5 +1,5 @@
-//! Talking to the account system: Supabase Auth in the prepwisely project,
-//! which prepcode (students) and prepwisely (staff) share.
+//! Talking to the account system: Supabase Auth in prepcode's project,
+//! shared by the student app and the staff tools.
 //!
 //! A student signs in with GitHub in their browser, through Supabase. The
 //! browser then comes back to a one-off address on this computer,
@@ -289,7 +289,7 @@ pub async fn user(access_token: &str) -> Result<Account, AccountError> {
 }
 
 /// The roles of the signed-in account (staff roles, "faculty", "tpo",
-/// "student"), from the same function prepwisely uses.
+/// "student"), from the same function the staff tools use.
 pub async fn role_ids(access_token: &str) -> Result<Vec<String>, AccountError> {
     let body = send(post("/rest/v1/rpc/my_role_ids")?.bearer_auth(access_token).json(&json!({}))).await?;
     Ok(body.as_array().into_iter().flatten().filter_map(|role| role.as_str().map(str::to_owned)).collect())

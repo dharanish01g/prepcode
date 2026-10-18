@@ -5,6 +5,7 @@ mod databases;
 mod db;
 mod files;
 mod github;
+mod identifier;
 mod mcq;
 mod reporting;
 mod run;
@@ -48,7 +49,12 @@ pub fn run() {
         .manage(files::WorkspaceLock::default())
         .manage(mcq::McqSender::default())
         .setup(|app| {
+            // Before anything opens the folders, logging's included.
+            let moved = identifier::move_old_folders(app.handle());
             reporting::init_logging(app.handle())?;
+            for (level, message) in moved {
+                log::log!(level, "{message}");
+            }
             // The window starts hidden (tauri.conf.json) and is shown once its
             // webview exists. On Windows, creating the webview waits in a
             // message loop, and a visible window repainting during that wait
