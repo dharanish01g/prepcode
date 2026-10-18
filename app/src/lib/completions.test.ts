@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { registerCCompletions } from "./c-completions.ts";
 import { registerCSharpCompletions } from "./csharp-completions.ts";
+import { registerJavaScriptCompletions } from "./javascript-completions.ts";
 import { registerPythonCompletions } from "./python-completions.ts";
 
 // Helper mock types
@@ -1310,4 +1311,220 @@ test("C: Signature help keeps function-pointer parameters whole", () => {
 
   const at = cSig("atexit(");
   assert.equal(at.value.signatures[0].parameters.length, 1, "atexit has 1 parameter");
+});
+
+// =============================================================================
+// JavaScript Language Completions, Hover, & Signature Help Tests
+// =============================================================================
+
+function setupJS() {
+  const { mockMonaco, completionProviders, hoverProviders, sigHelpProviders } = setupMockMonaco();
+  registerJavaScriptCompletions(mockMonaco);
+  return {
+    completionProvider: completionProviders["javascript"],
+    hoverProvider: hoverProviders["javascript"],
+    sigHelpProvider: sigHelpProviders["javascript"],
+  };
+}
+
+function jsLabels(src: string): string[] {
+  const { completionProvider } = setupJS();
+  const model = createMockModel(src);
+  const pos = endOf(src);
+  const result = completionProvider.provideCompletionItems(model, pos);
+  return result?.suggestions?.map((s: any) => s.label) ?? [];
+}
+
+test("JS: Math and Console members suggest correctly", () => {
+  const mathItems = jsLabels("Math.");
+  assert.ok(mathItems.includes("max"), "Math. suggests max");
+  assert.ok(mathItems.includes("min"), "Math. suggests min");
+  assert.ok(mathItems.includes("abs"), "Math. suggests abs");
+  assert.ok(mathItems.includes("floor"), "Math. suggests floor");
+  assert.ok(mathItems.includes("PI"), "Math. suggests PI");
+
+  const consoleItems = jsLabels("console.");
+  assert.ok(consoleItems.includes("log"), "console. suggests log");
+  assert.ok(consoleItems.includes("error"), "console. suggests error");
+  assert.ok(consoleItems.includes("table"), "console. suggests table");
+});
+
+test("JS: Array and String static and prototype members", () => {
+  const arrayStatic = jsLabels("Array.");
+  assert.ok(arrayStatic.includes("from"), "Array. suggests from");
+  assert.ok(arrayStatic.includes("isArray"), "Array. suggests isArray");
+
+  const stringStatic = jsLabels("String.");
+  assert.ok(stringStatic.includes("fromCharCode"), "String. suggests fromCharCode");
+});
+
+test("JS Issue 1: Array type inference (const nums = [1, 2, 3]; nums.)", () => {
+  const labels = jsLabels("const nums = [1, 2, 3];\nnums.");
+  assert.ok(labels.includes("push"), "nums. suggests push");
+  assert.ok(labels.includes("pop"), "nums. suggests pop");
+  assert.ok(labels.includes("map"), "nums. suggests map");
+  assert.ok(labels.includes("filter"), "nums. suggests filter");
+  assert.ok(labels.includes("length"), "nums. suggests length");
+});
+
+test("JS Issue 2: String type inference (const s = 'hello'; s.)", () => {
+  const labels = jsLabels("const s = 'hello';\ns.");
+  assert.ok(labels.includes("split"), "s. suggests split");
+  assert.ok(labels.includes("slice"), "s. suggests slice");
+  assert.ok(labels.includes("trim"), "s. suggests trim");
+  assert.ok(labels.includes("replace"), "s. suggests replace");
+  assert.ok(labels.includes("length"), "s. suggests length");
+});
+
+test("JS Issue 3: Map and Set inference", () => {
+  const mapLabels = jsLabels("const map = new Map();\nmap.");
+  assert.ok(mapLabels.includes("set"), "map. suggests set");
+  assert.ok(mapLabels.includes("get"), "map. suggests get");
+  assert.ok(mapLabels.includes("has"), "map. suggests has");
+  assert.ok(mapLabels.includes("size"), "map. suggests size");
+
+  const setLabels = jsLabels("const set = new Set();\nset.");
+  assert.ok(setLabels.includes("add"), "set. suggests add");
+  assert.ok(setLabels.includes("has"), "set. suggests has");
+  assert.ok(setLabels.includes("size"), "set. suggests size");
+});
+
+test("JS Issue 4: ListNode and TreeNode data structures", () => {
+  const listLabels = jsLabels("const node = new ListNode(1);\nnode.");
+  assert.ok(listLabels.includes("val"), "node. suggests val");
+  assert.ok(listLabels.includes("next"), "node. suggests next");
+
+  const treeLabels = jsLabels("const root = new TreeNode(1);\nroot.");
+  assert.ok(treeLabels.includes("val"), "root. suggests val");
+  assert.ok(treeLabels.includes("left"), "root. suggests left");
+  assert.ok(treeLabels.includes("right"), "root. suggests right");
+});
+
+test("JS Issue 5: Scope isolation - inner block variables do not leak outside", () => {
+  const src = "function test() {\n  {\n    const insideBlock = 42;\n  }\n  ";
+  const labels = jsLabels(src);
+  assert.ok(!labels.includes("insideBlock"), "block variable must not leak outside block");
+});
+
+test("JS Issue 6: Scope isolation - sibling functions do not leak locals", () => {
+  const src = "function funcA() {\n  const secretA = 100;\n}\nfunction funcB() {\n  ";
+  const labels = jsLabels(src);
+  assert.ok(!labels.includes("secretA"), "funcA's local must not leak into funcB");
+});
+
+test("JS Issue 7: Comment and string shielding suppresses completions", () => {
+  const inComment = jsLabels("// Math.");
+  assert.deepEqual(inComment, [], "completions inside single-line comment return empty");
+
+  const inString = jsLabels("const str = 'Math.");
+  assert.deepEqual(inString, [], "completions inside string literal return empty");
+});
+
+test("JS Issue 8: Identifier hygiene - dot-preceded properties are not captured as variables", () => {
+  const src = "const arr = [1, 2];\nconst len = arr.length;\n";
+  const labels = jsLabels(src);
+  assert.ok(labels.includes("arr"), "arr is suggested");
+  assert.ok(labels.includes("len"), "len is suggested");
+  assert.ok(!labels.includes("length"), "length is not captured as a standalone variable");
+});
+
+test("JS Issue 9: Numeric literal dereferencing suppression (5. and 10.)", () => {
+  const labels5 = jsLabels("const x = 5.");
+  assert.deepEqual(labels5, [], "5. must not suggest member items");
+
+  const labels10 = jsLabels("10.");
+  assert.deepEqual(labels10, [], "10. must not suggest member items");
+});
+
+test("JS Issue 10: Multi-bracket and subscript dereferencing (words[i].)", () => {
+  const src = "const words = ['apple', 'banana'];\nwords[0].";
+  const labels = jsLabels(src);
+  assert.ok(labels.includes("slice"), "words[0]. infers String and suggests slice");
+  assert.ok(labels.includes("trim"), "words[0]. infers String and suggests trim");
+});
+
+test("JS Issue 11: Chained method dereferencing (s.trim().split(' ').)", () => {
+  const src = "const s = 'hello world';\ns.trim().split(' ').";
+  const labels = jsLabels(src);
+  assert.ok(labels.includes("push"), "chained .split(' '). infers Array and suggests push");
+  assert.ok(labels.includes("map"), "chained .split(' '). infers Array and suggests map");
+});
+
+test("JS Issue 12: this. member resolution inside class Solution", () => {
+  const src = `class Solution {
+  constructor() {
+    this.total = 0;
+  }
+  helper(x) {
+    return x * 2;
+  }
+  solve() {
+    this.`;
+  const labels = jsLabels(src);
+  assert.ok(labels.includes("helper"), "this. suggests class method helper");
+  assert.ok(labels.includes("total"), "this. suggests constructor field total");
+});
+
+test("JS Issue 13: Signature help for Math functions with parameter tracking", () => {
+  const { sigHelpProvider } = setupJS();
+  const src = "Math.max(1, ";
+  const result = sigHelpProvider.provideSignatureHelp(createMockModel(src), endOf(src));
+  assert.ok(result, "Signature help returned for Math.max");
+  assert.equal(result.value.activeParameter, 1, "activeParameter is 1 after first comma");
+  assert.equal(result.value.signatures[0].label, "Math.max(...values: number[]): number");
+});
+
+test("JS Issue 14: No false signature help for control flow keywords", () => {
+  const { sigHelpProvider } = setupJS();
+  for (const kw of ["if (", "while (", "for (let i = 0; ", "switch (", "return (", "catch ("]) {
+    const res = sigHelpProvider.provideSignatureHelp(createMockModel(kw), endOf(kw));
+    assert.equal(res, null, `Keyword '${kw}' must not produce made-up signature help`);
+  }
+});
+
+test("JS Issue 15: Signature help nested call argument counting", () => {
+  const { sigHelpProvider } = setupJS();
+  const src = "Math.max(Math.min(1, 2), ";
+  const result = sigHelpProvider.provideSignatureHelp(createMockModel(src), endOf(src));
+  assert.ok(result, "Signature help returned for outer Math.max");
+  assert.equal(
+    result.value.activeParameter,
+    1,
+    "Nested Math.min does not corrupt outer comma count",
+  );
+});
+
+test("JS Issue 16: Multiline signature help support", () => {
+  const { sigHelpProvider } = setupJS();
+  const src = "Math.max(\n  1,\n  ";
+  const result = sigHelpProvider.provideSignatureHelp(createMockModel(src), endOf(src));
+  assert.ok(result, "Signature help tracks multiline call");
+  assert.equal(result.value.activeParameter, 1, "activeParameter is 1 on second line");
+});
+
+test("JS Issue 17: Hover provider displays markdown documentation", () => {
+  const { hoverProvider } = setupJS();
+  const src = "Math.max(1, 2)";
+  const res = hoverProvider.provideHover(createMockModel(src), { lineNumber: 1, column: 7 });
+  assert.ok(res, "Hover returned for Math.max");
+  assert.ok(res.contents[0].value.includes("Math.max"), "Hover contains signature");
+
+  const kwRes = hoverProvider.provideHover(createMockModel("const x = 1;"), {
+    lineNumber: 1,
+    column: 3,
+  });
+  assert.ok(kwRes, "Hover returned for keyword const");
+  assert.ok(kwRes.contents[0].value.includes("const"), "Hover identifies const");
+});
+
+test("JS Issue 18: Snippets and keywords in un-dotted context", () => {
+  const labels = jsLabels("");
+  assert.ok(labels.includes("clg"), "clg snippet provided");
+  assert.ok(labels.includes("fori"), "fori snippet provided");
+  assert.ok(labels.includes("forof"), "forof snippet provided");
+  assert.ok(labels.includes("sortnum"), "sortnum snippet provided");
+  assert.ok(labels.includes("bsearch"), "bsearch snippet provided");
+  assert.ok(labels.includes("function"), "function keyword provided");
+  assert.ok(labels.includes("return"), "return keyword provided");
+  assert.ok(labels.includes("const"), "const keyword provided");
 });
