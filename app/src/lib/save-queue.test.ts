@@ -401,3 +401,149 @@ test("integration: coordinator and filesystem saveQueue cooperation under failur
   await coordinator.flush();
   assert.equal(disk["critical.py"], "version_1");
 });
+
+test("coordinator: discard clears pending edits so subsequent flush does not save them", async () => {
+  const saved: string[] = [];
+  const coordinator = createEditorSaveCoordinator(async (edit) => {
+    saved.push(edit.filename);
+  });
+
+  coordinator.recordEdit("notes.txt", "some unsaved text");
+  coordinator.discard();
+
+  await coordinator.flush();
+  assert.deepEqual(saved, []);
+});
+
+test("coordinator: discard with target filename clears only that file's pending edits", async () => {
+  const saved: string[] = [];
+  const coordinator = createEditorSaveCoordinator(async (edit) => {
+    saved.push(edit.filename);
+  });
+
+  coordinator.recordEdit("a.py", "code a");
+  coordinator.recordEdit("b.py", "code b");
+  coordinator.discard("a.py");
+
+  await coordinator.flush();
+  assert.deepEqual(saved, ["b.py"]);
+});
+
+test("coordinator: in-flight save that fails after discard is not restored to pending", async () => {
+  let rejectInflight: ((err: Error) => void) | null = null;
+  const saved: string[] = [];
+
+  const coordinator = createEditorSaveCoordinator(async (edit) => {
+    saved.push(edit.content);
+    if (edit.content === "rev 1") {
+      await new Promise<void>((_, reject) => {
+        rejectInflight = reject;
+      });
+    }
+  });
+
+  coordinator.recordEdit("test.py", "rev 1");
+  const flushPromise = coordinator.flushFile("test.py").catch(() => {});
+
+  // Wait for save task to start and assign rejectInflight
+  await new Promise((r) => setTimeout(r, 0));
+  assert.ok(rejectInflight);
+
+  // Discard is called while rev 1 is in-flight
+  coordinator.discard("test.py");
+
+  // rev 1 fails
+  rejectInflight!(new Error("disk failure"));
+  await flushPromise;
+
+  // After discard, flush should not re-try rev 1
+  await coordinator.flush();
+  assert.deepEqual(saved, ["rev 1"]);
+
+  // A brand new edit after discard still saves normally
+  coordinator.recordEdit("test.py", "rev 2");
+  await coordinator.flush();
+  assert.deepEqual(saved, ["rev 1", "rev 2"]);
+});
+
+test("coordinator: hasUnsaved accurately reflects pending, saving, and settled edits", async () => {
+  let finishSave: (() => void) | null = null;
+  const coordinator = createEditorSaveCoordinator(async () => {
+    await new Promise<void>((resolve) => {
+      finishSave = resolve;
+    });
+  });
+
+  assert.equal(coordinator.hasUnsaved(), false);
+  assert.equal(coordinator.hasUnsaved("foo.py"), false);
+
+  coordinator.recordEdit("foo.py", "content 1");
+  assert.equal(coordinator.hasUnsaved(), true);
+  assert.equal(coordinator.hasUnsaved("foo.py"), true);
+  assert.equal(coordinator.hasUnsaved("bar.py"), false);
+
+  const flushPromise = coordinator.flushFile("foo.py");
+  // While write is in flight, it is still unsaved
+  assert.equal(coordinator.hasUnsaved("foo.py"), true);
+
+  finishSave!();
+  await flushPromise;
+
+  assert.equal(coordinator.hasUnsaved(), false);
+  assert.equal(coordinator.hasUnsaved("foo.py"), false);
+});
+
+test("coordinator: hasUnsaved remains true when save fails", async () => {
+  let shouldFail = true;
+  const coordinator = createEditorSaveCoordinator(async () => {
+    if (shouldFail) {
+      throw new Error("Disk error");
+    }
+  });
+
+  coordinator.recordEdit("broken.py", "unsaved data");
+  assert.equal(coordinator.hasUnsaved(), true);
+
+  await assert.rejects(coordinator.flush(), { message: "Disk error" });
+  assert.equal(coordinator.hasUnsaved(), true);
+  assert.equal(coordinator.hasUnsaved("broken.py"), true);
+
+  shouldFail = false;
+  await coordinator.flush();
+  assert.equal(coordinator.hasUnsaved(), false);
+});
+
+test("coordinator: hasUnsaved returns false when edits are discarded", async () => {
+  const coordinator = createEditorSaveCoordinator(async () => {});
+
+  coordinator.recordEdit("scratch.py", "temp notes");
+  assert.equal(coordinator.hasUnsaved(), true);
+
+  coordinator.discard("scratch.py");
+  assert.equal(coordinator.hasUnsaved("scratch.py"), false);
+  assert.equal(coordinator.hasUnsaved(), false);
+
+  // New edit after discard makes it unsaved again
+  coordinator.recordEdit("scratch.py", "new notes");
+  assert.equal(coordinator.hasUnsaved("scratch.py"), true);
+});
+
+test("coordinator: hasUnsaved tracks multiple files independently and in aggregate", async () => {
+  const coordinator = createEditorSaveCoordinator(async () => {});
+
+  coordinator.recordEdit("a.py", "code a");
+  coordinator.recordEdit("b.py", "code b");
+
+  assert.equal(coordinator.hasUnsaved(), true);
+  assert.equal(coordinator.hasUnsaved("a.py"), true);
+  assert.equal(coordinator.hasUnsaved("b.py"), true);
+
+  await coordinator.flushFile("a.py");
+  assert.equal(coordinator.hasUnsaved("a.py"), false);
+  assert.equal(coordinator.hasUnsaved("b.py"), true);
+  assert.equal(coordinator.hasUnsaved(), true);
+
+  coordinator.discard("b.py");
+  assert.equal(coordinator.hasUnsaved("b.py"), false);
+  assert.equal(coordinator.hasUnsaved(), false);
+});

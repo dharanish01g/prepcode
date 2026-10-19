@@ -5,13 +5,22 @@
 
 let guarded = false;
 let allowed = false;
+let extraGuard: (() => boolean) | null = null;
 
 export function setCloseGuarded(needed: boolean) {
   guarded = needed;
 }
 
+export function registerCloseGuard(check: () => boolean) {
+  extraGuard = check;
+  return () => {
+    if (extraGuard === check) extraGuard = null;
+  };
+}
+
 export function isCloseBlocked() {
-  return guarded && !allowed;
+  const isGuarded = guarded || (extraGuard ? extraGuard() : false);
+  return isGuarded && !allowed;
 }
 
 /** The student chose to close anyway: let the next close through. */

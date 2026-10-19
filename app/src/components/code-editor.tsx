@@ -18,6 +18,8 @@ import { createEditorSaveCoordinator } from "@/lib/save-queue";
 export const AUTOSAVE_DELAY_MS = 500;
 
 export type FlushRef = React.RefObject<() => Promise<void> | void>;
+export type DiscardRef = React.RefObject<() => void>;
+export type HasUnsavedRef = React.RefObject<() => boolean>;
 export type FormatRef = React.RefObject<() => Promise<void>>;
 export type CursorLineRef = React.RefObject<() => number | null>;
 
@@ -28,6 +30,9 @@ export function CodeEditor({
   filename,
   readOnly,
   flushRef,
+  discardRef,
+  hasUnsavedRef,
+  onDirtyChange,
   formatRef,
   cursorLineRef,
 }: {
@@ -37,6 +42,12 @@ export function CodeEditor({
   readOnly: boolean;
   /** Set to a function that saves pending edits immediately (used before logout). */
   flushRef: FlushRef;
+  /** Set to a function that discards pending edits without saving. */
+  discardRef?: DiscardRef;
+  /** Set to a function that returns whether the editor has unsaved edits. */
+  hasUnsavedRef?: HasUnsavedRef;
+  /** Called when the dirty/unsaved state changes. */
+  onDirtyChange?: (dirty: boolean) => void;
   /** Set to a function that formats the open file (used by the Format button). */
   formatRef: FormatRef;
   /** Set to a function that returns the cursor's line (used by Run line). */
@@ -50,6 +61,9 @@ export function CodeEditor({
       filename={filename}
       readOnly={readOnly}
       flushRef={flushRef}
+      discardRef={discardRef}
+      hasUnsavedRef={hasUnsavedRef}
+      onDirtyChange={onDirtyChange}
       formatRef={formatRef}
       cursorLineRef={cursorLineRef}
     />
@@ -61,6 +75,9 @@ function FileEditor({
   filename,
   readOnly,
   flushRef,
+  discardRef,
+  hasUnsavedRef,
+  onDirtyChange,
   formatRef,
   cursorLineRef,
 }: {
@@ -68,6 +85,9 @@ function FileEditor({
   filename: string;
   readOnly: boolean;
   flushRef: FlushRef;
+  discardRef?: DiscardRef;
+  hasUnsavedRef?: HasUnsavedRef;
+  onDirtyChange?: (dirty: boolean) => void;
   formatRef: FormatRef;
   cursorLineRef: CursorLineRef;
 }) {
@@ -88,11 +108,62 @@ function FileEditor({
 
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
+  const onDirtyChangeRef = useRef(onDirtyChange);
+  useLayoutEffect(() => {
+    onDirtyChangeRef.current = onDirtyChange;
+  });
+
+  const notifyDirty = useCallback(() => {
+    const dirty = coordinator.current?.hasUnsaved() ?? false;
+    onDirtyChangeRef.current?.(dirty);
+  }, []);
+
   const flush = useCallback(async () => {
     clearTimeout(timer.current);
     if (!coordinator.current) return;
-    await coordinator.current.flush();
-    await whenSavesSettled();
+    try {
+      await coordinator.current.flush();
+      await whenSavesSettled();
+    } finally {
+      notifyDirty();
+    }
+  }, [notifyDirty]);
+
+  const isDiscarded = useRef(false);
+
+  const discard = useCallback(() => {
+    clearTimeout(timer.current);
+    isDiscarded.current = true;
+    coordinator.current?.discard();
+    notifyDirty();
+  }, [notifyDirty]);
+
+  useLayoutEffect(() => {
+    isDiscarded.current = false;
+  }, [filename]);
+
+  useLayoutEffect(() => {
+    if (discardRef) {
+      discardRef.current = discard;
+      return () => {
+        discardRef.current = () => {};
+      };
+    }
+  }, [discard, discardRef]);
+
+  useLayoutEffect(() => {
+    if (hasUnsavedRef) {
+      hasUnsavedRef.current = () => coordinator.current?.hasUnsaved() ?? false;
+      return () => {
+        hasUnsavedRef.current = () => false;
+      };
+    }
+  }, [hasUnsavedRef]);
+
+  useLayoutEffect(() => {
+    return () => {
+      onDirtyChangeRef.current?.(false);
+    };
   }, []);
 
   // Layout effects so the cleanups run synchronously: the previous file's edits
@@ -100,18 +171,23 @@ function FileEditor({
   useLayoutEffect(() => {
     flushRef.current = flush;
     return () => {
-      void flush().catch(() => {});
+      if (!isDiscarded.current) {
+        void flush().catch(() => {});
+      }
       flushRef.current = () => {};
     };
   }, [flush, flushRef]);
 
   useLayoutEffect(
     () => () => {
-      if (coordinator.current) {
-        void coordinator.current.flushFile(filename).catch(() => {});
+      if (!isDiscarded.current && coordinator.current) {
+        void coordinator.current
+          .flushFile(filename)
+          .catch(() => {})
+          .finally(notifyDirty);
       }
     },
-    [filename],
+    [filename, notifyDirty],
   );
 
   // Replaces the text with the formatted version as one edit, so a single
@@ -194,7 +270,9 @@ function FileEditor({
         });
       }}
       onChange={(value) => {
+        isDiscarded.current = false;
         coordinator.current?.recordEdit(filename, value ?? "");
+        notifyDirty();
         clearTimeout(timer.current);
         timer.current = setTimeout(() => void flush().catch(() => {}), AUTOSAVE_DELAY_MS);
       }}
