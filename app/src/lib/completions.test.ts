@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { registerCCompletions } from "./c-completions.ts";
+import { registerCppCompletions } from "./cpp-completions.ts";
 import { registerCSharpCompletions } from "./csharp-completions.ts";
 import { registerJavaCompletions } from "./java-completions.ts";
 import { registerPythonCompletions } from "./python-completions.ts";
@@ -1323,6 +1324,432 @@ test("Java Issue 16: sysout snippet and field vs local variable origin", () => {
 });
 
 // ==========================================
+// C++ AUTOCOMPLETE & SIGNATURE HELP TESTS
+// ==========================================
+
+function cppLabels(src: string, col?: number, line?: number): string[] {
+  const { mockMonaco, completionProviders } = setupMockMonaco();
+  registerCppCompletions(mockMonaco);
+  const pos =
+    line !== undefined && col !== undefined ? { lineNumber: line, column: col } : endOf(src);
+  const r = completionProviders["cpp"].provideCompletionItems(createMockModel(src), pos);
+  return r.suggestions.map((s: any) => s.label);
+}
+
+function cppSig(src: string, col?: number, line?: number): any {
+  const { mockMonaco, sigHelpProviders } = setupMockMonaco();
+  registerCppCompletions(mockMonaco);
+  const pos =
+    line !== undefined && col !== undefined ? { lineNumber: line, column: col } : endOf(src);
+  return sigHelpProviders["cpp"].provideSignatureHelp(createMockModel(src), pos);
+}
+
+function cppHover(src: string, col: number, line = 1): any {
+  const { mockMonaco, hoverProviders } = setupMockMonaco();
+  registerCppCompletions(mockMonaco);
+  return hoverProviders["cpp"].provideHover(createMockModel(src), {
+    lineNumber: line,
+    column: col,
+  });
+}
+
+test("C++: std:: scope resolution suggests standard library members", () => {
+  const labels = cppLabels("std::");
+  assert.ok(labels.includes("cout"), "suggests cout");
+  assert.ok(labels.includes("cin"), "suggests cin");
+  assert.ok(labels.includes("endl"), "suggests endl");
+  assert.ok(labels.includes("vector"), "suggests vector");
+  assert.ok(labels.includes("string"), "suggests string");
+  assert.ok(labels.includes("sort"), "suggests sort");
+  assert.ok(labels.includes("min"), "suggests min");
+  assert.ok(labels.includes("max"), "suggests max");
+});
+
+test("C++: #include and using namespace suggest appropriate headers and std", () => {
+  const headers = cppLabels("#include <");
+  assert.ok(headers.includes("iostream"), "suggests iostream header");
+  assert.ok(headers.includes("vector"), "suggests vector header");
+  assert.ok(headers.includes("algorithm"), "suggests algorithm header");
+
+  const un = cppLabels("using namespace ");
+  assert.ok(un.includes("std"), "suggests std namespace");
+});
+
+test("C++: Type-aware dot member access suggests container-specific methods", () => {
+  const vec = cppLabels("std::vector<int> nums;\nnums.");
+  assert.ok(vec.includes("push_back"), "vector suggests push_back");
+  assert.ok(vec.includes("pop_back"), "vector suggests pop_back");
+  assert.ok(vec.includes("size"), "vector suggests size");
+  assert.ok(!vec.includes("substr"), "vector does not suggest string substr");
+
+  const str = cppLabels('std::string s = "hello";\ns.');
+  assert.ok(str.includes("substr"), "string suggests substr");
+  assert.ok(str.includes("length"), "string suggests length");
+  assert.ok(str.includes("c_str"), "string suggests c_str");
+
+  const mp = cppLabels("std::map<string, int> counts;\ncounts.");
+  assert.ok(mp.includes("insert"), "map suggests insert");
+  assert.ok(mp.includes("count"), "map suggests count");
+  assert.ok(mp.includes("find"), "map suggests find");
+  assert.ok(!mp.includes("push_back"), "map does not suggest push_back");
+
+  const q = cppLabels("std::queue<int> q;\nq.");
+  assert.ok(q.includes("front") && q.includes("pop") && q.includes("push"), "queue methods");
+
+  const st = cppLabels("std::stack<int> s;\ns.");
+  assert.ok(st.includes("top") && st.includes("pop") && st.includes("push"), "stack methods");
+});
+
+test("C++: Pointer member access (->) suggests ListNode and TreeNode fields", () => {
+  const node = cppLabels("ListNode* head = nullptr;\nhead->");
+  assert.ok(node.includes("val"), "ListNode suggests val");
+  assert.ok(node.includes("next"), "ListNode suggests next");
+
+  const tree = cppLabels("TreeNode* root = nullptr;\nroot->");
+  assert.ok(tree.includes("val"), "TreeNode suggests val");
+  assert.ok(tree.includes("left"), "TreeNode suggests left");
+  assert.ok(tree.includes("right"), "TreeNode suggests right");
+});
+
+test("C++: Numeric literals and primitives suppress container methods", () => {
+  const num = cppLabels("5.");
+  assert.equal(num.length, 0, "5. gives no member suggestions");
+
+  const prim = cppLabels("int count = 0;\ncount.");
+  assert.equal(prim.length, 0, "int primitive gives no member suggestions");
+});
+
+test("C++: Local variables and function parameters are in scope without leaking across functions", () => {
+  // 1. Cursor at 'r' inside solve() with another function helper() preceding it
+  const src = `void helper(int otherParam) {
+    int helperLocal = 10;
+}
+
+class Solution {
+public:
+    int solve(int maxLimit, std::vector<int>& items) {
+        int runningTotal = 0;
+        r`;
+  const labels = cppLabels(src);
+  assert.ok(labels.includes("runningTotal"), "runningTotal is suggested in solve()");
+  assert.ok(labels.includes("maxLimit"), "parameter maxLimit is suggested in solve()");
+  assert.ok(labels.includes("items"), "parameter items is suggested in solve()");
+  assert.ok(!labels.includes("otherParam"), "otherParam from helper() does not leak into solve()");
+  assert.ok(
+    !labels.includes("helperLocal"),
+    "helperLocal from helper() does not leak into solve()",
+  );
+
+  // 2. Cursor inside solve() with helper() following it
+  const full = `class Solution {
+public:
+    int solve(int maxLimit, std::vector<int>& items) {
+        int runningTotal = 0;
+        r
+    }
+
+    void helper(int otherParam) {
+        int helperLocal = 10;
+    }
+};`;
+  const { mockMonaco, completionProviders } = setupMockMonaco();
+  registerCppCompletions(mockMonaco);
+  const r = completionProviders["cpp"].provideCompletionItems(createMockModel(full), {
+    lineNumber: 5,
+    column: 10,
+  });
+  const fullLabels = r.suggestions.map((s: any) => s.label);
+  assert.ok(fullLabels.includes("runningTotal"), "runningTotal suggested in solve()");
+  assert.ok(fullLabels.includes("maxLimit"), "maxLimit suggested in solve()");
+  assert.ok(
+    !fullLabels.includes("otherParam"),
+    "following helper's parameter does not leak into solve()",
+  );
+  assert.ok(
+    !fullLabels.includes("helperLocal"),
+    "following helper's local does not leak into solve()",
+  );
+});
+
+test("C++: Words after '.', '->', or '::' do not leak into document variable suggestions", () => {
+  const src = `
+void run() {
+    std::cout << "test";
+    nums.push_back(10);
+    s
+`;
+  const labels = cppLabels(src);
+  assert.ok(!labels.includes("push_back"), "push_back is not suggested as a document variable");
+});
+
+test("C++: Signature help tracks parameters, depth, and generic commas", () => {
+  const sig1 = cppSig("std::min(10, ");
+  assert.ok(sig1 && sig1.value.signatures.length > 0, "min has signature help");
+  assert.equal(sig1.value.activeParameter, 1, "activeParameter is 1 after comma");
+
+  // Generic template with comma must not count as a top-level parameter
+  const sig2 = cppSig("std::pair<int, int> p = std::make_pair(1, ");
+  assert.ok(sig2, "make_pair has signature help");
+  assert.equal(sig2.value.activeParameter, 1, "activeParameter is 1 after make_pair comma");
+});
+
+test("C++: Comments do not corrupt signature help or paren matching", () => {
+  const src = `
+// min(1, 2) inside comment
+std::min(10, 
+`;
+  const sig = cppSig(src);
+  assert.ok(sig, "signature help works despite preceding comment with parens");
+  assert.equal(sig.value.activeParameter, 1, "activeParameter correctly set to 1");
+});
+
+test("C++: No made-up signatures for language keywords or unknown calls", () => {
+  const { mockMonaco, sigHelpProviders } = setupMockMonaco();
+  registerCppCompletions(mockMonaco);
+  const provider = sigHelpProviders["cpp"];
+
+  for (const line of [
+    "    if (",
+    "    while (x < ",
+    "    for (int i = 0; ",
+    "    unknownFunc(1, ",
+  ]) {
+    const src = `void test() {\n${line}`;
+    assert.equal(provider.provideSignatureHelp(createMockModel(src), endOf(src)), null, line);
+  }
+});
+
+test("C++: Hover documentation displays for qualified and type symbols", () => {
+  const src = "std::cout << 1;";
+  const hover = cppHover(src, 7); // over 'cout'
+  assert.ok(hover && hover.contents.length > 0, "Hover over std::cout returns doc");
+  assert.ok(hover.contents[0].value.includes("cout"), "Hover contains cout signature");
+
+  const typeHover = cppHover("vector<int> nums;", 3); // over 'vector'
+  assert.ok(typeHover && typeHover.contents.length > 0, "Hover over vector returns doc");
+});
+
+test("C++: Enhanced STL algorithms, constants, and auto pair inference", () => {
+  const stds = cppLabels("std::");
+  assert.ok(stds.includes("min_element"), "std:: suggests min_element");
+  assert.ok(stds.includes("max_element"), "std:: suggests max_element");
+  assert.ok(stds.includes("count"), "std:: suggests count");
+  assert.ok(stds.includes("find"), "std:: suggests find");
+  assert.ok(stds.includes("unique"), "std:: suggests unique");
+
+  const un = cppLabels("INT_");
+  assert.ok(un.includes("INT_MAX"), "suggests INT_MAX constant");
+  assert.ok(un.includes("INT_MIN"), "suggests INT_MIN constant");
+
+  const autoPair = cppLabels("auto p = std::make_pair(10, 20);\np.");
+  assert.ok(autoPair.includes("first"), "auto make_pair suggests first");
+  assert.ok(autoPair.includes("second"), "auto make_pair suggests second");
+});
+
+test("C++: #include handles both with and without angle brackets", () => {
+  const { mockMonaco, completionProviders } = setupMockMonaco();
+  registerCppCompletions(mockMonaco);
+  const provider = completionProviders["cpp"];
+
+  // 1. User typed '#include <'
+  const res1 = provider.provideCompletionItems(createMockModel("#include <"), endOf("#include <"));
+  const vec1 = res1.suggestions.find((s: any) => s.label === "vector");
+  assert.equal(
+    vec1.insertText,
+    "vector>",
+    "insertText includes closing angle bracket when '<' typed",
+  );
+
+  // 2. User typed '#include '
+  const res2 = provider.provideCompletionItems(createMockModel("#include "), endOf("#include "));
+  const vec2 = res2.suggestions.find((s: any) => s.label === "vector");
+  assert.equal(
+    vec2.insertText,
+    "<vector>",
+    "insertText wraps in angle brackets when plain '#include ' typed",
+  );
+});
+
+test("C++: Pointer chained navigation and iterator member access", () => {
+  const chainedTree = cppLabels("TreeNode* root = nullptr;\nroot->left->");
+  assert.ok(chainedTree.includes("val"), "root->left-> suggests val");
+  assert.ok(chainedTree.includes("left"), "root->left-> suggests left");
+  assert.ok(chainedTree.includes("right"), "root->left-> suggests right");
+
+  const iter = cppLabels("for (auto it = mp.begin(); it != mp.end(); ++it) {\n    it->");
+  assert.ok(iter.includes("first"), "it-> suggests first");
+  assert.ok(iter.includes("second"), "it-> suggests second");
+});
+
+test("C++: Type inference correctly handles const qualifiers and direct pointer/reference syntax", () => {
+  // ListNode* with pointer attached to type
+  const ptrLabels = cppLabels(
+    "void test() {\n    ListNode* myCustomNode = nullptr;\n    myCustomNode->",
+  );
+  assert.ok(ptrLabels.includes("val"), "myCustomNode-> suggests val");
+  assert.ok(ptrLabels.includes("next"), "myCustomNode-> suggests next");
+
+  // const vector<int>& reference
+  const vecLabels = cppLabels("void test() {\n    const vector<int>& myNums = arr;\n    myNums.");
+  assert.ok(vecLabels.includes("push_back"), "const vector<int>& suggests push_back");
+  assert.ok(vecLabels.includes("size"), "const vector<int>& suggests size");
+  assert.ok(!vecLabels.includes("substr"), "const vector<int>& does not suggest string methods");
+
+  // const string& reference
+  const strLabels = cppLabels("void test() {\n    const string& myStr = text;\n    myStr.");
+  assert.ok(strLabels.includes("substr"), "const string& suggests substr");
+  assert.ok(!strLabels.includes("push_front"), "const string& does not suggest deque methods");
+});
+
+test("C++: Structured bindings and range-for loops extract variables", () => {
+  const bindings = cppLabels("void test() {\n    auto [source, dest] = edge;\n    ");
+  assert.ok(bindings.includes("source"), "extracts structured binding 'source'");
+  assert.ok(bindings.includes("dest"), "extracts structured binding 'dest'");
+
+  const loopBindings = cppLabels("void test() {\n    for (auto [key, val] : mp) {\n        ");
+  assert.ok(loopBindings.includes("key"), "extracts loop structured binding 'key'");
+  assert.ok(loopBindings.includes("val"), "extracts loop structured binding 'val'");
+});
+
+test("C++: GCC builtins and competitive programming snippets are available", () => {
+  const builtins = cppLabels("__builtin_");
+  assert.ok(builtins.includes("__builtin_popcount"), "suggests __builtin_popcount");
+  assert.ok(builtins.includes("__builtin_popcountll"), "suggests __builtin_popcountll");
+  assert.ok(builtins.includes("__builtin_clz"), "suggests __builtin_clz");
+  assert.ok(builtins.includes("__builtin_ctz"), "suggests __builtin_ctz");
+
+  const snippets = cppLabels("bsearch");
+  assert.ok(snippets.includes("bsearch"), "suggests bsearch snippet");
+
+  const minpq = cppLabels("minpq");
+  assert.ok(minpq.includes("minpq"), "suggests minpq snippet");
+
+  const graphSnippets = cppLabels("bfs");
+  assert.ok(graphSnippets.includes("bfs"), "suggests bfs snippet");
+});
+
+test("C++: Document-defined function signature help and hover documentation", () => {
+  const src =
+    "bool checkSubtree(TreeNode* root, int target, vector<int>& path) {\n    return true;\n}\n\nint main() {\n    checkSubtree(root, ";
+  const sig = cppSig(src);
+  assert.ok(sig !== null, "Signature help is provided for user-defined function");
+  assert.equal(
+    sig.value.activeParameter,
+    1,
+    "Second parameter (target) is active after first comma",
+  );
+  assert.equal(
+    sig.value.signatures[0].parameters.length,
+    3,
+    "Parsed 3 parameters from checkSubtree",
+  );
+
+  // Hover over user-defined function
+  const hoverSrc = "void helperFunction(int x) {}\n\nint main() {\n    helperFunction(5);\n}";
+  const hover = cppHover(hoverSrc, 7, 4); // column over helperFunction on line 4
+  assert.ok(hover !== null, "Hover on user-defined function returns documentation");
+  assert.ok(hover.contents[0].value.includes("helperFunction"), "Hover shows function signature");
+  assert.ok(
+    hover.contents[1].value.includes("User-defined function"),
+    "Hover notes it is a user-defined function",
+  );
+});
+
+test("C++: this-> member completions, hover, and signature help", () => {
+  const src = `class Solution {
+    int myField = 10;
+public:
+    void customMethod(int a, int b) {
+        int localVar = 42;
+        this->
+    }
+};`;
+  const thisLabels = cppLabels(src, 15, 6);
+
+  // Must suggest class fields and methods
+  assert.ok(thisLabels.includes("myField"), "this-> suggests class field");
+  assert.ok(thisLabels.includes("customMethod"), "this-> suggests class method");
+
+  // Must NOT suggest local variables or unrelated TreeNode/ListNode members
+  assert.ok(!thisLabels.includes("localVar"), "this-> must NOT suggest local variable");
+  assert.ok(!thisLabels.includes("val"), "this-> must NOT suggest TreeNode val");
+  assert.ok(!thisLabels.includes("next"), "this-> must NOT suggest ListNode next");
+
+  // Hover over this->myField
+  const hoverField = cppHover(
+    `class Solution {\n    int myField = 10;\n    void m() {\n        this->myField = 20;\n    }\n};`,
+    15,
+    4,
+  );
+  assert.ok(
+    hoverField && hoverField.contents[0].value.includes("int myField"),
+    "Hover over this->myField displays field type",
+  );
+  assert.ok(
+    hoverField && hoverField.contents[1].value.includes("Field of current class"),
+    "Hover over this->myField indicates field of current class",
+  );
+
+  // Hover over this->customMethod
+  const hoverMethod = cppHover(
+    `class Solution {\n    void customMethod(int a) {}\n    void m() {\n        this->customMethod(1);\n    }\n};`,
+    15,
+    4,
+  );
+  assert.ok(
+    hoverMethod && hoverMethod.contents[0].value.includes("customMethod(int a)"),
+    "Hover over this->customMethod displays method signature",
+  );
+
+  // Signature help for this->customMethod(1,
+  const sigSrc = `class Solution {\n    void customMethod(int a, int b) {}\n    void m() {\n        this->customMethod(1, `;
+  const sig = cppSig(sigSrc);
+  assert.ok(sig, "this->customMethod(1, returns signature help");
+  assert.equal(sig.value.activeParameter, 1, "activeParameter is 1 after comma");
+});
+
+test("C++: Multi-bracket array and vector dereferencing (matrix[0][0]., grid[i][j]., s[0].)", () => {
+  // 2D int vector: 1st dimension is vector, 2nd dimension is primitive int
+  const matRow = cppLabels("vector<vector<int>> matrix;\nmatrix[0].");
+  assert.ok(matRow.includes("push_back") && matRow.includes("size"), "matrix[0]. is vector<int>");
+
+  const matElem = cppLabels("vector<vector<int>> matrix;\nmatrix[0][0].");
+  assert.equal(matElem.length, 0, "matrix[0][0]. yields 0 suggestions (primitive int)");
+
+  // 2D string vector: 2nd dimension is string
+  const gridElem = cppLabels("vector<vector<string>> grid;\ngrid[0][0].");
+  assert.ok(gridElem.includes("substr") && gridElem.includes("length"), "grid[0][0]. is string");
+
+  // string subscript access: s[0] is char (primitive) -> 0 suggestions
+  const charElem = cppLabels('string s = "hello";\ns[0].');
+  assert.equal(charElem.length, 0, "s[0]. yields 0 suggestions (primitive char)");
+
+  // Raw 2D array: int arr[5][5]; arr[0][0]. -> 0 suggestions
+  const arrElem = cppLabels("int arr[5][5];\narr[0][0].");
+  assert.equal(arrElem.length, 0, "arr[0][0]. yields 0 suggestions (primitive int)");
+});
+
+test("C++: Chained method calls (.substr(...)., .front()., .back()., .at(...).)", () => {
+  // s.substr(...). suggests string methods
+  const subLabels = cppLabels('string s = "hello world";\ns.substr(0, 5).');
+  assert.ok(
+    subLabels.includes("length") && subLabels.includes("find"),
+    "s.substr(). suggests string methods",
+  );
+
+  // vector<string> words; words.front(). suggests string methods
+  const frontStr = cppLabels("vector<string> words;\nwords.front().");
+  assert.ok(
+    frontStr.includes("substr") && frontStr.includes("length"),
+    "words.front(). suggests string methods",
+  );
+
+  // vector<int> nums; nums.back(). yields 0 suggestions (primitive int)
+  const backInt = cppLabels("vector<int> nums;\nnums.back().");
+  assert.equal(backInt.length, 0, "nums.back(). yields 0 suggestions (primitive int)");
+});
+
+// ==========================================
 // C AUTOCOMPLETE, HOVER & SIGNATURE HELP TESTS
 // ==========================================
 
@@ -1960,4 +2387,33 @@ test("Java: String. suggests only static methods", () => {
   const labels = javaLabels("String.");
   assert.ok(labels.includes("valueOf") && labels.includes("join"));
   assert.ok(!labels.includes("length") && !labels.includes("charAt"));
+});
+
+function cppItems(src: string): any[] {
+  const { mockMonaco, completionProviders } = setupMockMonaco();
+  registerCppCompletions(mockMonaco);
+  return completionProviders["cpp"].provideCompletionItems(createMockModel(src), endOf(src))
+    .suggestions;
+}
+
+test("C++: a variable built with a constructor is a variable, not a function", () => {
+  const src =
+    "int solve(int n) {\n  int total = 0;\n  vector<int> dp(n + 1, 0);\n  for (int i = 0; i < n; i++) {\n    ";
+  const items = cppItems(src);
+  assert.ok(
+    items.some((s) => s.label === "total"),
+    "locals stay visible in later blocks of the same function",
+  );
+  const dp = items.find((s) => s.label === "dp");
+  assert.ok(dp && dp.insertText === "dp", "dp inserts as a variable, not dp()");
+  const proto = cppItems("int helper(int a, int b);\nint main() {\n  ");
+  assert.ok(
+    proto.some((s) => s.label === "helper" && s.insertText.startsWith("helper(")),
+    "a top-level prototype is still a function",
+  );
+});
+
+test("C++: `return v;` does not hide v's declaration", () => {
+  const labels = cppLabels("vector<int> f() {\n  vector<int> v;\n  if (v.empty()) return v;\n  v.");
+  assert.ok(labels.includes("push_back") && !labels.includes("substr"), "v is a vector");
 });
