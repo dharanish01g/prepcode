@@ -2388,3 +2388,32 @@ test("Java: String. suggests only static methods", () => {
   assert.ok(labels.includes("valueOf") && labels.includes("join"));
   assert.ok(!labels.includes("length") && !labels.includes("charAt"));
 });
+
+function cppItems(src: string): any[] {
+  const { mockMonaco, completionProviders } = setupMockMonaco();
+  registerCppCompletions(mockMonaco);
+  return completionProviders["cpp"].provideCompletionItems(createMockModel(src), endOf(src))
+    .suggestions;
+}
+
+test("C++: a variable built with a constructor is a variable, not a function", () => {
+  const src =
+    "int solve(int n) {\n  int total = 0;\n  vector<int> dp(n + 1, 0);\n  for (int i = 0; i < n; i++) {\n    ";
+  const items = cppItems(src);
+  assert.ok(
+    items.some((s) => s.label === "total"),
+    "locals stay visible in later blocks of the same function",
+  );
+  const dp = items.find((s) => s.label === "dp");
+  assert.ok(dp && dp.insertText === "dp", "dp inserts as a variable, not dp()");
+  const proto = cppItems("int helper(int a, int b);\nint main() {\n  ");
+  assert.ok(
+    proto.some((s) => s.label === "helper" && s.insertText.startsWith("helper(")),
+    "a top-level prototype is still a function",
+  );
+});
+
+test("C++: `return v;` does not hide v's declaration", () => {
+  const labels = cppLabels("vector<int> f() {\n  vector<int> v;\n  if (v.empty()) return v;\n  v.");
+  assert.ok(labels.includes("push_back") && !labels.includes("substr"), "v is a vector");
+});

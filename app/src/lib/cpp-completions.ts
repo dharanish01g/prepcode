@@ -1,14 +1,11 @@
 import * as monacoDefault from "monaco-editor";
+import {
+  type CompletionItemDef,
+  deduplicateSuggestions,
+  toCompletionItems,
+} from "./completion-utils.ts";
 
 type Monaco = typeof monacoDefault;
-
-export interface CompletionItemDef {
-  label: string;
-  kind?: monacoDefault.languages.CompletionItemKind;
-  detail?: string;
-  documentation?: string;
-  snippet?: string;
-}
 
 // --- Standard Library Member Definitions -----------------------------------------------
 
@@ -1242,40 +1239,6 @@ export const SNIPPETS = [
 
 // --- Helpers --------------------------------------------------------------------------
 
-export function deduplicateSuggestions(
-  items: monacoDefault.languages.CompletionItem[],
-): monacoDefault.languages.CompletionItem[] {
-  const seen = new Set<string>();
-  const unique: monacoDefault.languages.CompletionItem[] = [];
-  for (const item of items) {
-    const insertKey =
-      typeof item.insertText === "string" ? item.insertText : JSON.stringify(item.insertText);
-    const key = `${item.label}|${item.kind ?? ""}|${insertKey}|${item.detail ?? ""}`;
-    if (!seen.has(key)) {
-      seen.add(key);
-      unique.push(item);
-    }
-  }
-  return unique;
-}
-
-export function toCompletionItems(
-  items: CompletionItemDef[],
-  range: monacoDefault.IRange,
-): monacoDefault.languages.CompletionItem[] {
-  return items.map((m) => ({
-    label: m.label,
-    kind: m.kind ?? monacoDefault.languages.CompletionItemKind.Method,
-    insertText: m.snippet ?? m.label,
-    insertTextRules: m.snippet
-      ? monacoDefault.languages.CompletionItemInsertTextRule.InsertAsSnippet
-      : undefined,
-    detail: m.detail,
-    documentation: m.documentation,
-    range,
-  }));
-}
-
 /**
  * Strips C++ line comments (//) from a single line while respecting string and char literals.
  */
@@ -1321,6 +1284,21 @@ export function stripCppCommentsAndStrings(code: string): string {
 }
 
 export const CPP_KEYWORD_SET = new Set(CPP_KEYWORDS);
+
+/** Lines starting with these call or test something; they never declare a function. */
+const NOT_A_DEFINITION =
+  /^\s*(?:\}\s*)?(?:if|else|while|for|switch|catch|return|throw|delete|case|goto|do)\b/;
+
+/** Words that can stand where a declaration's type would be, as in `return v;`. */
+const STATEMENT_WORDS = new Set(["return", "else", "throw", "delete", "case", "goto", "new"]);
+
+/**
+ * `vector<int> dp(n + 1, 0);` inside a function body is a variable built with a
+ * constructor, not a function prototype.
+ */
+function isConstructedVariable(line: string, insideFunction: boolean): boolean {
+  return insideFunction && line.trim().endsWith(";");
+}
 export const CPP_TYPE_SET = new Set(CPP_TYPES.map((t) => t.name));
 
 // --- Scopes & Scope Analysis -----------------------------------------------------------
@@ -1352,9 +1330,9 @@ export function computeCppScopes(
     const isFuncDef =
       /\b(?:[a-zA-Z_]\w*(?:::[a-zA-Z_]\w*)?(?:<[^>]+>)?(?:\*|&)*)\s+([a-zA-Z_]\w*)\s*\([^;)]*\)\s*(?:const)?\s*\{?/.test(
         rawLine,
-      ) && !/^\s*(?:if|while|for|switch|catch)\b/.test(rawLine);
+      ) && !NOT_A_DEFINITION.test(rawLine);
 
-    if (isFuncDef) {
+    if (isFuncDef && !rawLine.trim().endsWith(";")) {
       candidateFuncLine = ln;
     }
 
@@ -1462,6 +1440,7 @@ export function extractEnclosingClassMembers(
 
   const members: CppClassMember[] = [];
   const seen = new Set<string>();
+  const scopes = computeCppScopes(model, cursorLine);
 
   for (let ln = classStartLine; ln <= classEndLine; ln++) {
     const rawLine = model.getLineContent(ln);
@@ -1474,8 +1453,9 @@ export function extractEnclosingClassMembers(
     );
     if (
       methodMatch &&
-      !/^\s*(?:if|while|for|switch|catch)\b/.test(line) &&
-      !CPP_KEYWORD_SET.has(methodMatch[1])
+      !NOT_A_DEFINITION.test(line) &&
+      !CPP_KEYWORD_SET.has(methodMatch[1]) &&
+      !isConstructedVariable(line, scopes.owner[ln] !== 0)
     ) {
       const mName = methodMatch[1];
       if (!seen.has(mName)) {
@@ -1491,7 +1471,6 @@ export function extractEnclosingClassMembers(
     }
 
     // Check member field
-    const scopes = computeCppScopes(model, ln);
     if (scopes.owner[ln] === 0 && ln > classStartLine) {
       const fieldMatch = line.match(
         /\b(?:const\s+)?([a-zA-Z_]\w*(?:::[a-zA-Z_]\w*)?(?:<[^>]+>)?)(?:\s+|\s*(?:&|\*)\s*)([a-zA-Z_]\w*)\s*(?:=|;|,|\(|\{)/,
@@ -1811,6 +1790,7 @@ export function inferCppType(
     if (declMatch) {
       const fullType = declMatch[1].replace(/^std::/, "").trim();
       const baseType = fullType.replace(/<.*>$/, "").trim();
+      if (STATEMENT_WORDS.has(baseType)) continue;
 
       if (baseType === "string") return "string";
       if (baseType === "vector") return "vector";
@@ -1903,8 +1883,10 @@ export function extractCppDocumentSymbols(
     );
     if (
       funcMatch &&
-      !/^\s*(?:if|while|for|switch|catch)\b/.test(line) &&
-      !CPP_KEYWORD_SET.has(funcMatch[1])
+      !NOT_A_DEFINITION.test(line) &&
+      !CPP_KEYWORD_SET.has(funcMatch[1]) &&
+      !new RegExp(`\\bnew\\s+${funcMatch[1]}\\s*\\(`).test(line) &&
+      !isConstructedVariable(line, scopes.owner[ln] !== 0)
     ) {
       const fName = funcMatch[1];
       if (!seen.has(fName) && fName !== currentWord) {
@@ -2540,7 +2522,7 @@ export function registerCppCompletions(mInstance?: Monaco) {
           `\\b([a-zA-Z_]\\w*(?:::[a-zA-Z_]\\w*)?(?:<[^>]+>)?(?:\\*|&)*\\s+${word.word}\\s*\\([^;)]*\\))`,
         );
         const fMatch = line.match(funcRegex);
-        if (fMatch && !/^\s*(?:if|while|for|switch|catch)\b/.test(line)) {
+        if (fMatch && !NOT_A_DEFINITION.test(line)) {
           return {
             range: new m.Range(
               position.lineNumber,
@@ -2725,7 +2707,7 @@ export function registerCppCompletions(mInstance?: Monaco) {
             `\\b([a-zA-Z_]\\w*(?:::[a-zA-Z_]\\w*)?(?:<[^>]+>)?(?:\\*|&)*\\s+${methodName}\\s*\\(([^;)]*)\\))`,
           );
           const fMatch = line.match(funcRegex);
-          if (fMatch && !/^\s*(?:if|while|for|switch|catch)\b/.test(line)) {
+          if (fMatch && !NOT_A_DEFINITION.test(line)) {
             found = {
               label: methodName,
               detail: fMatch[1].trim(),
