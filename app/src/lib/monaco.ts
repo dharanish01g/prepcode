@@ -8,6 +8,7 @@ import { onZoomApplied } from "@/hooks/use-zoom";
 import { registerCCompletions } from "@/lib/c-completions";
 import { registerCppCompletions } from "@/lib/cpp-completions";
 import { registerCSharpCompletions } from "@/lib/csharp-completions";
+import { registerJavaCompletions } from "@/lib/java-completions";
 import { registerPythonCompletions } from "@/lib/python-completions";
 
 self.MonacoEnvironment = {
@@ -26,6 +27,7 @@ loader.config({ monaco });
 registerCCompletions(monaco);
 registerCppCompletions(monaco);
 registerCSharpCompletions(monaco);
+registerJavaCompletions(monaco);
 registerPythonCompletions(monaco);
 
 /** Code text size in both editors. */

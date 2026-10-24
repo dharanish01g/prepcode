@@ -3,6 +3,7 @@ import test from "node:test";
 import { registerCCompletions } from "./c-completions.ts";
 import { registerCppCompletions } from "./cpp-completions.ts";
 import { registerCSharpCompletions } from "./csharp-completions.ts";
+import { registerJavaCompletions } from "./java-completions.ts";
 import { registerPythonCompletions } from "./python-completions.ts";
 
 // Helper mock types
@@ -712,6 +713,613 @@ test("C# Issue 9: no made-up signature for keywords or unknown methods", () => {
     wl.value.signatures[0].parameters.length,
     1,
     "WriteLine(object? value) has one parameter",
+  );
+});
+
+// ==========================================
+// JAVA COMPLETION & SIGNATURE HELP TESTS
+// ==========================================
+
+function javaLabels(src: string, col?: number, line?: number): string[] {
+  const { mockMonaco, completionProviders } = setupMockMonaco();
+  registerJavaCompletions(mockMonaco);
+  const pos =
+    line !== undefined && col !== undefined ? { lineNumber: line, column: col } : endOf(src);
+  const r = completionProviders["java"].provideCompletionItems(createMockModel(src), pos);
+  return r.suggestions.map((s: any) => s.label);
+}
+
+function javaSig(src: string, col?: number, line?: number): any {
+  const { mockMonaco, sigHelpProviders } = setupMockMonaco();
+  registerJavaCompletions(mockMonaco);
+  const pos =
+    line !== undefined && col !== undefined ? { lineNumber: line, column: col } : endOf(src);
+  return sigHelpProviders["java"].provideSignatureHelp(createMockModel(src), pos);
+}
+
+function javaSigParam(src: string): number | null {
+  const s = javaSig(src);
+  return s ? s.value.activeParameter : null;
+}
+
+function javaHover(src: string, col: number, line = 1): any {
+  const { mockMonaco, hoverProviders } = setupMockMonaco();
+  registerJavaCompletions(mockMonaco);
+  return hoverProviders["java"].provideHover(createMockModel(src), {
+    lineNumber: line,
+    column: col,
+  });
+}
+
+test("Java: System members and System.out methods suggest correctly", () => {
+  const sys = javaLabels("System.");
+  assert.ok(sys.includes("out"), "System. suggests out");
+  assert.ok(sys.includes("err"), "System. suggests err");
+  assert.ok(sys.includes("currentTimeMillis"), "System. suggests currentTimeMillis");
+
+  const sout = javaLabels("System.out.");
+  assert.ok(sout.includes("println"), "System.out. suggests println");
+  assert.ok(sout.includes("print"), "System.out. suggests print");
+  assert.ok(sout.includes("printf"), "System.out. suggests printf");
+});
+
+test("Java: Math and Arrays static methods suggest correctly", () => {
+  const math = javaLabels("Math.");
+  assert.ok(
+    math.includes("max") && math.includes("min") && math.includes("abs") && math.includes("PI"),
+    "Math suggestions",
+  );
+
+  const arrays = javaLabels("Arrays.");
+  assert.ok(
+    arrays.includes("sort") && arrays.includes("binarySearch") && arrays.includes("fill"),
+    "Arrays suggestions",
+  );
+});
+
+test("Java: Variable heuristics provide appropriate member suggestions", () => {
+  const sc = javaLabels("Scanner sc = new Scanner(System.in);\nsc.");
+  assert.ok(
+    sc.includes("nextInt") && sc.includes("nextLine"),
+    "Scanner variable suggests Scanner methods",
+  );
+
+  const s = javaLabels('String s = "hello";\ns.');
+  assert.ok(
+    s.includes("length") && s.includes("charAt") && s.includes("substring"),
+    "String variable suggests String methods",
+  );
+
+  const list = javaLabels("List<Integer> nums = new ArrayList<>();\nnums.");
+  assert.ok(
+    list.includes("add") && list.includes("get") && list.includes("size"),
+    "List variable suggests List methods",
+  );
+});
+
+test("Java: Snippets and keywords are provided in un-dotted context", () => {
+  const labels = javaLabels("s");
+  assert.ok(labels.includes("sout"), "suggests sout snippet");
+  assert.ok(labels.includes("psvm") || labels.includes("main"), "suggests main/psvm snippet");
+  assert.ok(labels.includes("String"), "suggests String type");
+  assert.ok(labels.includes("public"), "suggests public keyword");
+});
+
+test("Java: Local variables and method parameters appear in completions", () => {
+  const src =
+    "public class Solution {\n    public int solve(int maxLimit, String targetPrefix) {\n        int runningTotal = 0;\n        r";
+  const labels = javaLabels(src);
+  assert.ok(labels.includes("runningTotal"), "local variable runningTotal suggested");
+  assert.ok(labels.includes("maxLimit"), "parameter maxLimit suggested");
+  assert.ok(labels.includes("targetPrefix"), "parameter targetPrefix suggested");
+});
+
+test("Java: Signature help correctly tracks parameters and depth", () => {
+  const sig1 = javaSig("System.out.println(");
+  assert.ok(sig1 && sig1.value.signatures.length > 0, "System.out.println( has signature help");
+
+  const sig2 = javaSig("Math.max(10, ");
+  assert.ok(sig2, "Math.max(10, has signature help");
+  assert.equal(sig2.value.activeParameter, 1, "activeParameter is 1 after comma");
+});
+
+test("Java: Hover documentation displays for qualified calls and types", () => {
+  const src = "Math.max(1, 2);";
+  const hover = javaHover(src, 7); // over 'max'
+  assert.ok(hover && hover.contents.length > 0, "Hover over Math.max returns doc content");
+  assert.ok(hover.contents[0].value.includes("Math.max"), "Contains method signature in hover");
+});
+
+test("Java Issue 1: Arrays suggest length and clone, NOT List methods (add, size, get)", () => {
+  // Explicit array declaration
+  const arrLabels = javaLabels("int[] arr = new int[10];\narr.");
+  assert.ok(arrLabels.includes("length"), "arr. suggests length field");
+  assert.ok(arrLabels.includes("clone"), "arr. suggests clone method");
+  assert.ok(!arrLabels.includes("add"), "arr. must not suggest List.add");
+  assert.ok(!arrLabels.includes("size"), "arr. must not suggest List.size");
+  assert.ok(!arrLabels.includes("get"), "arr. must not suggest List.get");
+
+  // Untyped heuristic fallback for 'arr'
+  const fallbackArr = javaLabels("arr.");
+  assert.ok(
+    fallbackArr.includes("length") && fallbackArr.includes("clone"),
+    "untyped arr suggests array members",
+  );
+  assert.ok(!fallbackArr.includes("add"), "untyped arr must not suggest List.add");
+
+  // Array of Strings
+  const wordsLabels = javaLabels("String[] words = new String[5];\nwords.");
+  assert.ok(
+    wordsLabels.includes("length") && !wordsLabels.includes("add"),
+    "words array suggests length, not add",
+  );
+});
+
+test("Java Issue 2: Primitive types (int, long, double, boolean) yield empty member suggestions", () => {
+  assert.equal(
+    javaLabels("int count = 5;\ncount.").length,
+    0,
+    "int count. must yield 0 suggestions (primitive cannot be dereferenced)",
+  );
+  assert.equal(
+    javaLabels("double total = 10.5;\ntotal.").length,
+    0,
+    "double total. must yield 0 suggestions",
+  );
+  assert.equal(
+    javaLabels("boolean isValid = true;\nisValid.").length,
+    0,
+    "boolean isValid. must yield 0 suggestions",
+  );
+});
+
+test("Java Issue 3: No made-up signature help for keywords or unqualified method calls", () => {
+  const { mockMonaco, sigHelpProviders } = setupMockMonaco();
+  registerJavaCompletions(mockMonaco);
+  const provider = sigHelpProviders["java"];
+
+  // Keywords and unqualified non-existent methods must return null
+  for (const line of [
+    "    if (",
+    "    while (x < ",
+    "    for (int i = 0; ",
+    "    Add(1, ",
+    "    get(0",
+    "    size(",
+  ]) {
+    const src = `class A {\n  void M() {\n${line}`;
+    assert.equal(provider.provideSignatureHelp(createMockModel(src), endOf(src)), null, line);
+  }
+
+  // Statically imported Math.max returns signature help even without 'Math.'
+  const staticMathSrc = "import static java.lang.Math.*;\nclass A {\n  void M() {\n    max(10, ";
+  const sigStatic = provider.provideSignatureHelp(
+    createMockModel(staticMathSrc),
+    endOf(staticMathSrc),
+  );
+  assert.ok(sigStatic, "Statically imported Math.max returns signature help");
+  assert.equal(sigStatic.value.activeParameter, 1, "Active parameter is 1 after comma");
+
+  // User-defined method in file returns its real declared signature
+  const userMethodSrc =
+    "class Solution {\n    public int customSum(int a, int b) {\n        return a + b;\n    }\n    void run() {\n        customSum(1, ";
+  const sigUser = provider.provideSignatureHelp(
+    createMockModel(userMethodSrc),
+    endOf(userMethodSrc),
+  );
+  assert.ok(sigUser, "User method in file returns signature help");
+  assert.ok(
+    sigUser.value.signatures[0].label.includes("customSum"),
+    "Contains user method signature",
+  );
+  assert.equal(sigUser.value.activeParameter, 1, "Active parameter is 1 after comma");
+});
+
+test("Java Issue 4: Context-aware main and psvm snippets prevent duplicate keywords", () => {
+  const { mockMonaco, completionProviders } = setupMockMonaco();
+  registerJavaCompletions(mockMonaco);
+  const provider = completionProviders["java"];
+
+  const getSnippetInsert = (src: string, label: string) => {
+    const res = provider.provideCompletionItems(createMockModel(src), endOf(src));
+    const item = res.suggestions.find((s: any) => s.label === label);
+    return item ? item.insertText : null;
+  };
+
+  // On empty line: full declaration
+  const full = getSnippetInsert("    ", "main");
+  assert.ok(full.startsWith("public static void main"), "Empty line suggests full signature");
+
+  // After 'public static void ': trimmed to prevent keyword duplication
+  const trimmed1 = getSnippetInsert("public static void ", "main");
+  assert.ok(
+    trimmed1.startsWith("main(String[] args)"),
+    "After 'public static void ', insertText is just main(...)",
+  );
+
+  // After 'public static ': trimmed
+  const trimmed2 = getSnippetInsert("public static ", "psvm");
+  assert.ok(
+    trimmed2.startsWith("void main(String[] args)"),
+    "After 'public static ', insertText is void main(...)",
+  );
+
+  // After 'static void ': trimmed
+  const trimmed3 = getSnippetInsert("static void ", "main");
+  assert.ok(
+    trimmed3.startsWith("main(String[] args)"),
+    "After 'static void ', insertText is main(...)",
+  );
+});
+
+test("Java Issue 5: Variable type inference and hover displays variable types and keyword docs", () => {
+  // Local variable hover: int[] nums
+  const src = "public class Solution {\n    int[] nums = new int[5];\n}";
+  const hoverNums = javaHover(src, 11, 2); // over 'nums'
+  assert.ok(
+    hoverNums && hoverNums.contents[0].value.includes("int[] nums"),
+    "Hover over nums displays int[] nums",
+  );
+
+  // Local variable hover: Scanner sc
+  const srcSc = "Scanner sc = new Scanner(System.in);";
+  const hoverSc = javaHover(srcSc, 9); // over 'sc'
+  assert.ok(
+    hoverSc && hoverSc.contents[0].value.includes("Scanner sc"),
+    "Hover over sc displays Scanner sc",
+  );
+
+  // Keyword hover: int
+  const srcKw = "int x = 10;";
+  const hoverKw = javaHover(srcKw, 2); // over 'int'
+  assert.ok(
+    hoverKw && hoverKw.contents[0].value.includes("keyword int"),
+    "Hover over keyword int displays docs",
+  );
+
+  // Array length hover
+  const srcLen = "arr.length";
+  const hoverLen = javaHover(srcLen, 6); // over 'length'
+  assert.ok(
+    hoverLen && hoverLen.contents[0].value.includes("length"),
+    "Hover over arr.length displays array length doc",
+  );
+});
+
+test("Java Issue 6: Subscript access (words[0]., nums[i]., matrix[0].) infers element types", () => {
+  // String array element
+  const strElem = javaLabels("String[] words = new String[5];\nwords[0].");
+  assert.ok(
+    strElem.includes("charAt") && strElem.includes("substring") && strElem.includes("length"),
+    "words[0]. suggests String methods",
+  );
+
+  // Primitive array element (int) cannot be dereferenced
+  const primElem = javaLabels("int[] nums = new int[5];\nnums[i].");
+  assert.equal(primElem.length, 0, "nums[i]. yields 0 suggestions for primitive int");
+
+  // 2D array element is an array
+  const matElem = javaLabels("int[][] matrix = new int[5][5];\nmatrix[0].");
+  assert.ok(
+    matElem.includes("length") && matElem.includes("clone"),
+    "matrix[0]. suggests array members",
+  );
+  assert.ok(!matElem.includes("add"), "matrix[0]. must not suggest List.add");
+});
+
+test("Java Issue 7: Chained method returns (.toString()., .nextLine().)", () => {
+  const sbStr = javaLabels("StringBuilder sb = new StringBuilder();\nsb.toString().");
+  assert.ok(
+    sbStr.includes("charAt") && sbStr.includes("substring"),
+    "sb.toString(). suggests String methods",
+  );
+
+  const scStr = javaLabels("Scanner sc = new Scanner(System.in);\nsc.nextLine().");
+  assert.ok(
+    scStr.includes("trim") && scStr.includes("split"),
+    "sc.nextLine(). suggests String methods",
+  );
+});
+
+test("Java Issue 8: Scope tracking - another method's locals and parameters do not leak", () => {
+  // Method a's local variable must not show up in method b
+  const code1 = `class Solution {
+    void a() {
+        int onlyInA = 1;
+    }
+    void b() {
+        only_`;
+  assert.ok(
+    !javaLabels(code1).includes("onlyInA"),
+    "onlyInA must not leak from method a to method b",
+  );
+
+  // Method a's parameter must not show up in method b
+  const code2 = `class Solution {
+    void a(int paramA) {
+    }
+    void b(int paramB) {
+        param`;
+  const labels2 = javaLabels(code2);
+  assert.ok(labels2.includes("paramB"), "paramB must be visible inside method b");
+  assert.ok(!labels2.includes("paramA"), "paramA must not leak from method a to method b");
+
+  // Class fields must be visible inside methods
+  const code3 = `class Solution {
+    int maxLimit = 100;
+    void a() {
+        max`;
+  assert.ok(javaLabels(code3).includes("maxLimit"), "Class field must be visible inside method");
+
+  // Method locals must not leak to class level
+  const code4 = `class Solution {
+    void a() {
+        int methodLocal = 5;
+    }
+    `;
+  assert.ok(!javaLabels(code4).includes("methodLocal"), "methodLocal must not leak to class level");
+});
+
+test("Java Issue 9: Signature help comment shielding", () => {
+  // Apostrophe in earlier line comment must not break signature help
+  assert.equal(
+    javaSigParam("// don't forget\nMath.max(1, "),
+    1,
+    "Apostrophe in line comment does not corrupt parser",
+  );
+
+  // Parenthesis in earlier line comment must not break signature help
+  assert.equal(
+    javaSigParam("// see Math.min(1, 2)\nMath.max(1, "),
+    1,
+    "Paren in line comment does not corrupt parser",
+  );
+
+  // Block comment with paren and quotes must not break signature help
+  assert.equal(
+    javaSigParam("/* see Math.min(1, 2) don't forget 'x' */\nMath.max(1, "),
+    1,
+    "Block comment contents do not corrupt parser",
+  );
+
+  // Multiline block comment
+  assert.equal(
+    javaSigParam("/*\n * note: don't call Math.min(a, b)\n */\nMath.max(1, "),
+    1,
+    "Multiline block comment does not corrupt parser",
+  );
+});
+
+test("Java Issue 10: Dot-preceded words (.clone, .length, .println) are not extracted as standalone identifiers", () => {
+  const src = `class Solution {
+    void a() {
+        int[] arr = new int[5];
+        arr.clone();
+        System.out.println();
+        ar`;
+  const labels = javaLabels(src);
+  assert.ok(labels.includes("arr"), "Variable arr must be suggested");
+  assert.ok(!labels.includes("clone"), ".clone() must not be extracted as standalone variable");
+  assert.ok(!labels.includes("println"), ".println() must not be extracted as standalone variable");
+});
+
+test("Java Issue 11: Trailing digits on variable names (nums2., arr1., list2.) receive member completions", () => {
+  // Declared variable with digits
+  const dec1 = javaLabels("int[] nums2 = new int[5];\nnums2.");
+  assert.ok(dec1.includes("length") && dec1.includes("clone"), "nums2. suggests array members");
+
+  const dec2 = javaLabels("List<String> list2 = new ArrayList<>();\nlist2.");
+  assert.ok(dec2.includes("add") && dec2.includes("size"), "list2. suggests list members");
+
+  // Undeclared / heuristic fallback with digits
+  const h1 = javaLabels("nums1.");
+  assert.ok(
+    h1.includes("length") && h1.includes("clone"),
+    "nums1. heuristic suggests array members",
+  );
+
+  const h2 = javaLabels("list1.");
+  assert.ok(h2.includes("add") && h2.includes("size"), "list1. heuristic suggests list members");
+
+  const h3 = javaLabels("s1.");
+  assert.ok(
+    h3.includes("charAt") && h3.includes("substring"),
+    "s1. heuristic suggests string members",
+  );
+});
+
+test("Java Issue 12: this. and super. completions, hover, and signature help", () => {
+  const src = `class Solution {
+    int myField = 10;
+    public void customMethod(int a, int b) {
+        int localVar = 42;
+        this.
+    }
+}`;
+  const thisLabels = javaLabels(src, 14, 5);
+
+  // Must suggest class fields, class methods, and common object members
+  assert.ok(thisLabels.includes("myField"), "this. suggests class field");
+  assert.ok(thisLabels.includes("customMethod"), "this. suggests class method");
+  assert.ok(thisLabels.includes("equals"), "this. suggests Object.equals");
+  assert.ok(thisLabels.includes("toString"), "this. suggests Object.toString");
+
+  // Must NOT suggest local variables or unrelated String/List members
+  assert.ok(!thisLabels.includes("localVar"), "this. must NOT suggest local variable");
+  assert.ok(!thisLabels.includes("charAt"), "this. must NOT suggest String.charAt");
+  assert.ok(!thisLabels.includes("add"), "this. must NOT suggest List.add");
+
+  // super. suggests class methods and object members, but not local variables
+  const superSrc = `class Solution {
+    public void run() {
+        int x = 1;
+        super.
+    }
+}`;
+  const superLabels = javaLabels(superSrc, 15, 4);
+  assert.ok(superLabels.includes("run"), "super. suggests method");
+  assert.ok(superLabels.includes("toString"), "super. suggests Object.toString");
+  assert.ok(!superLabels.includes("x"), "super. must NOT suggest local variable");
+
+  // Hover over this.myField
+  const hoverField = javaHover(
+    `class Solution {\n    int myField = 10;\n    void m() {\n        this.myField = 20;\n    }\n}`,
+    15,
+    4,
+  );
+  assert.ok(
+    hoverField && hoverField.contents[0].value.includes("int myField"),
+    "Hover over this.myField displays field type",
+  );
+  assert.ok(
+    hoverField && hoverField.contents[1].value.includes("Field of current class"),
+    "Hover over this.myField indicates field of current class",
+  );
+
+  // Hover over this.customMethod
+  const hoverMethod = javaHover(
+    `class Solution {\n    void customMethod(int a) {}\n    void m() {\n        this.customMethod(1);\n    }\n}`,
+    15,
+    4,
+  );
+  assert.ok(
+    hoverMethod && hoverMethod.contents[0].value.includes("customMethod(int a)"),
+    "Hover over this.customMethod displays method signature",
+  );
+
+  // Signature help for this.customMethod(1,
+  const sigSrc = `class Solution {\n    void customMethod(int a, int b) {}\n    void m() {\n        this.customMethod(1, `;
+  const sig = javaSig(sigSrc);
+  assert.ok(sig, "this.customMethod(1, returns signature help");
+  assert.equal(sig.value.activeParameter, 1, "activeParameter is 1 after comma");
+});
+
+test("Java Issue 13: Array declarations with whitespace and var array inference", () => {
+  // Whitespace-tolerant array declarations
+  const dec1 = javaLabels("int [] nums = new int[5];\nnums.");
+  assert.ok(
+    dec1.includes("length") && dec1.includes("clone"),
+    "int [] nums. suggests array members",
+  );
+
+  const dec2 = javaLabels("String [ ] words = new String[5];\nwords[0].");
+  assert.ok(
+    dec2.includes("charAt") && dec2.includes("substring"),
+    "String [ ] words[0]. suggests String members",
+  );
+
+  // var array initializer with primitive element: var nums = new int[5]; nums[0]. cannot dereference
+  const varPrim = javaLabels("var nums = new int[5];\nnums[0].");
+  assert.equal(
+    varPrim.length,
+    0,
+    "var nums = new int[5]; nums[0]. yields 0 suggestions for primitive int",
+  );
+
+  // var array initializer with String element: var words = new String[5]; words[0]. suggests String
+  const varStr = javaLabels("var words = new String[5];\nwords[0].");
+  assert.ok(
+    varStr.includes("charAt") && varStr.includes("substring"),
+    "var words = new String[5]; words[0]. suggests String members",
+  );
+});
+
+test("Java Issue 14: Multi-dimensional array element dereferencing (matrix[0][0]., grid[0][0].)", () => {
+  // 2D int array: 1st dimension is array, 2nd dimension is primitive int
+  const codeMat = "int[][] matrix = new int[5][5];\nmatrix[0].";
+  const matRow = javaLabels(codeMat);
+  assert.ok(matRow.includes("length") && matRow.includes("clone"), "matrix[0]. is int[] array");
+
+  const codeMatElem = "int[][] matrix = new int[5][5];\nmatrix[0][0].";
+  assert.equal(
+    javaLabels(codeMatElem).length,
+    0,
+    "matrix[0][0]. yields 0 suggestions (primitive int)",
+  );
+
+  // 2D String array: 2nd dimension is String
+  const codeGrid = "String[][] grid = new String[5][5];\ngrid[0][0].";
+  const gridElem = javaLabels(codeGrid);
+  assert.ok(
+    gridElem.includes("charAt") && gridElem.includes("substring"),
+    "grid[0][0]. suggests String members",
+  );
+
+  // Chained split subscript: s.split(" ")[0].
+  const splitElem = javaLabels('String s = "hello world";\ns.split(" ")[0].');
+  assert.ok(
+    splitElem.includes("charAt") && splitElem.includes("substring"),
+    's.split(" ")[0]. suggests String members',
+  );
+
+  // Chained toCharArray subscript: s.toCharArray()[0]. is primitive char -> 0 suggestions
+  const charElem = javaLabels('String s = "hello";\ns.toCharArray()[0].');
+  assert.equal(charElem.length, 0, "s.toCharArray()[0]. yields 0 suggestions (primitive char)");
+});
+
+test("Java Issue 15: Chained .get(...) calls on collections (List and Map)", () => {
+  // List<String> list; list.get(0). suggests String members
+  const listStr = javaLabels("List<String> words = new ArrayList<>();\nwords.get(0).");
+  assert.ok(
+    listStr.includes("charAt") && listStr.includes("substring"),
+    "words.get(0). suggests String members",
+  );
+
+  // Nested List: List<List<String>> matrix; matrix.get(0).get(0). suggests String members
+  const nestedList = javaLabels(
+    "List<List<String>> matrix = new ArrayList<>();\nmatrix.get(0).get(0).",
+  );
+  assert.ok(
+    nestedList.includes("charAt") && nestedList.includes("substring"),
+    "matrix.get(0).get(0). suggests String members",
+  );
+
+  // Map<String, String> map; map.get("k"). suggests String members
+  const mapStr = javaLabels('Map<String, String> map = new HashMap<>();\nmap.get("k").');
+  assert.ok(
+    mapStr.includes("charAt") && mapStr.includes("substring"),
+    'map.get("k"). suggests String members',
+  );
+
+  // Map<String, List<Integer>> map; map.get("k"). suggests List members
+  const mapList = javaLabels('Map<String, List<Integer>> map = new HashMap<>();\nmap.get("k").');
+  assert.ok(
+    mapList.includes("add") && mapList.includes("size"),
+    'map.get("k"). suggests List members',
+  );
+});
+
+test("Java Issue 16: sysout snippet and field vs local variable origin", () => {
+  const { mockMonaco, completionProviders } = setupMockMonaco();
+  registerJavaCompletions(mockMonaco);
+  const provider = completionProviders["java"];
+
+  // sysout snippet
+  const res = provider.provideCompletionItems(createMockModel("sys"), endOf("sys"));
+  const sysoutItem = res.suggestions.find((s: any) => s.label === "sysout");
+  assert.ok(sysoutItem, "sysout snippet is provided");
+  assert.ok(
+    sysoutItem.insertText.includes("System.out.println"),
+    "sysout inserts System.out.println",
+  );
+
+  // Class field hover displays Field, local variable displays Local variable
+  const src = `class Solution {
+    int classField = 10;
+    void run() {
+        int methodLocal = 20;
+    }
+}`;
+  const hoverField = javaHover(src, 10, 2); // over 'classField'
+  assert.ok(
+    hoverField && hoverField.contents[1].value.includes("Field"),
+    "classField displays Field in hover",
+  );
+
+  const hoverLocal = javaHover(src, 14, 4); // over 'methodLocal'
+  assert.ok(
+    hoverLocal && hoverLocal.contents[1].value.includes("Local variable"),
+    "methodLocal displays Local variable in hover",
   );
 });
 
@@ -1737,4 +2345,46 @@ test("C: Signature help keeps function-pointer parameters whole", () => {
 
   const at = cSig("atexit(");
   assert.equal(at.value.signatures[0].parameters.length, 1, "atexit has 1 parameter");
+});
+
+test("Java: a call to a method does not replace its declared signature", () => {
+  const src =
+    "class A {\n  int helper(int x, int y) { return x + y; }\n  int run() {\n    if (true) return helper(1, 2);\n    helper(";
+  assert.equal(javaSig(src)?.value.signatures[0].label, "int helper(int x, int y)");
+  const hoverSrc =
+    "class A {\n  int helper(int x, int y) { return x + y; }\n  int run() {\n    return helper(1, 2);\n  }\n}";
+  assert.equal(
+    javaHover(hoverSrc, 14, 4)?.contents[0].value,
+    "```java\nint helper(int x, int y)\n```",
+  );
+  const newSrc = "class A {\n  void t() {\n    Scanner sc = new Scanner(System.in);\n    Scann";
+  const { mockMonaco, completionProviders } = setupMockMonaco();
+  registerJavaCompletions(mockMonaco);
+  const items = completionProviders["java"].provideCompletionItems(
+    createMockModel(newSrc),
+    endOf(newSrc),
+  ).suggestions;
+  assert.ok(
+    !items.some((s: any) => s.label === "Scanner" && s.insertText === "Scanner()"),
+    "new Scanner(...) is not a method of the class",
+  );
+});
+
+test("Java: a variable named like a library class uses its own type", () => {
+  const arr = javaLabels("class A {\n  void t() {\n    int[] arrays = new int[3];\n    arrays.");
+  assert.ok(arr.includes("length") && !arr.includes("sort"), "int[] arrays gets array members");
+  const str = javaLabels('class A {\n  void t() {\n    String math = "x";\n    math.');
+  assert.ok(str.includes("charAt") && !str.includes("sqrt"), "String math gets String members");
+  assert.ok(javaLabels("Math.").includes("sqrt"), "Math. still gets Math members");
+});
+
+test("Java: // inside a string does not hide a declaration", () => {
+  const labels = javaLabels('class A {\n  void t() {\n    String url = "http://x";\n    url.');
+  assert.ok(labels.includes("charAt") && !labels.includes("add"), "url is a String, not a List");
+});
+
+test("Java: String. suggests only static methods", () => {
+  const labels = javaLabels("String.");
+  assert.ok(labels.includes("valueOf") && labels.includes("join"));
+  assert.ok(!labels.includes("length") && !labels.includes("charAt"));
 });
