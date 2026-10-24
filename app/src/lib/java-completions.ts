@@ -1,14 +1,11 @@
 import * as monacoDefault from "monaco-editor";
+import {
+  type CompletionItemDef as MethodItem,
+  deduplicateSuggestions,
+  toCompletionItems,
+} from "./completion-utils.ts";
 
 type Monaco = typeof monacoDefault;
-
-interface MethodItem {
-  label: string;
-  kind?: monacoDefault.languages.CompletionItemKind;
-  snippet?: string;
-  detail?: string;
-  documentation?: string;
-}
 
 // --- System Members -------------------------------------------------------------------
 
@@ -870,6 +867,11 @@ const STRING_INSTANCE_MEMBERS: MethodItem[] = [
   },
 ];
 
+/** `String.` only reaches the static methods. */
+const STRING_STATIC_MEMBERS = STRING_INSTANCE_MEMBERS.filter((m) =>
+  m.detail?.startsWith("static "),
+);
+
 // --- StringBuilder Members -----------------------------------------------------------
 
 const STRINGBUILDER_MEMBERS: MethodItem[] = [
@@ -1644,40 +1646,6 @@ const SNIPPETS = [
 
 // --- Helpers --------------------------------------------------------------------------
 
-function deduplicateSuggestions(
-  items: monacoDefault.languages.CompletionItem[],
-): monacoDefault.languages.CompletionItem[] {
-  const seen = new Set<string>();
-  const unique: monacoDefault.languages.CompletionItem[] = [];
-  for (const item of items) {
-    const insertKey =
-      typeof item.insertText === "string" ? item.insertText : JSON.stringify(item.insertText);
-    const key = `${item.label}|${item.kind ?? ""}|${insertKey}|${item.detail ?? ""}`;
-    if (!seen.has(key)) {
-      seen.add(key);
-      unique.push(item);
-    }
-  }
-  return unique;
-}
-
-function toCompletionItems(
-  items: MethodItem[],
-  range: monacoDefault.IRange,
-): monacoDefault.languages.CompletionItem[] {
-  return items.map((m) => ({
-    label: m.label,
-    kind: m.kind ?? monacoDefault.languages.CompletionItemKind.Method,
-    insertText: m.snippet ?? m.label,
-    insertTextRules: m.snippet
-      ? monacoDefault.languages.CompletionItemInsertTextRule.InsertAsSnippet
-      : undefined,
-    detail: m.detail,
-    documentation: m.documentation,
-    range,
-  }));
-}
-
 const JAVA_KEYWORD_SET = new Set(JAVA_KEYWORDS);
 const JAVA_TYPE_SET = new Set(JAVA_TYPES.map((t) => t.name));
 const JAVA_NON_TYPE_KEYWORDS = new Set([
@@ -2402,14 +2370,14 @@ function inferJavaVariablesAndTypes(
   const vars = new Map<string, JavaVariableInfo>();
   const lineCount = model.getLineCount();
   const scopes = cursorLine !== undefined ? computeJavaScopes(model, cursorLine) : null;
+  const codeLines = maskJavaComments(model.getValue()).split("\n");
 
   for (let ln = 1; ln <= lineCount; ln++) {
     if (scopes && !isLineVisible(scopes, ln)) {
       continue;
     }
 
-    const rawLine = model.getLineContent(ln);
-    const line = rawLine.split("//")[0].trim();
+    const line = (codeLines[ln - 1] ?? "").trim();
     if (!line) continue;
 
     // 1. Foreach variable: `for (int x : nums)` or `for (String item : list)`
@@ -2505,6 +2473,18 @@ function inferJavaVariablesAndTypes(
   return vars;
 }
 
+/** Words that can come before `name(` in a statement that calls rather than declares. */
+const STATEMENT_KEYWORDS = new Set([
+  "return",
+  "new",
+  "else",
+  "throw",
+  "yield",
+  "case",
+  "do",
+  "assert",
+]);
+
 function extractJavaDocumentMethods(
   model: monacoDefault.editor.ITextModel,
   cursorLine?: number,
@@ -2512,6 +2492,7 @@ function extractJavaDocumentMethods(
   const methods = new Map<string, JavaMethodInfo>();
   const lineCount = model.getLineCount();
   const scopes = cursorLine !== undefined ? computeJavaScopes(model, cursorLine) : null;
+  const codeLines = maskJavaComments(model.getValue()).split("\n");
 
   for (let ln = 1; ln <= lineCount; ln++) {
     if (scopes) {
@@ -2521,8 +2502,7 @@ function extractJavaDocumentMethods(
       }
     }
 
-    const rawLine = model.getLineContent(ln);
-    const line = rawLine.split("//")[0].trim();
+    const line = (codeLines[ln - 1] ?? "").trim();
     if (!line) continue;
 
     const methodMatch = line.match(
@@ -2533,7 +2513,11 @@ function extractJavaDocumentMethods(
       const name = methodMatch[2];
       const paramsRaw = methodMatch[3].trim();
 
-      if (!JAVA_KEYWORD_SET.has(name) && !JAVA_TYPE_SET.has(name)) {
+      if (
+        !STATEMENT_KEYWORDS.has(returnType) &&
+        !JAVA_KEYWORD_SET.has(name) &&
+        !JAVA_TYPE_SET.has(name)
+      ) {
         const paramList: { type: string; name: string }[] = [];
         if (paramsRaw) {
           for (const p of paramsRaw.split(",")) {
@@ -2618,9 +2602,9 @@ function extractJavaDocumentSymbols(
 
   // 3. User-defined classes: `class Solution`
   const lineCount = model.getLineCount();
+  const codeLines = maskJavaComments(model.getValue()).split("\n");
   for (let ln = 1; ln <= lineCount; ln++) {
-    const rawLine = model.getLineContent(ln);
-    const line = rawLine.split("//")[0].trim();
+    const line = (codeLines[ln - 1] ?? "").trim();
     if (!line) continue;
 
     const classMatch = line.match(/\bclass\s+([a-zA-Z_]\w*)/);
@@ -2930,9 +2914,9 @@ export function registerJavaCompletions(mInstance?: Monaco) {
         // Double chain before dot: e.g. "System.out." or "System.err."
         const doubleChainMatch = textBeforeWord.match(/([a-zA-Z_]\w*)\.([a-zA-Z_]\w*)\.$/);
         if (doubleChainMatch) {
-          const prefix = doubleChainMatch[1].toLowerCase();
-          const sub = doubleChainMatch[2].toLowerCase();
-          if (prefix === "system" && (sub === "out" || sub === "err")) {
+          const prefix = doubleChainMatch[1];
+          const sub = doubleChainMatch[2];
+          if (prefix === "System" && (sub === "out" || sub === "err")) {
             return {
               suggestions: deduplicateSuggestions(toCompletionItems(PRINTSTREAM_MEMBERS, range)),
             };
@@ -3002,60 +2986,59 @@ export function registerJavaCompletions(mInstance?: Monaco) {
         }
 
         // Standard library static classes
-        if (lowerTarget === "system") {
+        if (target === "System") {
           return {
             suggestions: deduplicateSuggestions(toCompletionItems(SYSTEM_MEMBERS, range)),
           };
         }
-        if (lowerTarget === "math") {
+        if (target === "Math") {
           return {
             suggestions: deduplicateSuggestions(toCompletionItems(MATH_MEMBERS, range)),
           };
         }
-        if (lowerTarget === "arrays") {
+        if (target === "Arrays") {
           return {
             suggestions: deduplicateSuggestions(toCompletionItems(ARRAYS_MEMBERS, range)),
           };
         }
-        if (lowerTarget === "collections") {
+        if (target === "Collections") {
           return {
             suggestions: deduplicateSuggestions(toCompletionItems(COLLECTIONS_MEMBERS, range)),
           };
         }
-        if (lowerTarget === "integer") {
+        if (target === "Integer") {
           return {
             suggestions: deduplicateSuggestions(toCompletionItems(INTEGER_STATIC_MEMBERS, range)),
           };
         }
-        if (lowerTarget === "long") {
+        if (target === "Long") {
           return {
             suggestions: deduplicateSuggestions(toCompletionItems(LONG_STATIC_MEMBERS, range)),
           };
         }
-        if (lowerTarget === "double") {
+        if (target === "Double") {
           return {
             suggestions: deduplicateSuggestions(toCompletionItems(DOUBLE_STATIC_MEMBERS, range)),
           };
         }
-        if (lowerTarget === "character") {
+        if (target === "Character") {
           return {
             suggestions: deduplicateSuggestions(toCompletionItems(CHARACTER_STATIC_MEMBERS, range)),
           };
         }
-        if (lowerTarget === "boolean") {
+        if (target === "Boolean") {
           return {
             suggestions: deduplicateSuggestions(toCompletionItems(BOOLEAN_STATIC_MEMBERS, range)),
           };
         }
-        if (lowerTarget === "objects") {
+        if (target === "Objects") {
           return {
             suggestions: deduplicateSuggestions(toCompletionItems(OBJECTS_MEMBERS, range)),
           };
         }
-        if (lowerTarget === "string") {
-          const stringStaticAndInstance = [...STRING_INSTANCE_MEMBERS, ...COMMON_INSTANCE_MEMBERS];
+        if (target === "String") {
           return {
-            suggestions: deduplicateSuggestions(toCompletionItems(stringStaticAndInstance, range)),
+            suggestions: deduplicateSuggestions(toCompletionItems(STRING_STATIC_MEMBERS, range)),
           };
         }
 
@@ -3374,30 +3357,30 @@ export function registerJavaCompletions(mInstance?: Monaco) {
 
       let match: MethodItem | undefined;
 
-      if (qualifier === "system.out" || qualifier === "system.err") {
+      if (rawQualifier === "System.out" || rawQualifier === "System.err") {
         match = findInList(PRINTSTREAM_MEMBERS, name);
-      } else if (qualifier === "system") {
+      } else if (rawQualifier === "System") {
         match = findInList(SYSTEM_MEMBERS, name);
-      } else if (qualifier === "math") {
+      } else if (rawQualifier === "Math") {
         match = findInList(MATH_MEMBERS, name);
-      } else if (qualifier === "arrays") {
+      } else if (rawQualifier === "Arrays") {
         match = findInList(ARRAYS_MEMBERS, name);
-      } else if (qualifier === "collections") {
+      } else if (rawQualifier === "Collections") {
         match = findInList(COLLECTIONS_MEMBERS, name);
-      } else if (qualifier === "integer") {
+      } else if (rawQualifier === "Integer") {
         match = findInList(INTEGER_STATIC_MEMBERS, name);
-      } else if (qualifier === "long") {
+      } else if (rawQualifier === "Long") {
         match = findInList(LONG_STATIC_MEMBERS, name);
-      } else if (qualifier === "double") {
+      } else if (rawQualifier === "Double") {
         match = findInList(DOUBLE_STATIC_MEMBERS, name);
-      } else if (qualifier === "character") {
+      } else if (rawQualifier === "Character") {
         match = findInList(CHARACTER_STATIC_MEMBERS, name);
-      } else if (qualifier === "boolean") {
+      } else if (rawQualifier === "Boolean") {
         match = findInList(BOOLEAN_STATIC_MEMBERS, name);
-      } else if (qualifier === "objects") {
+      } else if (rawQualifier === "Objects") {
         match = findInList(OBJECTS_MEMBERS, name);
-      } else if (qualifier === "string") {
-        match = findInList(STRING_INSTANCE_MEMBERS, name);
+      } else if (rawQualifier === "String") {
+        match = findInList(STRING_STATIC_MEMBERS, name);
       } else if (qualifier === "this" || qualifier === "super") {
         const docMethods = extractJavaDocumentMethods(model, position.lineNumber);
         const dm = docMethods.get(name);
@@ -3756,22 +3739,22 @@ export function registerJavaCompletions(mInstance?: Monaco) {
 
       // 3. Qualified call: look up signature definition
       const ALL_LISTS: { qual?: string; items: MethodItem[] }[] = [
-        { qual: "system.out", items: PRINTSTREAM_MEMBERS },
-        { qual: "system.err", items: PRINTSTREAM_MEMBERS },
-        { qual: "system", items: SYSTEM_MEMBERS },
-        { qual: "math", items: MATH_MEMBERS },
-        { qual: "arrays", items: ARRAYS_MEMBERS },
-        { qual: "collections", items: COLLECTIONS_MEMBERS },
-        { qual: "integer", items: INTEGER_STATIC_MEMBERS },
-        { qual: "long", items: LONG_STATIC_MEMBERS },
-        { qual: "double", items: DOUBLE_STATIC_MEMBERS },
-        { qual: "character", items: CHARACTER_STATIC_MEMBERS },
-        { qual: "boolean", items: BOOLEAN_STATIC_MEMBERS },
-        { qual: "objects", items: OBJECTS_MEMBERS },
+        { qual: "System.out", items: PRINTSTREAM_MEMBERS },
+        { qual: "System.err", items: PRINTSTREAM_MEMBERS },
+        { qual: "System", items: SYSTEM_MEMBERS },
+        { qual: "Math", items: MATH_MEMBERS },
+        { qual: "Arrays", items: ARRAYS_MEMBERS },
+        { qual: "Collections", items: COLLECTIONS_MEMBERS },
+        { qual: "Integer", items: INTEGER_STATIC_MEMBERS },
+        { qual: "Long", items: LONG_STATIC_MEMBERS },
+        { qual: "Double", items: DOUBLE_STATIC_MEMBERS },
+        { qual: "Character", items: CHARACTER_STATIC_MEMBERS },
+        { qual: "Boolean", items: BOOLEAN_STATIC_MEMBERS },
+        { qual: "Objects", items: OBJECTS_MEMBERS },
       ];
 
       for (const entry of ALL_LISTS) {
-        if (entry.qual === qualifier) {
+        if (entry.qual === rawQualifier) {
           const found = entry.items.find((item) => item.label === methodName);
           if (found) return buildSigResult(found, top.argCount);
         }

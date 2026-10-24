@@ -1919,3 +1919,45 @@ test("C: Signature help keeps function-pointer parameters whole", () => {
   const at = cSig("atexit(");
   assert.equal(at.value.signatures[0].parameters.length, 1, "atexit has 1 parameter");
 });
+
+test("Java: a call to a method does not replace its declared signature", () => {
+  const src =
+    "class A {\n  int helper(int x, int y) { return x + y; }\n  int run() {\n    if (true) return helper(1, 2);\n    helper(";
+  assert.equal(javaSig(src)?.value.signatures[0].label, "int helper(int x, int y)");
+  const hoverSrc =
+    "class A {\n  int helper(int x, int y) { return x + y; }\n  int run() {\n    return helper(1, 2);\n  }\n}";
+  assert.equal(
+    javaHover(hoverSrc, 14, 4)?.contents[0].value,
+    "```java\nint helper(int x, int y)\n```",
+  );
+  const newSrc = "class A {\n  void t() {\n    Scanner sc = new Scanner(System.in);\n    Scann";
+  const { mockMonaco, completionProviders } = setupMockMonaco();
+  registerJavaCompletions(mockMonaco);
+  const items = completionProviders["java"].provideCompletionItems(
+    createMockModel(newSrc),
+    endOf(newSrc),
+  ).suggestions;
+  assert.ok(
+    !items.some((s: any) => s.label === "Scanner" && s.insertText === "Scanner()"),
+    "new Scanner(...) is not a method of the class",
+  );
+});
+
+test("Java: a variable named like a library class uses its own type", () => {
+  const arr = javaLabels("class A {\n  void t() {\n    int[] arrays = new int[3];\n    arrays.");
+  assert.ok(arr.includes("length") && !arr.includes("sort"), "int[] arrays gets array members");
+  const str = javaLabels('class A {\n  void t() {\n    String math = "x";\n    math.');
+  assert.ok(str.includes("charAt") && !str.includes("sqrt"), "String math gets String members");
+  assert.ok(javaLabels("Math.").includes("sqrt"), "Math. still gets Math members");
+});
+
+test("Java: // inside a string does not hide a declaration", () => {
+  const labels = javaLabels('class A {\n  void t() {\n    String url = "http://x";\n    url.');
+  assert.ok(labels.includes("charAt") && !labels.includes("add"), "url is a String, not a List");
+});
+
+test("Java: String. suggests only static methods", () => {
+  const labels = javaLabels("String.");
+  assert.ok(labels.includes("valueOf") && labels.includes("join"));
+  assert.ok(!labels.includes("length") && !labels.includes("charAt"));
+});
