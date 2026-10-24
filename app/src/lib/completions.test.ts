@@ -2790,3 +2790,36 @@ test("C++: `return v;` does not hide v's declaration", () => {
   const labels = cppLabels("vector<int> f() {\n  vector<int> v;\n  if (v.empty()) return v;\n  v.");
   assert.ok(labels.includes("push_back") && !labels.includes("substr"), "v is a vector");
 });
+
+const SQL_SCHEMA =
+  "CREATE TABLE students (id INT, name VARCHAR(50));\nCREATE TABLE staff (sid INT, salary INT);\n";
+
+function sqlItemsAt(src: string, upTo: string, context?: unknown): string[] {
+  const { mockMonaco, completionProviders } = setupMockMonaco();
+  registerSqlCompletions(mockMonaco);
+  return completionProviders["mysql"]
+    .provideCompletionItems(createMockModel(src), endOf(upTo), context)
+    .suggestions.map((s: any) => s.label);
+}
+
+test("SQL: an alias resolves within its own statement", () => {
+  const first = SQL_SCHEMA + "SELECT * FROM students s WHERE s.";
+  const labels = sqlItemsAt(first + "\nSELECT * FROM staff s;", first);
+  assert.deepEqual(labels, ["id", "name"], "s is students here, not staff from the next query");
+  const selectFirst = SQL_SCHEMA + "SELECT s.";
+  const later = sqlItemsAt(selectFirst + "\nFROM staff s\nWHERE s.sid > 1;", selectFirst);
+  assert.deepEqual(later, ["sid", "salary"], "FROM on a later line of the same query still counts");
+});
+
+test("SQL: a space only opens the list after FROM, JOIN and similar", () => {
+  const space = { triggerKind: 1, triggerCharacter: " " };
+  const mid = SQL_SCHEMA + "SELECT * FROM students WHERE id = 1 AND ";
+  assert.equal(sqlItemsAt(mid, mid, space).length, 0, "no list after an ordinary space");
+  const from = SQL_SCHEMA + "SELECT * FROM ";
+  assert.deepEqual(sqlItemsAt(from, from, space), ["students", "staff"]);
+});
+
+test("SQL: every CTE in a WITH list is a table", () => {
+  const src = "WITH a AS (SELECT 1), b AS (SELECT 2)\nSELECT * FROM ";
+  assert.deepEqual(sqlItemsAt(src, src), ["a", "b"]);
+});

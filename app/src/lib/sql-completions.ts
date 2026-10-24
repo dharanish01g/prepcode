@@ -1097,7 +1097,8 @@ export function parseSqlDocumentTables(
   }
 
   // 2. CTEs: WITH [RECURSIVE] cte_name AS (...)
-  const cteRegex = /\bWITH\s+(?:RECURSIVE\s+)?(?:`|")?([a-zA-Z_]\w*)(?:`|")?\s+AS\s*\(/gi;
+  const cteRegex =
+    /(?:\bWITH\s+(?:RECURSIVE\s+)?|\)\s*,\s*)(?:`|")?([a-zA-Z_]\w*)(?:`|")?\s+AS\s*\(/gi;
   let cteMatch: RegExpExecArray | null;
   while ((cteMatch = cteRegex.exec(cleaned)) !== null) {
     const cteName = cteMatch[1];
@@ -1209,6 +1210,38 @@ export function extractSqlAliases(queryText: string): Map<string, string> {
   }
 
   return aliases;
+}
+
+/**
+ * The statement around the cursor: the text between the `;` before it and the
+ * `;` after it. Aliases like `s` are reused across queries in one file, so they
+ * must be read from this statement only.
+ */
+export function currentSqlStatement(
+  model: monacoDefault.editor.ITextModel,
+  position: monacoDefault.IPosition,
+): string {
+  const full = model.getValue();
+  let offset = 0;
+  for (let ln = 1; ln < position.lineNumber; ln++) {
+    offset += model.getLineContent(ln).length + 1;
+  }
+  offset += position.column - 1;
+  // Same length as `full`, so offsets line up; `;` in strings and comments is gone.
+  const cleaned = stripSqlCommentsAndStrings(full);
+  const start = cleaned.lastIndexOf(";", offset - 1) + 1;
+  let end = cleaned.indexOf(";", offset);
+  if (end === -1) end = full.length;
+  // The query being typed often has no `;` yet: a later unindented line that
+  // starts a new statement ends it too (indented subqueries do not).
+  const lineEnd = cleaned.indexOf("\n", offset);
+  if (lineEnd !== -1 && lineEnd < end) {
+    const next = /\n(?:SELECT|INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|WITH|TRUNCATE)\b/i.exec(
+      cleaned.slice(lineEnd, end),
+    );
+    if (next) end = lineEnd + next.index;
+  }
+  return full.slice(start, end);
 }
 
 function splitTopLevelCommas(str: string): string[] {
@@ -1327,7 +1360,7 @@ export function registerSqlCompletions(mInstance?: Monaco) {
     // 1. Completion Provider
     m.languages.registerCompletionItemProvider(lang, {
       triggerCharacters: [".", " "],
-      provideCompletionItems(model, position) {
+      provideCompletionItems(model, position, context) {
         if (isInsideSqlCommentOrString(model, position)) {
           return { suggestions: [] };
         }
@@ -1359,9 +1392,8 @@ export function registerSqlCompletions(mInstance?: Monaco) {
           const target = targetMatch[1].toLowerCase();
           const docTables = parseSqlDocumentTables(model);
 
-          // Check if target is an alias in the document
-          const fullDoc = model.getValue();
-          const aliases = extractSqlAliases(fullDoc);
+          // Check if target is an alias in this statement
+          const aliases = extractSqlAliases(currentSqlStatement(model, position));
           const resolvedTableName = aliases.get(target) ?? target;
 
           const tableDef = docTables.get(resolvedTableName);
@@ -1424,6 +1456,12 @@ export function registerSqlCompletions(mInstance?: Monaco) {
           return {
             suggestions: deduplicateSuggestions(tableSuggestions),
           };
+        }
+
+        // A space only opens the list after FROM, JOIN, etc.; otherwise every
+        // space in a query would pop up the full keyword list.
+        if (context?.triggerCharacter === " ") {
+          return { suggestions: [] };
         }
 
         // Standard SQL keyword suggestions
@@ -1516,8 +1554,7 @@ export function registerSqlCompletions(mInstance?: Monaco) {
             .match(/(?:`|")?([a-zA-Z_]\w*)(?:`|")?$/);
           if (targetMatch) {
             const target = targetMatch[1].toLowerCase();
-            const fullDoc = model.getValue();
-            const aliases = extractSqlAliases(fullDoc);
+            const aliases = extractSqlAliases(currentSqlStatement(model, position));
             const resolvedTable = aliases.get(target) ?? target;
             const docTables = parseSqlDocumentTables(model);
             const tbl = docTables.get(resolvedTable);
