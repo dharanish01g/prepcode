@@ -10,6 +10,7 @@ import { registerCppCompletions } from "@/lib/cpp-completions";
 import { registerCSharpCompletions } from "@/lib/csharp-completions";
 import { registerJavaCompletions } from "@/lib/java-completions";
 import { registerPythonCompletions } from "@/lib/python-completions";
+import { registerSqlCompletions } from "@/lib/sql-completions";
 
 self.MonacoEnvironment = {
   // Once getWorker is set, Monaco asks it for every worker and never falls
@@ -29,6 +30,7 @@ registerCppCompletions(monaco);
 registerCSharpCompletions(monaco);
 registerJavaCompletions(monaco);
 registerPythonCompletions(monaco);
+registerSqlCompletions(monaco);
 
 /** Code text size in both editors. */
 export const EDITOR_FONT_SIZE = 13;
