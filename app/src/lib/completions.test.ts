@@ -4,7 +4,7 @@ import test from "node:test";
 import { registerCCompletions } from "./c-completions.ts";
 import { registerCppCompletions } from "./cpp-completions.ts";
 import { registerCSharpCompletions } from "./csharp-completions.ts";
-import { registerGoCompletions } from "./go-completions.ts";
+import { GO_SIGNATURES, goParamOffsets, registerGoCompletions } from "./go-completions.ts";
 import { registerJavaCompletions } from "./java-completions.ts";
 import { registerPythonCompletions } from "./python-completions.ts";
 import { registerSqlCompletions } from "./sql-completions.ts";
@@ -1228,6 +1228,114 @@ func solve(n int, arr []int) int {
 
   // bufio.NewScanner signature help
   assert.equal(goSig("bufio.NewScanner("), 0, "bufio.NewScanner param 0");
+});
+
+const GO_NODE = `package main
+type Node struct {
+  Val int
+  Next *Node
+  Children []*Node
+}
+`;
+
+test("Go: a comparison is not taken for an assignment", () => {
+  const fn = `${GO_NODE}func walk(node *Node, other *Node) {\n`;
+  for (const line of ["  if node == nil { return }", "  same := node == other"]) {
+    const items = goLabels(`${fn}${line}\n  node.`);
+    assert.ok(items.includes("Val") && items.includes("Next"), `after "${line.trim()}"`);
+  }
+});
+
+test("Go: reassignment keeps the declared type, copies and fields are followed", () => {
+  const fn = `${GO_NODE}func last(head *Node) {\n`;
+  const fields = (src: string) => {
+    const items = goLabels(fn + src);
+    return items.includes("Val") && items.includes("Next");
+  };
+  assert.ok(fields("  cur := head\n  cur."), "cur := head");
+  assert.ok(
+    fields("  cur := head\n  for cur.Next != nil {\n    cur = cur.Next\n  }\n  cur."),
+    "cur = cur.Next",
+  );
+  assert.ok(fields("  next := head.Next\n  next."), "next := head.Next");
+  assert.ok(fields("  head.Next."), "head.Next.");
+  assert.ok(fields("  head.Children[0]."), "[]*Node field element");
+  assert.ok(fields("  p := &head\n  x := 1\n  _ = x\n  head."), "unrelated lines in between");
+});
+
+test("Go: map values from literals and if headers", () => {
+  const src = `package main
+type Person struct {
+  Name string
+}
+func main() {
+  people := map[string]Person{}
+  if p, ok := people["a"]; ok {
+    p.`;
+  assert.ok(goLabels(src).includes("Name"), "p from people[...] in an if header");
+  const byPtr = `${GO_NODE}func main() {\n  seen := make(map[int]*Node)\n  n := seen[1]\n  n.`;
+  assert.ok(goLabels(byPtr).includes("Next"), "make(map[int]*Node) value");
+});
+
+test("Go: loop and if/switch header variables are suggested", () => {
+  const forI = goLabels("package main\nfunc main() {\n  for i := 0; i < 3; i++ {\n    ");
+  assert.ok(forI.includes("i"), "for i := 0");
+  const rangeV = goLabels(
+    "package main\nfunc main() {\n  nums := []int{1}\n  for _, num := range nums {\n    ",
+  );
+  assert.ok(rangeV.includes("num"), "range value");
+  assert.ok(!rangeV.includes("_"), "blank identifier is not a variable");
+  const ifInit = goLabels(
+    'package main\nfunc main() {\n  m := map[string]int{}\n  if v, ok := m["a"]; ok {\n    ',
+  );
+  assert.ok(ifInit.includes("v") && ifInit.includes("ok"), "if v, ok := ...");
+  const after = goLabels("package main\nfunc main() {\n  for i := 0; i < 3; i++ {\n  }\n  ");
+  assert.ok(!after.includes("i"), "loop variable is gone after the loop");
+});
+
+test("Go: package-level var and const with or without a type", () => {
+  const items = goLabels(
+    "package main\nvar count = 0\nconst limit = 10\nvar total int\nvar a, b int\nfunc main() {\n  ",
+  );
+  for (const name of ["count", "limit", "total", "a", "b"]) {
+    assert.ok(items.includes(name), name);
+  }
+});
+
+test("Go: the active parameter can be highlighted in the signature", () => {
+  const at = (label: string, offsets: [number, number][]) =>
+    offsets.map(([s, e]) => label.slice(s, e));
+  const append = "func append(slice []Type, elems ...Type) []Type";
+  assert.deepEqual(at(append, goParamOffsets(append, ["slice: []Type", "elems ...Type"])), [
+    "slice []Type",
+    "elems ...Type",
+  ]);
+  const copyLabel = "func copy(dst, src []Type) int";
+  assert.deepEqual(at(copyLabel, goParamOffsets(copyLabel, ["dst: []Type", "src: []Type"])), [
+    "dst",
+    "src []Type",
+  ]);
+  const method = "func (s *Stack) Push(s2 int, v int)";
+  assert.deepEqual(at(method, goParamOffsets(method, ["s2: int", "v: int"])), ["s2 int", "v int"]);
+
+  const { mockMonaco, sigHelpProviders } = setupMockMonaco();
+  registerGoCompletions(mockMonaco);
+  const src = "package main\nfunc add(a, b int) int {\n  return a + b\n}\nfunc main() {\n  add(1, ";
+  const r = sigHelpProviders["go"].provideSignatureHelp(createMockModel(src), endOf(src));
+  const sig = r.value.signatures[0];
+  assert.equal(r.value.activeParameter, 1);
+  assert.equal(at(sig.label, [sig.parameters[1].label])[0], "b int", "user function param");
+  let found = 0;
+  let total = 0;
+  for (const s of Object.values(GO_SIGNATURES)) {
+    const offsets = goParamOffsets(
+      s.label,
+      s.params.map((p) => p.label),
+    );
+    total += offsets.length;
+    found += offsets.filter(([a, b]) => b > a).length;
+  }
+  assert.ok(found / total > 0.9, `${found}/${total} built-in parameters found in their signatures`);
 });
 
 // ==========================================

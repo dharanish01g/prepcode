@@ -1,14 +1,13 @@
 import * as monacoDefault from "monaco-editor";
+import {
+  type CompletionItemDef,
+  deduplicateSuggestions,
+  toCompletionItems as toItems,
+} from "./completion-utils.ts";
 
 type Monaco = typeof monacoDefault;
 
-export interface CompletionItemDef {
-  label: string;
-  kind?: monacoDefault.languages.CompletionItemKind;
-  snippet?: string;
-  detail?: string;
-  documentation?: string;
-}
+export type { CompletionItemDef };
 
 // ---------------------------------------------------------------------------
 // 1. Standard Library Packages & Exported Members
@@ -2533,7 +2532,7 @@ export function extractGoDocumentSymbols(
       // Inside struct: parse fields e.g. "Name string", "Age int", "Tags []string", "Address *Address"
       // or multiple fields: "X, Y float64"
       const fieldMatch = rawLine.match(
-        /^([A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)\s+([*]?(?:\[\])?[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)?)/,
+        /^([A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)\s+((?:\[\d*\]|\*|map\[[^\]]+\])*[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)?)/,
       );
       if (fieldMatch) {
         const fieldNames = fieldMatch[1].split(",").map((s) => s.trim());
@@ -2716,9 +2715,11 @@ export function inferGoType(
   model: monacoDefault.editor.ITextModel,
   position: monacoDefault.Position,
   textBeforeDot: string,
+  depth = 0,
 ): InferredGoType {
   const expr = textBeforeDot.trim();
-  if (!expr) return "unknown";
+  // Guards against chains like x := y, y := x looking each other up forever.
+  if (!expr || depth > 6) return "unknown";
 
   // String literals
   if (
@@ -2737,17 +2738,28 @@ export function inferGoType(
   const indexMatch = expr.match(/^(.+)\[[^\[\]]*\]$/);
   if (indexMatch) {
     const baseExpr = indexMatch[1].trim();
-    const baseType = inferGoType(model, position, baseExpr);
+    const baseType = inferGoType(model, position, baseExpr, depth + 1);
     if (baseType === "[]string") return "string";
     if (baseType === "[]int") return "int";
     if (baseType === "[]float64") return "float64";
     if (baseType === "[]byte") return "byte";
     if (baseType.startsWith("[]")) return baseType.slice(2);
     if (baseType.startsWith("map[")) {
-      const valTypeMatch = baseType.match(/^map\[.+\](.+)$/);
+      const valTypeMatch = baseType.match(/^map\[[^\]]+\](.+)$/);
       if (valTypeMatch) return valTypeMatch[1].trim();
     }
     return "unknown";
+  }
+
+  // Field access e.g. cur.Next or p.Address: the field's type in the struct
+  // (not after a call, e.g. time.Now().Year, whose result type isn't known).
+  const fieldAccess = expr.match(/^(.+)\.([A-Za-z_]\w*)$/);
+  if (fieldAccess && !fieldAccess[1].trimEnd().endsWith(")")) {
+    const baseType = normalizeGoTypeName(inferGoType(model, position, fieldAccess[1], depth + 1));
+    const field = extractGoDocumentSymbols(model)
+      .structs.get(baseType)
+      ?.fields.find((f) => f.label === fieldAccess[2]);
+    return field?.detail ? field.detail.slice(field.label.length).trim() : "unknown";
   }
 
   // Identifier check (variable name)
@@ -2779,14 +2791,14 @@ export function inferGoType(
         return "int"; // loop index
       }
       if (varName === secondVar) {
-        const itemsType = inferGoType(model, position, itemsVar);
+        const itemsType = inferGoType(model, position, itemsVar, depth + 1);
         if (itemsType === "[]string") return "string";
         if (itemsType === "[]int") return "int";
         if (itemsType === "[]float64") return "float64";
         if (itemsType === "[]byte") return "byte";
         if (itemsType.startsWith("[]")) return itemsType.slice(2);
         if (itemsType.startsWith("map[")) {
-          const valTypeMatch = itemsType.match(/^map\[.+\](.+)$/);
+          const valTypeMatch = itemsType.match(/^map\[[^\]]+\](.+)$/);
           if (valTypeMatch) return valTypeMatch[1].trim();
         }
         return "unknown";
@@ -2801,15 +2813,18 @@ export function inferGoType(
       return "bool";
     }
 
-    // 3. Short or standard variable assignment: x := ... or var x = ... or x = ...
-    if (!/^\s*for\b/.test(maskedLine)) {
-      const shortAssign = maskedLine.match(
-        new RegExp(
-          `(?:\\bvar\\s+)?\\b${varName}\\s*(?:,\\s*(?:err|ok|[a-zA-Z_]\\w*))?\\s*(?::=|=)\\s*(.+)`,
-        ),
-      );
+    // 3. Declaration with a value: x := ..., var x = ... or const x = ..., also
+    // in an if/for/switch header (if v, ok := m[k]; ok {). A plain x = ...
+    // never changes a Go variable's type, and x == y isn't an assignment, so
+    // only declarations count. Range loops are handled above.
+    if (!/\brange\b/.test(maskedLine)) {
+      const shortAssign =
+        maskedLine.match(
+          new RegExp(`(?<![\\w.])${varName}\\s*(?:,\\s*[a-zA-Z_]\\w*)*\\s*:=\\s*(.+)`),
+        ) ?? maskedLine.match(new RegExp(`\\b(?:var|const)\\s+${varName}\\s*=\\s*(.+)`));
       if (shortAssign) {
-        const rhs = shortAssign[1].trim();
+        // In an if/for/switch header the value ends at the ";".
+        const rhs = shortAssign[1].split(";")[0].trim();
 
         // Literal string
         if (rhs.startsWith('"') || rhs.startsWith("`")) return "string";
@@ -2840,12 +2855,11 @@ export function inferGoType(
           return sliceTypeMatch[1];
         }
 
-        // Map
-        if (/^make\s*\(\s*map\[/.test(rhs)) {
-          const mMatch = rhs.match(/make\s*\(\s*(map\[[^\]]+\]\w+)/);
-          if (mMatch) return mMatch[1];
-          return "map";
-        }
+        // Map: make(map[string]*Node) or a literal, map[string]Person{...}
+        // (before struct literals, so the latter isn't taken for a Person)
+        const mapType = rhs.match(/^(?:make\s*\(\s*)?(map\[[^\]]+\][*\w.[\]]*?)\s*[{,)]/);
+        if (mapType) return mapType[1];
+        if (/^make\s*\(\s*map\[/.test(rhs)) return "map";
 
         // Scanner
         if (/^bufio\.NewScanner\b/.test(rhs)) return "*bufio.Scanner";
@@ -2865,6 +2879,13 @@ export function inferGoType(
           return structInst[1];
         }
 
+        // Another variable, a field or an element: cur := head, next := cur.Next,
+        // row := grid[0]. Looked up from the line above, so x := x can't loop.
+        if (ln > 1 && /^&?[A-Za-z_]\w*(?:\.[A-Za-z_]\w*|\[[^[\]]*\])*$/.test(rhs)) {
+          const above = { lineNumber: ln - 1, column: 1 } as monacoDefault.Position;
+          return inferGoType(model, above, rhs.replace(/^&/, ""), depth + 1);
+        }
+
         return "unknown";
       }
     }
@@ -2872,7 +2893,7 @@ export function inferGoType(
     // 4. Var declaration: var x string, var x = ..., var x int, or var a, b int
     const varDecl = maskedLine.match(
       new RegExp(
-        `\\bvar\\s+[^=;]*\\b${varName}\\b[^=;]*\\s+([*]?(?:\\[\\])?[A-Za-z_]\\w*(?:\\.[A-Za-z_]\\w*)?)`,
+        `\\bvar\\s+[^=;]*\\b${varName}\\b[^=;]*\\s+((?:\\[\\d*\\]|\\*|map\\[[^\\]]+\\])*[A-Za-z_]\\w*(?:\\.[A-Za-z_]\\w*)?)`,
       ),
     );
     if (varDecl) {
@@ -3449,36 +3470,39 @@ export const GO_SIGNATURES: Record<string, SignatureDef> = {
 // 9. Monaco Registration Helper
 // ---------------------------------------------------------------------------
 
-function deduplicateSuggestions(
-  items: monacoDefault.languages.CompletionItem[],
-): monacoDefault.languages.CompletionItem[] {
-  const seen = new Set<string>();
-  const result: monacoDefault.languages.CompletionItem[] = [];
-  for (const item of items) {
-    const key = typeof item.label === "string" ? item.label : item.label.label;
-    if (!seen.has(key)) {
-      seen.add(key);
-      result.push(item);
-    }
-  }
-  return result;
-}
-
 function toCompletionItems(
   items: CompletionItemDef[],
   range: monacoDefault.IRange,
 ): monacoDefault.languages.CompletionItem[] {
-  return items.map((item) => ({
-    label: item.label,
-    kind: item.kind ?? monacoDefault.languages.CompletionItemKind.Property,
-    insertText: item.snippet ?? item.label,
-    insertTextRules: item.snippet
-      ? monacoDefault.languages.CompletionItemInsertTextRule.InsertAsSnippet
-      : undefined,
-    detail: item.detail,
-    documentation: item.documentation,
-    range,
-  }));
+  return toItems(items, range, monacoDefault.languages.CompletionItemKind.Property);
+}
+
+/**
+ * Where each parameter sits in the signature's label, so Monaco can highlight
+ * the active one. Monaco only highlights a string label found word for word in
+ * the signature, and ours are written "name: type" while Go writes
+ * "name type" (or groups them, "a, b int"), so this looks for the label, then
+ * "name type", then the name alone, each after the previous parameter.
+ */
+export function goParamOffsets(sigLabel: string, paramLabels: string[]): [number, number][] {
+  // Skip a method's receiver: parameters start at the "(" right after a name.
+  let from = sigLabel.search(/\w\(/);
+  from = from < 0 ? 0 : from + 2;
+  return paramLabels.map((label) => {
+    const name = label.split(":")[0].trim();
+    const candidates = [label, label.replace(/:\s*/, " "), name];
+    for (const text of candidates) {
+      const escaped = text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const re = new RegExp(`(?<![\\w.])${escaped}(?![\\w])`, "g");
+      re.lastIndex = from;
+      const found = re.exec(sigLabel);
+      if (found) {
+        from = found.index + text.length;
+        return [found.index, found.index + text.length];
+      }
+    }
+    return [0, 0];
+  });
 }
 
 export function registerGoCompletions(mInstance?: Monaco) {
@@ -3633,12 +3657,15 @@ export function registerGoCompletions(mInstance?: Monaco) {
         const line = maskGoCommentsAndStrings(rawLine).trim();
         if (!line) continue;
 
-        // := declarations
-        const shortMatch = line.match(/^([a-zA-Z_]\w*(?:\s*,\s*[a-zA-Z_]\w*)*)\s*:=/);
+        // := declarations, also in if/for/switch headers: for i := 0; ...,
+        // for k, v := range m, if v, ok := m[k]; ok
+        const shortMatch = line.match(
+          /^(?:(?:if|for|switch)\s+)?([a-zA-Z_]\w*(?:\s*,\s*[a-zA-Z_]\w*)*)\s*:=/,
+        );
         if (shortMatch) {
           const vnames = shortMatch[1].split(",").map((v) => v.trim());
           for (const vn of vnames) {
-            if (!GO_KEYWORD_SET.has(vn) && !seenVars.has(vn)) {
+            if (vn !== "_" && !GO_KEYWORD_SET.has(vn) && !seenVars.has(vn)) {
               seenVars.add(vn);
               suggestions.push({
                 label: vn,
@@ -3650,20 +3677,24 @@ export function registerGoCompletions(mInstance?: Monaco) {
           }
         }
 
-        // var declarations
+        // var and const declarations, with a type, a value or both:
+        // var total int, var count = 0, const limit = 10, var a, b int
         const varMatch = line.match(
-          /\bvar\s+([a-zA-Z_]\w*)\s+([*]?(?:\[\])?[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)?)/,
+          /\b(var|const)\s+([a-zA-Z_]\w*(?:\s*,\s*[a-zA-Z_]\w*)*)(?:\s+((?:\[\d*\]|\*|map\[[^\]]+\])*[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)?))?/,
         );
         if (varMatch) {
-          const vn = varMatch[1];
-          const vt = varMatch[2];
-          if (!GO_KEYWORD_SET.has(vn) && !seenVars.has(vn)) {
+          const [, declKind, names, vt] = varMatch;
+          for (const vn of names.split(",").map((v) => v.trim())) {
+            if (vn === "_" || GO_KEYWORD_SET.has(vn) || seenVars.has(vn)) continue;
             seenVars.add(vn);
             suggestions.push({
               label: vn,
-              kind: monacoDefault.languages.CompletionItemKind.Variable,
-              detail: `var ${vn} ${vt}`,
-              documentation: "Variable",
+              kind:
+                declKind === "const"
+                  ? monacoDefault.languages.CompletionItemKind.Constant
+                  : monacoDefault.languages.CompletionItemKind.Variable,
+              detail: vt ? `${declKind} ${vn} ${vt}` : `${declKind} ${vn}`,
+              documentation: declKind === "const" ? "Constant" : "Variable",
             });
           }
         }
@@ -4188,14 +4219,18 @@ export function registerGoCompletions(mInstance?: Monaco) {
 
       const safeActiveParam = Math.min(activeParameter, Math.max(0, sigInfo.params.length - 1));
 
+      const offsets = goParamOffsets(
+        sigInfo.label,
+        sigInfo.params.map((p) => p.label),
+      );
       return {
         value: {
           signatures: [
             {
               label: sigInfo.label,
               documentation: sigInfo.doc,
-              parameters: sigInfo.params.map((p) => ({
-                label: p.label,
+              parameters: sigInfo.params.map((p, idx) => ({
+                label: offsets[idx],
                 documentation: p.doc,
               })),
             },
