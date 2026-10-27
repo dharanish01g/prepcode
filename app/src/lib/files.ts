@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { format } from "date-fns";
-import { findLanguage } from "@/lib/languages";
+import { findLanguage } from "./languages";
+import { createSaveQueue } from "./save-queue";
 
 /**
  * "queries.mysql.sql" -> "mysql.sql". Names never contain a dot, so everything
@@ -45,12 +46,10 @@ export function readFile(filename: string) {
 // Saves, renames and deletes run one at a time, in order, so an older save can
 // never land after a newer one, and a save queued before a delete can't bring
 // the file back afterwards.
-let saveQueue: Promise<unknown> = Promise.resolve();
+const saveQueue = createSaveQueue();
 
-function enqueue<T>(task: () => Promise<T>) {
-  const run = saveQueue.catch(() => {}).then(task);
-  saveQueue = run;
-  return run;
+export function enqueue<T>(task: () => Promise<T>) {
+  return saveQueue.enqueue(task);
 }
 
 export function writeFile(filename: string, content: string) {
@@ -89,10 +88,18 @@ export function listPracticeSolved() {
 
 /** Resolves once every queued save has finished (successfully or not). */
 export function whenSavesSettled() {
-  return saveQueue.then(
-    () => {},
-    () => {},
-  );
+  return saveQueue.settled();
+}
+
+/**
+ * Flushes pending editor changes (if any) and waits until all queued file
+ * operations (saves, renames, deletes) have settled to disk.
+ */
+export async function flushAndSettle(flushFn?: () => Promise<void> | void) {
+  if (flushFn) {
+    await flushFn();
+  }
+  await whenSavesSettled();
 }
 
 /** Mirrors validate_name in files.rs so errors show while typing. */

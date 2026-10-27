@@ -1,5 +1,6 @@
 import { useRef } from "react";
 import { Trash2Icon } from "lucide-react";
+import { toast } from "sonner";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -25,7 +26,7 @@ export function DeleteFileDialog({
   userId: string;
   onClose: () => void;
   /** Runs right before deleting, e.g. to save pending edits first. */
-  beforeDelete: () => void;
+  beforeDelete: () => Promise<void> | void;
   onDeleted: (filename: string) => void;
 }) {
   const remove = useDeleteFileMutation(userId);
@@ -59,9 +60,16 @@ export function DeleteFileDialog({
           <AlertDialogAction
             variant="destructive"
             disabled={remove.isPending}
-            onClick={() => {
+            onClick={async () => {
               if (!filename) return;
-              beforeDelete();
+              try {
+                await beforeDelete();
+              } catch (err) {
+                toast.error("Cannot delete: failed to flush pending edits", {
+                  description: err instanceof Error ? err.message : String(err),
+                });
+                return;
+              }
               remove.mutate(filename, {
                 onSuccess: () => {
                   remove.reset();

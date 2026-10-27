@@ -2,7 +2,7 @@ import { Fragment, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { ChevronLeftIcon, ChevronRightIcon, PlayIcon, SendIcon, WifiOffIcon } from "lucide-react";
 import { passedCount, type CheckState } from "@/components/check-results";
-import type { FlushRef } from "@/components/code-editor";
+import type { DiscardRef, FlushRef, HasUnsavedRef } from "@/components/code-editor";
 import { LanguagePicker } from "@/components/language-picker";
 import {
   Breadcrumb,
@@ -27,8 +27,9 @@ import { SidebarTrigger } from "@/components/ui/sidebar";
 import { Spinner } from "@/components/ui/spinner";
 import { celebrate } from "@/lib/celebrate";
 import { buildProgram, encodeInput } from "@/lib/drivers";
-import { markPracticeSolved } from "@/lib/files";
+import { flushAndSettle, markPracticeSolved } from "@/lib/files";
 import { queryKeys } from "@/lib/queries";
+import { toast } from "sonner";
 import { getLanguages, type Language } from "@/lib/languages";
 import { useQuestionQuery, type Question, type QuestionSummary } from "@/lib/questions";
 import { checkPractice, stopProgram } from "@/lib/run";
@@ -56,6 +57,9 @@ export function QuestionsScreen({
   selectedQuestion,
   onSelectQuestion,
   flushRef,
+  discardRef,
+  hasUnsavedRef,
+  onDirtyChange,
   onSubmitted,
 }: {
   userId: string;
@@ -71,6 +75,12 @@ export function QuestionsScreen({
   onSelectQuestion: (slug: string) => void;
   /** Set to a function that saves pending edits (used before logout). */
   flushRef: FlushRef;
+  /** Set to a function that discards pending edits without saving. */
+  discardRef?: DiscardRef;
+  /** Set to a function that returns whether the editor has unsaved edits. */
+  hasUnsavedRef?: HasUnsavedRef;
+  /** Called when the dirty/unsaved state changes. */
+  onDirtyChange?: (dirty: boolean) => void;
   /** After a Submit has run: e.g. sync the answer to GitHub. */
   onSubmitted?: (question: Question, language: Language) => void;
 }) {
@@ -114,9 +124,17 @@ export function QuestionsScreen({
       setCheck({ status: "error", message: "This question isn't ready to solve yet." });
       return;
     }
-    // Saves it too, so what runs is what's kept.
     const code = codeRef.current();
     if (code === null) return;
+    // Saves it too, so what runs is what's kept.
+    try {
+      await flushAndSettle(flushRef.current);
+    } catch (err) {
+      toast.error("Cannot run: failed to save code", {
+        description: err instanceof Error ? err.message : String(err),
+      });
+      return;
+    }
     setCheck({ status: "checking", kind });
     // Every Run and Submit loads for at least this long, however it ends.
     const minimum = new Promise((resolve) => setTimeout(resolve, MIN_CHECK_MS));
@@ -252,6 +270,9 @@ export function QuestionsScreen({
           question={question}
           language={language}
           flushRef={flushRef}
+          discardRef={discardRef}
+          hasUnsavedRef={hasUnsavedRef}
+          onDirtyChange={onDirtyChange}
           codeRef={codeRef}
           check={check}
           languagePicker={

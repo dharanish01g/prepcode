@@ -1,9 +1,13 @@
+/// <reference types="node" />
 import assert from "node:assert/strict";
 import test from "node:test";
 import { registerCCompletions } from "./c-completions.ts";
+import { registerCppCompletions } from "./cpp-completions.ts";
 import { registerCSharpCompletions } from "./csharp-completions.ts";
 import { registerGoCompletions } from "./go-completions.ts";
+import { registerJavaCompletions } from "./java-completions.ts";
 import { registerPythonCompletions } from "./python-completions.ts";
+import { registerSqlCompletions } from "./sql-completions.ts";
 
 // Helper mock types
 interface MockModel {
@@ -27,6 +31,7 @@ interface MockModel {
     endLineNumber: number;
     endColumn: number;
   }): string;
+  getPositionAt(offset: number): { lineNumber: number; column: number };
 }
 
 function createMockModel(content: string): MockModel {
@@ -91,6 +96,17 @@ function createMockModel(content: string): MockModel {
         }
       }
       return parts.join("\n");
+    },
+    getPositionAt(offset: number) {
+      let cur = 0;
+      for (let i = 0; i < lines.length; i++) {
+        const lineLen = lines[i].length + 1;
+        if (cur + lineLen > offset) {
+          return { lineNumber: i + 1, column: offset - cur + 1 };
+        }
+        cur += lineLen;
+      }
+      return { lineNumber: lines.length, column: (lines[lines.length - 1]?.length ?? 0) + 1 };
     },
   };
 }
@@ -1215,6 +1231,1399 @@ func solve(n int, arr []int) int {
 });
 
 // ==========================================
+// JAVA COMPLETION & SIGNATURE HELP TESTS
+// ==========================================
+
+function javaLabels(src: string, col?: number, line?: number): string[] {
+  const { mockMonaco, completionProviders } = setupMockMonaco();
+  registerJavaCompletions(mockMonaco);
+  const pos =
+    line !== undefined && col !== undefined ? { lineNumber: line, column: col } : endOf(src);
+  const r = completionProviders["java"].provideCompletionItems(createMockModel(src), pos);
+  return r.suggestions.map((s: any) => s.label);
+}
+
+function javaSig(src: string, col?: number, line?: number): any {
+  const { mockMonaco, sigHelpProviders } = setupMockMonaco();
+  registerJavaCompletions(mockMonaco);
+  const pos =
+    line !== undefined && col !== undefined ? { lineNumber: line, column: col } : endOf(src);
+  return sigHelpProviders["java"].provideSignatureHelp(createMockModel(src), pos);
+}
+
+function javaSigParam(src: string): number | null {
+  const s = javaSig(src);
+  return s ? s.value.activeParameter : null;
+}
+
+function javaHover(src: string, col: number, line = 1): any {
+  const { mockMonaco, hoverProviders } = setupMockMonaco();
+  registerJavaCompletions(mockMonaco);
+  return hoverProviders["java"].provideHover(createMockModel(src), {
+    lineNumber: line,
+    column: col,
+  });
+}
+
+test("Java: System members and System.out methods suggest correctly", () => {
+  const sys = javaLabels("System.");
+  assert.ok(sys.includes("out"), "System. suggests out");
+  assert.ok(sys.includes("err"), "System. suggests err");
+  assert.ok(sys.includes("currentTimeMillis"), "System. suggests currentTimeMillis");
+
+  const sout = javaLabels("System.out.");
+  assert.ok(sout.includes("println"), "System.out. suggests println");
+  assert.ok(sout.includes("print"), "System.out. suggests print");
+  assert.ok(sout.includes("printf"), "System.out. suggests printf");
+});
+
+test("Java: Math and Arrays static methods suggest correctly", () => {
+  const math = javaLabels("Math.");
+  assert.ok(
+    math.includes("max") && math.includes("min") && math.includes("abs") && math.includes("PI"),
+    "Math suggestions",
+  );
+
+  const arrays = javaLabels("Arrays.");
+  assert.ok(
+    arrays.includes("sort") && arrays.includes("binarySearch") && arrays.includes("fill"),
+    "Arrays suggestions",
+  );
+});
+
+test("Java: Variable heuristics provide appropriate member suggestions", () => {
+  const sc = javaLabels("Scanner sc = new Scanner(System.in);\nsc.");
+  assert.ok(
+    sc.includes("nextInt") && sc.includes("nextLine"),
+    "Scanner variable suggests Scanner methods",
+  );
+
+  const s = javaLabels('String s = "hello";\ns.');
+  assert.ok(
+    s.includes("length") && s.includes("charAt") && s.includes("substring"),
+    "String variable suggests String methods",
+  );
+
+  const list = javaLabels("List<Integer> nums = new ArrayList<>();\nnums.");
+  assert.ok(
+    list.includes("add") && list.includes("get") && list.includes("size"),
+    "List variable suggests List methods",
+  );
+});
+
+test("Java: Snippets and keywords are provided in un-dotted context", () => {
+  const labels = javaLabels("s");
+  assert.ok(labels.includes("sout"), "suggests sout snippet");
+  assert.ok(labels.includes("psvm") || labels.includes("main"), "suggests main/psvm snippet");
+  assert.ok(labels.includes("String"), "suggests String type");
+  assert.ok(labels.includes("public"), "suggests public keyword");
+});
+
+test("Java: Local variables and method parameters appear in completions", () => {
+  const src =
+    "public class Solution {\n    public int solve(int maxLimit, String targetPrefix) {\n        int runningTotal = 0;\n        r";
+  const labels = javaLabels(src);
+  assert.ok(labels.includes("runningTotal"), "local variable runningTotal suggested");
+  assert.ok(labels.includes("maxLimit"), "parameter maxLimit suggested");
+  assert.ok(labels.includes("targetPrefix"), "parameter targetPrefix suggested");
+});
+
+test("Java: Signature help correctly tracks parameters and depth", () => {
+  const sig1 = javaSig("System.out.println(");
+  assert.ok(sig1 && sig1.value.signatures.length > 0, "System.out.println( has signature help");
+
+  const sig2 = javaSig("Math.max(10, ");
+  assert.ok(sig2, "Math.max(10, has signature help");
+  assert.equal(sig2.value.activeParameter, 1, "activeParameter is 1 after comma");
+});
+
+test("Java: Hover documentation displays for qualified calls and types", () => {
+  const src = "Math.max(1, 2);";
+  const hover = javaHover(src, 7); // over 'max'
+  assert.ok(hover && hover.contents.length > 0, "Hover over Math.max returns doc content");
+  assert.ok(hover.contents[0].value.includes("Math.max"), "Contains method signature in hover");
+});
+
+test("Java Issue 1: Arrays suggest length and clone, NOT List methods (add, size, get)", () => {
+  // Explicit array declaration
+  const arrLabels = javaLabels("int[] arr = new int[10];\narr.");
+  assert.ok(arrLabels.includes("length"), "arr. suggests length field");
+  assert.ok(arrLabels.includes("clone"), "arr. suggests clone method");
+  assert.ok(!arrLabels.includes("add"), "arr. must not suggest List.add");
+  assert.ok(!arrLabels.includes("size"), "arr. must not suggest List.size");
+  assert.ok(!arrLabels.includes("get"), "arr. must not suggest List.get");
+
+  // Untyped heuristic fallback for 'arr'
+  const fallbackArr = javaLabels("arr.");
+  assert.ok(
+    fallbackArr.includes("length") && fallbackArr.includes("clone"),
+    "untyped arr suggests array members",
+  );
+  assert.ok(!fallbackArr.includes("add"), "untyped arr must not suggest List.add");
+
+  // Array of Strings
+  const wordsLabels = javaLabels("String[] words = new String[5];\nwords.");
+  assert.ok(
+    wordsLabels.includes("length") && !wordsLabels.includes("add"),
+    "words array suggests length, not add",
+  );
+});
+
+test("Java Issue 2: Primitive types (int, long, double, boolean) yield empty member suggestions", () => {
+  assert.equal(
+    javaLabels("int count = 5;\ncount.").length,
+    0,
+    "int count. must yield 0 suggestions (primitive cannot be dereferenced)",
+  );
+  assert.equal(
+    javaLabels("double total = 10.5;\ntotal.").length,
+    0,
+    "double total. must yield 0 suggestions",
+  );
+  assert.equal(
+    javaLabels("boolean isValid = true;\nisValid.").length,
+    0,
+    "boolean isValid. must yield 0 suggestions",
+  );
+});
+
+test("Java Issue 3: No made-up signature help for keywords or unqualified method calls", () => {
+  const { mockMonaco, sigHelpProviders } = setupMockMonaco();
+  registerJavaCompletions(mockMonaco);
+  const provider = sigHelpProviders["java"];
+
+  // Keywords and unqualified non-existent methods must return null
+  for (const line of [
+    "    if (",
+    "    while (x < ",
+    "    for (int i = 0; ",
+    "    Add(1, ",
+    "    get(0",
+    "    size(",
+  ]) {
+    const src = `class A {\n  void M() {\n${line}`;
+    assert.equal(provider.provideSignatureHelp(createMockModel(src), endOf(src)), null, line);
+  }
+
+  // Statically imported Math.max returns signature help even without 'Math.'
+  const staticMathSrc = "import static java.lang.Math.*;\nclass A {\n  void M() {\n    max(10, ";
+  const sigStatic = provider.provideSignatureHelp(
+    createMockModel(staticMathSrc),
+    endOf(staticMathSrc),
+  );
+  assert.ok(sigStatic, "Statically imported Math.max returns signature help");
+  assert.equal(sigStatic.value.activeParameter, 1, "Active parameter is 1 after comma");
+
+  // User-defined method in file returns its real declared signature
+  const userMethodSrc =
+    "class Solution {\n    public int customSum(int a, int b) {\n        return a + b;\n    }\n    void run() {\n        customSum(1, ";
+  const sigUser = provider.provideSignatureHelp(
+    createMockModel(userMethodSrc),
+    endOf(userMethodSrc),
+  );
+  assert.ok(sigUser, "User method in file returns signature help");
+  assert.ok(
+    sigUser.value.signatures[0].label.includes("customSum"),
+    "Contains user method signature",
+  );
+  assert.equal(sigUser.value.activeParameter, 1, "Active parameter is 1 after comma");
+});
+
+test("Java Issue 4: Context-aware main and psvm snippets prevent duplicate keywords", () => {
+  const { mockMonaco, completionProviders } = setupMockMonaco();
+  registerJavaCompletions(mockMonaco);
+  const provider = completionProviders["java"];
+
+  const getSnippetInsert = (src: string, label: string) => {
+    const res = provider.provideCompletionItems(createMockModel(src), endOf(src));
+    const item = res.suggestions.find((s: any) => s.label === label);
+    return item ? item.insertText : null;
+  };
+
+  // On empty line: full declaration
+  const full = getSnippetInsert("    ", "main");
+  assert.ok(full.startsWith("public static void main"), "Empty line suggests full signature");
+
+  // After 'public static void ': trimmed to prevent keyword duplication
+  const trimmed1 = getSnippetInsert("public static void ", "main");
+  assert.ok(
+    trimmed1.startsWith("main(String[] args)"),
+    "After 'public static void ', insertText is just main(...)",
+  );
+
+  // After 'public static ': trimmed
+  const trimmed2 = getSnippetInsert("public static ", "psvm");
+  assert.ok(
+    trimmed2.startsWith("void main(String[] args)"),
+    "After 'public static ', insertText is void main(...)",
+  );
+
+  // After 'static void ': trimmed
+  const trimmed3 = getSnippetInsert("static void ", "main");
+  assert.ok(
+    trimmed3.startsWith("main(String[] args)"),
+    "After 'static void ', insertText is main(...)",
+  );
+});
+
+test("Java Issue 5: Variable type inference and hover displays variable types and keyword docs", () => {
+  // Local variable hover: int[] nums
+  const src = "public class Solution {\n    int[] nums = new int[5];\n}";
+  const hoverNums = javaHover(src, 11, 2); // over 'nums'
+  assert.ok(
+    hoverNums && hoverNums.contents[0].value.includes("int[] nums"),
+    "Hover over nums displays int[] nums",
+  );
+
+  // Local variable hover: Scanner sc
+  const srcSc = "Scanner sc = new Scanner(System.in);";
+  const hoverSc = javaHover(srcSc, 9); // over 'sc'
+  assert.ok(
+    hoverSc && hoverSc.contents[0].value.includes("Scanner sc"),
+    "Hover over sc displays Scanner sc",
+  );
+
+  // Keyword hover: int
+  const srcKw = "int x = 10;";
+  const hoverKw = javaHover(srcKw, 2); // over 'int'
+  assert.ok(
+    hoverKw && hoverKw.contents[0].value.includes("keyword int"),
+    "Hover over keyword int displays docs",
+  );
+
+  // Array length hover
+  const srcLen = "arr.length";
+  const hoverLen = javaHover(srcLen, 6); // over 'length'
+  assert.ok(
+    hoverLen && hoverLen.contents[0].value.includes("length"),
+    "Hover over arr.length displays array length doc",
+  );
+});
+
+test("Java Issue 6: Subscript access (words[0]., nums[i]., matrix[0].) infers element types", () => {
+  // String array element
+  const strElem = javaLabels("String[] words = new String[5];\nwords[0].");
+  assert.ok(
+    strElem.includes("charAt") && strElem.includes("substring") && strElem.includes("length"),
+    "words[0]. suggests String methods",
+  );
+
+  // Primitive array element (int) cannot be dereferenced
+  const primElem = javaLabels("int[] nums = new int[5];\nnums[i].");
+  assert.equal(primElem.length, 0, "nums[i]. yields 0 suggestions for primitive int");
+
+  // 2D array element is an array
+  const matElem = javaLabels("int[][] matrix = new int[5][5];\nmatrix[0].");
+  assert.ok(
+    matElem.includes("length") && matElem.includes("clone"),
+    "matrix[0]. suggests array members",
+  );
+  assert.ok(!matElem.includes("add"), "matrix[0]. must not suggest List.add");
+});
+
+test("Java Issue 7: Chained method returns (.toString()., .nextLine().)", () => {
+  const sbStr = javaLabels("StringBuilder sb = new StringBuilder();\nsb.toString().");
+  assert.ok(
+    sbStr.includes("charAt") && sbStr.includes("substring"),
+    "sb.toString(). suggests String methods",
+  );
+
+  const scStr = javaLabels("Scanner sc = new Scanner(System.in);\nsc.nextLine().");
+  assert.ok(
+    scStr.includes("trim") && scStr.includes("split"),
+    "sc.nextLine(). suggests String methods",
+  );
+});
+
+test("Java Issue 8: Scope tracking - another method's locals and parameters do not leak", () => {
+  // Method a's local variable must not show up in method b
+  const code1 = `class Solution {
+    void a() {
+        int onlyInA = 1;
+    }
+    void b() {
+        only_`;
+  assert.ok(
+    !javaLabels(code1).includes("onlyInA"),
+    "onlyInA must not leak from method a to method b",
+  );
+
+  // Method a's parameter must not show up in method b
+  const code2 = `class Solution {
+    void a(int paramA) {
+    }
+    void b(int paramB) {
+        param`;
+  const labels2 = javaLabels(code2);
+  assert.ok(labels2.includes("paramB"), "paramB must be visible inside method b");
+  assert.ok(!labels2.includes("paramA"), "paramA must not leak from method a to method b");
+
+  // Class fields must be visible inside methods
+  const code3 = `class Solution {
+    int maxLimit = 100;
+    void a() {
+        max`;
+  assert.ok(javaLabels(code3).includes("maxLimit"), "Class field must be visible inside method");
+
+  // Method locals must not leak to class level
+  const code4 = `class Solution {
+    void a() {
+        int methodLocal = 5;
+    }
+    `;
+  assert.ok(!javaLabels(code4).includes("methodLocal"), "methodLocal must not leak to class level");
+});
+
+test("Java Issue 9: Signature help comment shielding", () => {
+  // Apostrophe in earlier line comment must not break signature help
+  assert.equal(
+    javaSigParam("// don't forget\nMath.max(1, "),
+    1,
+    "Apostrophe in line comment does not corrupt parser",
+  );
+
+  // Parenthesis in earlier line comment must not break signature help
+  assert.equal(
+    javaSigParam("// see Math.min(1, 2)\nMath.max(1, "),
+    1,
+    "Paren in line comment does not corrupt parser",
+  );
+
+  // Block comment with paren and quotes must not break signature help
+  assert.equal(
+    javaSigParam("/* see Math.min(1, 2) don't forget 'x' */\nMath.max(1, "),
+    1,
+    "Block comment contents do not corrupt parser",
+  );
+
+  // Multiline block comment
+  assert.equal(
+    javaSigParam("/*\n * note: don't call Math.min(a, b)\n */\nMath.max(1, "),
+    1,
+    "Multiline block comment does not corrupt parser",
+  );
+});
+
+test("Java Issue 10: Dot-preceded words (.clone, .length, .println) are not extracted as standalone identifiers", () => {
+  const src = `class Solution {
+    void a() {
+        int[] arr = new int[5];
+        arr.clone();
+        System.out.println();
+        ar`;
+  const labels = javaLabels(src);
+  assert.ok(labels.includes("arr"), "Variable arr must be suggested");
+  assert.ok(!labels.includes("clone"), ".clone() must not be extracted as standalone variable");
+  assert.ok(!labels.includes("println"), ".println() must not be extracted as standalone variable");
+});
+
+test("Java Issue 11: Trailing digits on variable names (nums2., arr1., list2.) receive member completions", () => {
+  // Declared variable with digits
+  const dec1 = javaLabels("int[] nums2 = new int[5];\nnums2.");
+  assert.ok(dec1.includes("length") && dec1.includes("clone"), "nums2. suggests array members");
+
+  const dec2 = javaLabels("List<String> list2 = new ArrayList<>();\nlist2.");
+  assert.ok(dec2.includes("add") && dec2.includes("size"), "list2. suggests list members");
+
+  // Undeclared / heuristic fallback with digits
+  const h1 = javaLabels("nums1.");
+  assert.ok(
+    h1.includes("length") && h1.includes("clone"),
+    "nums1. heuristic suggests array members",
+  );
+
+  const h2 = javaLabels("list1.");
+  assert.ok(h2.includes("add") && h2.includes("size"), "list1. heuristic suggests list members");
+
+  const h3 = javaLabels("s1.");
+  assert.ok(
+    h3.includes("charAt") && h3.includes("substring"),
+    "s1. heuristic suggests string members",
+  );
+});
+
+test("Java Issue 12: this. and super. completions, hover, and signature help", () => {
+  const src = `class Solution {
+    int myField = 10;
+    public void customMethod(int a, int b) {
+        int localVar = 42;
+        this.
+    }
+}`;
+  const thisLabels = javaLabels(src, 14, 5);
+
+  // Must suggest class fields, class methods, and common object members
+  assert.ok(thisLabels.includes("myField"), "this. suggests class field");
+  assert.ok(thisLabels.includes("customMethod"), "this. suggests class method");
+  assert.ok(thisLabels.includes("equals"), "this. suggests Object.equals");
+  assert.ok(thisLabels.includes("toString"), "this. suggests Object.toString");
+
+  // Must NOT suggest local variables or unrelated String/List members
+  assert.ok(!thisLabels.includes("localVar"), "this. must NOT suggest local variable");
+  assert.ok(!thisLabels.includes("charAt"), "this. must NOT suggest String.charAt");
+  assert.ok(!thisLabels.includes("add"), "this. must NOT suggest List.add");
+
+  // super. suggests class methods and object members, but not local variables
+  const superSrc = `class Solution {
+    public void run() {
+        int x = 1;
+        super.
+    }
+}`;
+  const superLabels = javaLabels(superSrc, 15, 4);
+  assert.ok(superLabels.includes("run"), "super. suggests method");
+  assert.ok(superLabels.includes("toString"), "super. suggests Object.toString");
+  assert.ok(!superLabels.includes("x"), "super. must NOT suggest local variable");
+
+  // Hover over this.myField
+  const hoverField = javaHover(
+    `class Solution {\n    int myField = 10;\n    void m() {\n        this.myField = 20;\n    }\n}`,
+    15,
+    4,
+  );
+  assert.ok(
+    hoverField && hoverField.contents[0].value.includes("int myField"),
+    "Hover over this.myField displays field type",
+  );
+  assert.ok(
+    hoverField && hoverField.contents[1].value.includes("Field of current class"),
+    "Hover over this.myField indicates field of current class",
+  );
+
+  // Hover over this.customMethod
+  const hoverMethod = javaHover(
+    `class Solution {\n    void customMethod(int a) {}\n    void m() {\n        this.customMethod(1);\n    }\n}`,
+    15,
+    4,
+  );
+  assert.ok(
+    hoverMethod && hoverMethod.contents[0].value.includes("customMethod(int a)"),
+    "Hover over this.customMethod displays method signature",
+  );
+
+  // Signature help for this.customMethod(1,
+  const sigSrc = `class Solution {\n    void customMethod(int a, int b) {}\n    void m() {\n        this.customMethod(1, `;
+  const sig = javaSig(sigSrc);
+  assert.ok(sig, "this.customMethod(1, returns signature help");
+  assert.equal(sig.value.activeParameter, 1, "activeParameter is 1 after comma");
+});
+
+test("Java Issue 13: Array declarations with whitespace and var array inference", () => {
+  // Whitespace-tolerant array declarations
+  const dec1 = javaLabels("int [] nums = new int[5];\nnums.");
+  assert.ok(
+    dec1.includes("length") && dec1.includes("clone"),
+    "int [] nums. suggests array members",
+  );
+
+  const dec2 = javaLabels("String [ ] words = new String[5];\nwords[0].");
+  assert.ok(
+    dec2.includes("charAt") && dec2.includes("substring"),
+    "String [ ] words[0]. suggests String members",
+  );
+
+  // var array initializer with primitive element: var nums = new int[5]; nums[0]. cannot dereference
+  const varPrim = javaLabels("var nums = new int[5];\nnums[0].");
+  assert.equal(
+    varPrim.length,
+    0,
+    "var nums = new int[5]; nums[0]. yields 0 suggestions for primitive int",
+  );
+
+  // var array initializer with String element: var words = new String[5]; words[0]. suggests String
+  const varStr = javaLabels("var words = new String[5];\nwords[0].");
+  assert.ok(
+    varStr.includes("charAt") && varStr.includes("substring"),
+    "var words = new String[5]; words[0]. suggests String members",
+  );
+});
+
+test("Java Issue 14: Multi-dimensional array element dereferencing (matrix[0][0]., grid[0][0].)", () => {
+  // 2D int array: 1st dimension is array, 2nd dimension is primitive int
+  const codeMat = "int[][] matrix = new int[5][5];\nmatrix[0].";
+  const matRow = javaLabels(codeMat);
+  assert.ok(matRow.includes("length") && matRow.includes("clone"), "matrix[0]. is int[] array");
+
+  const codeMatElem = "int[][] matrix = new int[5][5];\nmatrix[0][0].";
+  assert.equal(
+    javaLabels(codeMatElem).length,
+    0,
+    "matrix[0][0]. yields 0 suggestions (primitive int)",
+  );
+
+  // 2D String array: 2nd dimension is String
+  const codeGrid = "String[][] grid = new String[5][5];\ngrid[0][0].";
+  const gridElem = javaLabels(codeGrid);
+  assert.ok(
+    gridElem.includes("charAt") && gridElem.includes("substring"),
+    "grid[0][0]. suggests String members",
+  );
+
+  // Chained split subscript: s.split(" ")[0].
+  const splitElem = javaLabels('String s = "hello world";\ns.split(" ")[0].');
+  assert.ok(
+    splitElem.includes("charAt") && splitElem.includes("substring"),
+    's.split(" ")[0]. suggests String members',
+  );
+
+  // Chained toCharArray subscript: s.toCharArray()[0]. is primitive char -> 0 suggestions
+  const charElem = javaLabels('String s = "hello";\ns.toCharArray()[0].');
+  assert.equal(charElem.length, 0, "s.toCharArray()[0]. yields 0 suggestions (primitive char)");
+});
+
+test("Java Issue 15: Chained .get(...) calls on collections (List and Map)", () => {
+  // List<String> list; list.get(0). suggests String members
+  const listStr = javaLabels("List<String> words = new ArrayList<>();\nwords.get(0).");
+  assert.ok(
+    listStr.includes("charAt") && listStr.includes("substring"),
+    "words.get(0). suggests String members",
+  );
+
+  // Nested List: List<List<String>> matrix; matrix.get(0).get(0). suggests String members
+  const nestedList = javaLabels(
+    "List<List<String>> matrix = new ArrayList<>();\nmatrix.get(0).get(0).",
+  );
+  assert.ok(
+    nestedList.includes("charAt") && nestedList.includes("substring"),
+    "matrix.get(0).get(0). suggests String members",
+  );
+
+  // Map<String, String> map; map.get("k"). suggests String members
+  const mapStr = javaLabels('Map<String, String> map = new HashMap<>();\nmap.get("k").');
+  assert.ok(
+    mapStr.includes("charAt") && mapStr.includes("substring"),
+    'map.get("k"). suggests String members',
+  );
+
+  // Map<String, List<Integer>> map; map.get("k"). suggests List members
+  const mapList = javaLabels('Map<String, List<Integer>> map = new HashMap<>();\nmap.get("k").');
+  assert.ok(
+    mapList.includes("add") && mapList.includes("size"),
+    'map.get("k"). suggests List members',
+  );
+});
+
+test("Java Issue 16: sysout snippet and field vs local variable origin", () => {
+  const { mockMonaco, completionProviders } = setupMockMonaco();
+  registerJavaCompletions(mockMonaco);
+  const provider = completionProviders["java"];
+
+  // sysout snippet
+  const res = provider.provideCompletionItems(createMockModel("sys"), endOf("sys"));
+  const sysoutItem = res.suggestions.find((s: any) => s.label === "sysout");
+  assert.ok(sysoutItem, "sysout snippet is provided");
+  assert.ok(
+    sysoutItem.insertText.includes("System.out.println"),
+    "sysout inserts System.out.println",
+  );
+
+  // Class field hover displays Field, local variable displays Local variable
+  const src = `class Solution {
+    int classField = 10;
+    void run() {
+        int methodLocal = 20;
+    }
+}`;
+  const hoverField = javaHover(src, 10, 2); // over 'classField'
+  assert.ok(
+    hoverField && hoverField.contents[1].value.includes("Field"),
+    "classField displays Field in hover",
+  );
+
+  const hoverLocal = javaHover(src, 14, 4); // over 'methodLocal'
+  assert.ok(
+    hoverLocal && hoverLocal.contents[1].value.includes("Local variable"),
+    "methodLocal displays Local variable in hover",
+  );
+});
+
+// ==========================================
+// C++ AUTOCOMPLETE & SIGNATURE HELP TESTS
+// ==========================================
+
+function cppLabels(src: string, col?: number, line?: number): string[] {
+  const { mockMonaco, completionProviders } = setupMockMonaco();
+  registerCppCompletions(mockMonaco);
+  const pos =
+    line !== undefined && col !== undefined ? { lineNumber: line, column: col } : endOf(src);
+  const r = completionProviders["cpp"].provideCompletionItems(createMockModel(src), pos);
+  return r.suggestions.map((s: any) => s.label);
+}
+
+function cppSig(src: string, col?: number, line?: number): any {
+  const { mockMonaco, sigHelpProviders } = setupMockMonaco();
+  registerCppCompletions(mockMonaco);
+  const pos =
+    line !== undefined && col !== undefined ? { lineNumber: line, column: col } : endOf(src);
+  return sigHelpProviders["cpp"].provideSignatureHelp(createMockModel(src), pos);
+}
+
+function cppHover(src: string, col: number, line = 1): any {
+  const { mockMonaco, hoverProviders } = setupMockMonaco();
+  registerCppCompletions(mockMonaco);
+  return hoverProviders["cpp"].provideHover(createMockModel(src), {
+    lineNumber: line,
+    column: col,
+  });
+}
+
+test("C++: std:: scope resolution suggests standard library members", () => {
+  const labels = cppLabels("std::");
+  assert.ok(labels.includes("cout"), "suggests cout");
+  assert.ok(labels.includes("cin"), "suggests cin");
+  assert.ok(labels.includes("endl"), "suggests endl");
+  assert.ok(labels.includes("vector"), "suggests vector");
+  assert.ok(labels.includes("string"), "suggests string");
+  assert.ok(labels.includes("sort"), "suggests sort");
+  assert.ok(labels.includes("min"), "suggests min");
+  assert.ok(labels.includes("max"), "suggests max");
+});
+
+test("C++: #include and using namespace suggest appropriate headers and std", () => {
+  const headers = cppLabels("#include <");
+  assert.ok(headers.includes("iostream"), "suggests iostream header");
+  assert.ok(headers.includes("vector"), "suggests vector header");
+  assert.ok(headers.includes("algorithm"), "suggests algorithm header");
+
+  const un = cppLabels("using namespace ");
+  assert.ok(un.includes("std"), "suggests std namespace");
+});
+
+test("C++: Type-aware dot member access suggests container-specific methods", () => {
+  const vec = cppLabels("std::vector<int> nums;\nnums.");
+  assert.ok(vec.includes("push_back"), "vector suggests push_back");
+  assert.ok(vec.includes("pop_back"), "vector suggests pop_back");
+  assert.ok(vec.includes("size"), "vector suggests size");
+  assert.ok(!vec.includes("substr"), "vector does not suggest string substr");
+
+  const str = cppLabels('std::string s = "hello";\ns.');
+  assert.ok(str.includes("substr"), "string suggests substr");
+  assert.ok(str.includes("length"), "string suggests length");
+  assert.ok(str.includes("c_str"), "string suggests c_str");
+
+  const mp = cppLabels("std::map<string, int> counts;\ncounts.");
+  assert.ok(mp.includes("insert"), "map suggests insert");
+  assert.ok(mp.includes("count"), "map suggests count");
+  assert.ok(mp.includes("find"), "map suggests find");
+  assert.ok(!mp.includes("push_back"), "map does not suggest push_back");
+
+  const q = cppLabels("std::queue<int> q;\nq.");
+  assert.ok(q.includes("front") && q.includes("pop") && q.includes("push"), "queue methods");
+
+  const st = cppLabels("std::stack<int> s;\ns.");
+  assert.ok(st.includes("top") && st.includes("pop") && st.includes("push"), "stack methods");
+});
+
+test("C++: Pointer member access (->) suggests ListNode and TreeNode fields", () => {
+  const node = cppLabels("ListNode* head = nullptr;\nhead->");
+  assert.ok(node.includes("val"), "ListNode suggests val");
+  assert.ok(node.includes("next"), "ListNode suggests next");
+
+  const tree = cppLabels("TreeNode* root = nullptr;\nroot->");
+  assert.ok(tree.includes("val"), "TreeNode suggests val");
+  assert.ok(tree.includes("left"), "TreeNode suggests left");
+  assert.ok(tree.includes("right"), "TreeNode suggests right");
+});
+
+test("C++: Numeric literals and primitives suppress container methods", () => {
+  const num = cppLabels("5.");
+  assert.equal(num.length, 0, "5. gives no member suggestions");
+
+  const prim = cppLabels("int count = 0;\ncount.");
+  assert.equal(prim.length, 0, "int primitive gives no member suggestions");
+});
+
+test("C++: Local variables and function parameters are in scope without leaking across functions", () => {
+  // 1. Cursor at 'r' inside solve() with another function helper() preceding it
+  const src = `void helper(int otherParam) {
+    int helperLocal = 10;
+}
+
+class Solution {
+public:
+    int solve(int maxLimit, std::vector<int>& items) {
+        int runningTotal = 0;
+        r`;
+  const labels = cppLabels(src);
+  assert.ok(labels.includes("runningTotal"), "runningTotal is suggested in solve()");
+  assert.ok(labels.includes("maxLimit"), "parameter maxLimit is suggested in solve()");
+  assert.ok(labels.includes("items"), "parameter items is suggested in solve()");
+  assert.ok(!labels.includes("otherParam"), "otherParam from helper() does not leak into solve()");
+  assert.ok(
+    !labels.includes("helperLocal"),
+    "helperLocal from helper() does not leak into solve()",
+  );
+
+  // 2. Cursor inside solve() with helper() following it
+  const full = `class Solution {
+public:
+    int solve(int maxLimit, std::vector<int>& items) {
+        int runningTotal = 0;
+        r
+    }
+
+    void helper(int otherParam) {
+        int helperLocal = 10;
+    }
+};`;
+  const { mockMonaco, completionProviders } = setupMockMonaco();
+  registerCppCompletions(mockMonaco);
+  const r = completionProviders["cpp"].provideCompletionItems(createMockModel(full), {
+    lineNumber: 5,
+    column: 10,
+  });
+  const fullLabels = r.suggestions.map((s: any) => s.label);
+  assert.ok(fullLabels.includes("runningTotal"), "runningTotal suggested in solve()");
+  assert.ok(fullLabels.includes("maxLimit"), "maxLimit suggested in solve()");
+  assert.ok(
+    !fullLabels.includes("otherParam"),
+    "following helper's parameter does not leak into solve()",
+  );
+  assert.ok(
+    !fullLabels.includes("helperLocal"),
+    "following helper's local does not leak into solve()",
+  );
+});
+
+test("C++: Words after '.', '->', or '::' do not leak into document variable suggestions", () => {
+  const src = `
+void run() {
+    std::cout << "test";
+    nums.push_back(10);
+    s
+`;
+  const labels = cppLabels(src);
+  assert.ok(!labels.includes("push_back"), "push_back is not suggested as a document variable");
+});
+
+test("C++: Signature help tracks parameters, depth, and generic commas", () => {
+  const sig1 = cppSig("std::min(10, ");
+  assert.ok(sig1 && sig1.value.signatures.length > 0, "min has signature help");
+  assert.equal(sig1.value.activeParameter, 1, "activeParameter is 1 after comma");
+
+  // Generic template with comma must not count as a top-level parameter
+  const sig2 = cppSig("std::pair<int, int> p = std::make_pair(1, ");
+  assert.ok(sig2, "make_pair has signature help");
+  assert.equal(sig2.value.activeParameter, 1, "activeParameter is 1 after make_pair comma");
+});
+
+test("C++: Comments do not corrupt signature help or paren matching", () => {
+  const src = `
+// min(1, 2) inside comment
+std::min(10, 
+`;
+  const sig = cppSig(src);
+  assert.ok(sig, "signature help works despite preceding comment with parens");
+  assert.equal(sig.value.activeParameter, 1, "activeParameter correctly set to 1");
+});
+
+test("C++: No made-up signatures for language keywords or unknown calls", () => {
+  const { mockMonaco, sigHelpProviders } = setupMockMonaco();
+  registerCppCompletions(mockMonaco);
+  const provider = sigHelpProviders["cpp"];
+
+  for (const line of [
+    "    if (",
+    "    while (x < ",
+    "    for (int i = 0; ",
+    "    unknownFunc(1, ",
+  ]) {
+    const src = `void test() {\n${line}`;
+    assert.equal(provider.provideSignatureHelp(createMockModel(src), endOf(src)), null, line);
+  }
+});
+
+test("C++: Hover documentation displays for qualified and type symbols", () => {
+  const src = "std::cout << 1;";
+  const hover = cppHover(src, 7); // over 'cout'
+  assert.ok(hover && hover.contents.length > 0, "Hover over std::cout returns doc");
+  assert.ok(hover.contents[0].value.includes("cout"), "Hover contains cout signature");
+
+  const typeHover = cppHover("vector<int> nums;", 3); // over 'vector'
+  assert.ok(typeHover && typeHover.contents.length > 0, "Hover over vector returns doc");
+});
+
+test("C++: Enhanced STL algorithms, constants, and auto pair inference", () => {
+  const stds = cppLabels("std::");
+  assert.ok(stds.includes("min_element"), "std:: suggests min_element");
+  assert.ok(stds.includes("max_element"), "std:: suggests max_element");
+  assert.ok(stds.includes("count"), "std:: suggests count");
+  assert.ok(stds.includes("find"), "std:: suggests find");
+  assert.ok(stds.includes("unique"), "std:: suggests unique");
+
+  const un = cppLabels("INT_");
+  assert.ok(un.includes("INT_MAX"), "suggests INT_MAX constant");
+  assert.ok(un.includes("INT_MIN"), "suggests INT_MIN constant");
+
+  const autoPair = cppLabels("auto p = std::make_pair(10, 20);\np.");
+  assert.ok(autoPair.includes("first"), "auto make_pair suggests first");
+  assert.ok(autoPair.includes("second"), "auto make_pair suggests second");
+});
+
+test("C++: #include handles both with and without angle brackets", () => {
+  const { mockMonaco, completionProviders } = setupMockMonaco();
+  registerCppCompletions(mockMonaco);
+  const provider = completionProviders["cpp"];
+
+  // 1. User typed '#include <'
+  const res1 = provider.provideCompletionItems(createMockModel("#include <"), endOf("#include <"));
+  const vec1 = res1.suggestions.find((s: any) => s.label === "vector");
+  assert.equal(
+    vec1.insertText,
+    "vector>",
+    "insertText includes closing angle bracket when '<' typed",
+  );
+
+  // 2. User typed '#include '
+  const res2 = provider.provideCompletionItems(createMockModel("#include "), endOf("#include "));
+  const vec2 = res2.suggestions.find((s: any) => s.label === "vector");
+  assert.equal(
+    vec2.insertText,
+    "<vector>",
+    "insertText wraps in angle brackets when plain '#include ' typed",
+  );
+});
+
+test("C++: Pointer chained navigation and iterator member access", () => {
+  const chainedTree = cppLabels("TreeNode* root = nullptr;\nroot->left->");
+  assert.ok(chainedTree.includes("val"), "root->left-> suggests val");
+  assert.ok(chainedTree.includes("left"), "root->left-> suggests left");
+  assert.ok(chainedTree.includes("right"), "root->left-> suggests right");
+
+  const iter = cppLabels("for (auto it = mp.begin(); it != mp.end(); ++it) {\n    it->");
+  assert.ok(iter.includes("first"), "it-> suggests first");
+  assert.ok(iter.includes("second"), "it-> suggests second");
+});
+
+test("C++: Type inference correctly handles const qualifiers and direct pointer/reference syntax", () => {
+  // ListNode* with pointer attached to type
+  const ptrLabels = cppLabels(
+    "void test() {\n    ListNode* myCustomNode = nullptr;\n    myCustomNode->",
+  );
+  assert.ok(ptrLabels.includes("val"), "myCustomNode-> suggests val");
+  assert.ok(ptrLabels.includes("next"), "myCustomNode-> suggests next");
+
+  // const vector<int>& reference
+  const vecLabels = cppLabels("void test() {\n    const vector<int>& myNums = arr;\n    myNums.");
+  assert.ok(vecLabels.includes("push_back"), "const vector<int>& suggests push_back");
+  assert.ok(vecLabels.includes("size"), "const vector<int>& suggests size");
+  assert.ok(!vecLabels.includes("substr"), "const vector<int>& does not suggest string methods");
+
+  // const string& reference
+  const strLabels = cppLabels("void test() {\n    const string& myStr = text;\n    myStr.");
+  assert.ok(strLabels.includes("substr"), "const string& suggests substr");
+  assert.ok(!strLabels.includes("push_front"), "const string& does not suggest deque methods");
+});
+
+test("C++: Structured bindings and range-for loops extract variables", () => {
+  const bindings = cppLabels("void test() {\n    auto [source, dest] = edge;\n    ");
+  assert.ok(bindings.includes("source"), "extracts structured binding 'source'");
+  assert.ok(bindings.includes("dest"), "extracts structured binding 'dest'");
+
+  const loopBindings = cppLabels("void test() {\n    for (auto [key, val] : mp) {\n        ");
+  assert.ok(loopBindings.includes("key"), "extracts loop structured binding 'key'");
+  assert.ok(loopBindings.includes("val"), "extracts loop structured binding 'val'");
+});
+
+test("C++: GCC builtins and competitive programming snippets are available", () => {
+  const builtins = cppLabels("__builtin_");
+  assert.ok(builtins.includes("__builtin_popcount"), "suggests __builtin_popcount");
+  assert.ok(builtins.includes("__builtin_popcountll"), "suggests __builtin_popcountll");
+  assert.ok(builtins.includes("__builtin_clz"), "suggests __builtin_clz");
+  assert.ok(builtins.includes("__builtin_ctz"), "suggests __builtin_ctz");
+
+  const snippets = cppLabels("bsearch");
+  assert.ok(snippets.includes("bsearch"), "suggests bsearch snippet");
+
+  const minpq = cppLabels("minpq");
+  assert.ok(minpq.includes("minpq"), "suggests minpq snippet");
+
+  const graphSnippets = cppLabels("bfs");
+  assert.ok(graphSnippets.includes("bfs"), "suggests bfs snippet");
+});
+
+test("C++: Document-defined function signature help and hover documentation", () => {
+  const src =
+    "bool checkSubtree(TreeNode* root, int target, vector<int>& path) {\n    return true;\n}\n\nint main() {\n    checkSubtree(root, ";
+  const sig = cppSig(src);
+  assert.ok(sig !== null, "Signature help is provided for user-defined function");
+  assert.equal(
+    sig.value.activeParameter,
+    1,
+    "Second parameter (target) is active after first comma",
+  );
+  assert.equal(
+    sig.value.signatures[0].parameters.length,
+    3,
+    "Parsed 3 parameters from checkSubtree",
+  );
+
+  // Hover over user-defined function
+  const hoverSrc = "void helperFunction(int x) {}\n\nint main() {\n    helperFunction(5);\n}";
+  const hover = cppHover(hoverSrc, 7, 4); // column over helperFunction on line 4
+  assert.ok(hover !== null, "Hover on user-defined function returns documentation");
+  assert.ok(hover.contents[0].value.includes("helperFunction"), "Hover shows function signature");
+  assert.ok(
+    hover.contents[1].value.includes("User-defined function"),
+    "Hover notes it is a user-defined function",
+  );
+});
+
+test("C++: this-> member completions, hover, and signature help", () => {
+  const src = `class Solution {
+    int myField = 10;
+public:
+    void customMethod(int a, int b) {
+        int localVar = 42;
+        this->
+    }
+};`;
+  const thisLabels = cppLabels(src, 15, 6);
+
+  // Must suggest class fields and methods
+  assert.ok(thisLabels.includes("myField"), "this-> suggests class field");
+  assert.ok(thisLabels.includes("customMethod"), "this-> suggests class method");
+
+  // Must NOT suggest local variables or unrelated TreeNode/ListNode members
+  assert.ok(!thisLabels.includes("localVar"), "this-> must NOT suggest local variable");
+  assert.ok(!thisLabels.includes("val"), "this-> must NOT suggest TreeNode val");
+  assert.ok(!thisLabels.includes("next"), "this-> must NOT suggest ListNode next");
+
+  // Hover over this->myField
+  const hoverField = cppHover(
+    `class Solution {\n    int myField = 10;\n    void m() {\n        this->myField = 20;\n    }\n};`,
+    15,
+    4,
+  );
+  assert.ok(
+    hoverField && hoverField.contents[0].value.includes("int myField"),
+    "Hover over this->myField displays field type",
+  );
+  assert.ok(
+    hoverField && hoverField.contents[1].value.includes("Field of current class"),
+    "Hover over this->myField indicates field of current class",
+  );
+
+  // Hover over this->customMethod
+  const hoverMethod = cppHover(
+    `class Solution {\n    void customMethod(int a) {}\n    void m() {\n        this->customMethod(1);\n    }\n};`,
+    15,
+    4,
+  );
+  assert.ok(
+    hoverMethod && hoverMethod.contents[0].value.includes("customMethod(int a)"),
+    "Hover over this->customMethod displays method signature",
+  );
+
+  // Signature help for this->customMethod(1,
+  const sigSrc = `class Solution {\n    void customMethod(int a, int b) {}\n    void m() {\n        this->customMethod(1, `;
+  const sig = cppSig(sigSrc);
+  assert.ok(sig, "this->customMethod(1, returns signature help");
+  assert.equal(sig.value.activeParameter, 1, "activeParameter is 1 after comma");
+});
+
+test("C++: Multi-bracket array and vector dereferencing (matrix[0][0]., grid[i][j]., s[0].)", () => {
+  // 2D int vector: 1st dimension is vector, 2nd dimension is primitive int
+  const matRow = cppLabels("vector<vector<int>> matrix;\nmatrix[0].");
+  assert.ok(matRow.includes("push_back") && matRow.includes("size"), "matrix[0]. is vector<int>");
+
+  const matElem = cppLabels("vector<vector<int>> matrix;\nmatrix[0][0].");
+  assert.equal(matElem.length, 0, "matrix[0][0]. yields 0 suggestions (primitive int)");
+
+  // 2D string vector: 2nd dimension is string
+  const gridElem = cppLabels("vector<vector<string>> grid;\ngrid[0][0].");
+  assert.ok(gridElem.includes("substr") && gridElem.includes("length"), "grid[0][0]. is string");
+
+  // string subscript access: s[0] is char (primitive) -> 0 suggestions
+  const charElem = cppLabels('string s = "hello";\ns[0].');
+  assert.equal(charElem.length, 0, "s[0]. yields 0 suggestions (primitive char)");
+
+  // Raw 2D array: int arr[5][5]; arr[0][0]. -> 0 suggestions
+  const arrElem = cppLabels("int arr[5][5];\narr[0][0].");
+  assert.equal(arrElem.length, 0, "arr[0][0]. yields 0 suggestions (primitive int)");
+});
+
+test("C++: Chained method calls (.substr(...)., .front()., .back()., .at(...).)", () => {
+  // s.substr(...). suggests string methods
+  const subLabels = cppLabels('string s = "hello world";\ns.substr(0, 5).');
+  assert.ok(
+    subLabels.includes("length") && subLabels.includes("find"),
+    "s.substr(). suggests string methods",
+  );
+
+  // vector<string> words; words.front(). suggests string methods
+  const frontStr = cppLabels("vector<string> words;\nwords.front().");
+  assert.ok(
+    frontStr.includes("substr") && frontStr.includes("length"),
+    "words.front(). suggests string methods",
+  );
+
+  // vector<int> nums; nums.back(). yields 0 suggestions (primitive int)
+  const backInt = cppLabels("vector<int> nums;\nnums.back().");
+  assert.equal(backInt.length, 0, "nums.back(). yields 0 suggestions (primitive int)");
+});
+
+// ==========================================
+// SQL AUTOCOMPLETE, HOVER & SIGNATURE HELP TESTS
+// ==========================================
+
+function sqlLabels(src: string, lang = "sql"): string[] {
+  const { mockMonaco, completionProviders } = setupMockMonaco();
+  registerSqlCompletions(mockMonaco);
+  const provider = completionProviders[lang];
+  const r = provider.provideCompletionItems(createMockModel(src), endOf(src));
+  return r.suggestions.map((s: any) => s.label);
+}
+
+function sqlSig(src: string, lang = "sql"): number | null {
+  const { mockMonaco, sigHelpProviders } = setupMockMonaco();
+  registerSqlCompletions(mockMonaco);
+  const provider = sigHelpProviders[lang];
+  const r = provider.provideSignatureHelp(createMockModel(src), endOf(src));
+  return r ? r.value.activeParameter : null;
+}
+
+function sqlHover(
+  src: string,
+  pos?: { lineNumber: number; column: number },
+  lang = "sql",
+): string[] | null {
+  const { mockMonaco, hoverProviders } = setupMockMonaco();
+  registerSqlCompletions(mockMonaco);
+  const provider = hoverProviders[lang];
+  const r = provider.provideHover(createMockModel(src), pos ?? endOf(src));
+  return r ? r.contents.map((c: any) => c.value) : null;
+}
+
+function posOf(src: string, needle: string): { lineNumber: number; column: number } {
+  const lines = src.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const idx = lines[i].indexOf(needle);
+    if (idx !== -1) {
+      return { lineNumber: i + 1, column: idx + 1 + Math.floor(needle.length / 2) };
+    }
+  }
+  return endOf(src);
+}
+
+test("SQL Issue 1: dialect registration for sql, mysql, and pgsql", () => {
+  const { mockMonaco, completionProviders, hoverProviders, sigHelpProviders } = setupMockMonaco();
+  registerSqlCompletions(mockMonaco);
+
+  for (const dialect of ["sql", "mysql", "pgsql"]) {
+    assert.ok(completionProviders[dialect], `${dialect} completion provider registered`);
+    assert.ok(hoverProviders[dialect], `${dialect} hover provider registered`);
+    assert.ok(sigHelpProviders[dialect], `${dialect} signature help provider registered`);
+  }
+});
+
+test("SQL Issue 2: standard keywords, types, functions, and snippets offered", () => {
+  const labels = sqlLabels("SEL");
+
+  // Keywords
+  assert.ok(labels.includes("SELECT"), "SELECT keyword suggested");
+  assert.ok(labels.includes("WHERE"), "WHERE keyword suggested");
+  assert.ok(labels.includes("GROUP BY"), "GROUP BY keyword suggested");
+  assert.ok(labels.includes("JOIN"), "JOIN keyword suggested");
+
+  // Types
+  assert.ok(labels.includes("INT"), "INT data type suggested");
+  assert.ok(labels.includes("VARCHAR"), "VARCHAR data type suggested");
+  assert.ok(labels.includes("TIMESTAMP"), "TIMESTAMP data type suggested");
+
+  // Functions
+  assert.ok(labels.includes("COUNT"), "COUNT function suggested");
+  assert.ok(labels.includes("ROUND"), "ROUND function suggested");
+  assert.ok(labels.includes("SUBSTRING"), "SUBSTRING function suggested");
+  assert.ok(labels.includes("COALESCE"), "COALESCE function suggested");
+  assert.ok(labels.includes("ROW_NUMBER"), "ROW_NUMBER window function suggested");
+
+  // Snippets
+  assert.ok(labels.includes("select"), "select snippet suggested");
+  assert.ok(labels.includes("join"), "join snippet suggested");
+  assert.ok(labels.includes("cte"), "cte snippet suggested");
+});
+
+test("SQL Issue 3: table context suggests declared document tables", () => {
+  const src = `CREATE TABLE employees (
+    id INT PRIMARY KEY,
+    name VARCHAR(50)
+);
+SELECT * FROM `;
+  const labels = sqlLabels(src);
+  assert.ok(labels.includes("employees"), "Declared table suggested after FROM");
+  assert.ok(!labels.includes("SELECT"), "Keywords not suggested in table context");
+});
+
+test("SQL Issue 4: dot triggers column completions on declared tables", () => {
+  const src = `CREATE TABLE users (
+    id INT PRIMARY KEY,
+    email VARCHAR(100),
+    created_at TIMESTAMP
+);
+SELECT users.`;
+  const labels = sqlLabels(src);
+  assert.ok(labels.includes("id"), "id column suggested for users.");
+  assert.ok(labels.includes("email"), "email column suggested for users.");
+  assert.ok(labels.includes("created_at"), "created_at column suggested for users.");
+  assert.ok(!labels.includes("SELECT"), "Global keywords not suggested after dot");
+});
+
+test("SQL Issue 5: table-level PRIMARY KEY constraint marks primary key column", () => {
+  const { mockMonaco, completionProviders } = setupMockMonaco();
+  registerSqlCompletions(mockMonaco);
+  const src = `CREATE TABLE items (
+    item_id INT,
+    title TEXT,
+    PRIMARY KEY (item_id)
+);
+SELECT items.`;
+  const res = completionProviders["sql"].provideCompletionItems(createMockModel(src), endOf(src));
+  const idItem = res.suggestions.find((s: any) => s.label === "item_id");
+  assert.ok(idItem, "item_id suggested");
+  assert.equal(idItem.documentation, "PRIMARY KEY column");
+});
+
+test("SQL Issue 6: scoped alias resolution for FROM, JOIN, and comma joins", () => {
+  const doc = `CREATE TABLE students (
+    id INT PRIMARY KEY,
+    name VARCHAR(50)
+);
+CREATE TABLE marks (
+    student_id INT,
+    score INT
+);
+`;
+
+  // Student alias s.
+  const sLabels = sqlLabels(
+    `${doc}SELECT * FROM students s JOIN marks m ON s.id = m.student_id WHERE s.`,
+  );
+  assert.ok(sLabels.includes("name"), "s. suggests students.name");
+  assert.ok(!sLabels.includes("score"), "s. must not suggest marks.score");
+
+  // Marks alias m.
+  const mLabels = sqlLabels(
+    `${doc}SELECT * FROM students s JOIN marks m ON s.id = m.student_id WHERE m.`,
+  );
+  assert.ok(mLabels.includes("score"), "m. suggests marks.score");
+  assert.ok(!mLabels.includes("name"), "m. must not suggest students.name");
+
+  // Comma join alias
+  const commaLabels = sqlLabels(`${doc}SELECT * FROM students s, marks m WHERE s.`);
+  assert.ok(commaLabels.includes("id"), "s. in comma join suggests students.id");
+  assert.ok(!commaLabels.includes("score"), "s. in comma join must not suggest marks.score");
+});
+
+test("SQL Issue 7: clause keywords are never treated as aliases", () => {
+  const doc = `CREATE TABLE students (
+    id INT PRIMARY KEY,
+    name VARCHAR(50)
+);
+SELECT * FROM students GROUP BY age;
+GROUP.`;
+  const labels = sqlLabels(doc);
+  assert.equal(labels.length, 0, "GROUP must not be treated as a table alias");
+
+  const orderLabels = sqlLabels(`SELECT * FROM students ORDER BY name;\nORDER.`);
+  assert.equal(orderLabels.length, 0, "ORDER must not be treated as a table alias");
+});
+
+test("SQL Issue 8: numeric literals and unknown dot targets return no column suggestions", () => {
+  assert.deepEqual(sqlLabels("SELECT 10."), [], "Numeric literal 10. must not suggest columns");
+  assert.deepEqual(sqlLabels("SELECT 10.5."), [], "Numeric literal 10.5. must not suggest columns");
+  assert.deepEqual(
+    sqlLabels("SELECT 10 ."),
+    [],
+    "Numeric literal with space 10 . must not suggest columns",
+  );
+  assert.deepEqual(
+    sqlLabels("SELECT nonexistent."),
+    [],
+    "Unknown table must return empty suggestions",
+  );
+});
+
+test("SQL Issue 9: comment and string shielding in autocomplete and hover", () => {
+  assert.deepEqual(sqlLabels("-- SELECT "), [], "Single-line comment must return no completions");
+  assert.deepEqual(sqlLabels("# SELECT "), [], "MySQL comment must return no completions");
+  assert.deepEqual(
+    sqlLabels("/* SELECT "),
+    [],
+    "Unclosed block comment must return no completions",
+  );
+  assert.deepEqual(sqlLabels("/* \n SELECT "), [], "Multi-line comment must return no completions");
+  assert.deepEqual(
+    sqlLabels("SELECT 'hello world"),
+    [],
+    "Unclosed string literal must return no completions",
+  );
+
+  // Hover in comment returns null
+  assert.equal(sqlHover("-- SELECT COUNT(*)"), null, "Hover inside comment returns null");
+  assert.equal(sqlHover("SELECT 'COUNT'"), null, "Hover inside string returns null");
+});
+
+test("SQL Issue 10: non-function keywords produce no fake signature help", () => {
+  for (const line of [
+    "INSERT INTO users VALUES (",
+    "SELECT * FROM users WHERE id IN (",
+    "SELECT * FROM users WHERE EXISTS (",
+    "CREATE TABLE users (",
+    "PRIMARY KEY (",
+    "CHECK (",
+    "SELECT (",
+    "WITH cte AS (",
+    "-- SUBSTRING('hello', 1, ",
+  ]) {
+    assert.equal(
+      sqlSig(line),
+      null,
+      `Keyword or comment '${line}' must not produce signature help`,
+    );
+  }
+});
+
+test("SQL Issue 11: signature help argument counting with nested commas, strings, and escaped quotes", () => {
+  // First argument
+  assert.equal(sqlSig("SUBSTRING('hello', "), 1, "Active parameter after first comma is 1");
+  // Second argument
+  assert.equal(sqlSig("SUBSTRING('hello', 1, "), 2, "Active parameter after second comma is 2");
+
+  // String with doubled single quote
+  assert.equal(
+    sqlSig("SUBSTRING('don''t fail', "),
+    1,
+    "Doubled quotes in string must not corrupt argument count",
+  );
+
+  // String with backslash quote
+  assert.equal(
+    sqlSig("SUBSTRING('don\\'t fail', "),
+    1,
+    "Backslash-escaped quote must not corrupt argument count",
+  );
+
+  // Prior comment with paren and apostrophe
+  const complex = `-- Don't forget (foo
+/* block comment with parens ( ) and commas , */
+SELECT SUBSTRING('abc', `;
+  assert.equal(sqlSig(complex), 1, "Prior comments must not corrupt argument count");
+
+  // Nested function call
+  assert.equal(sqlSig("ROUND(ABS(-5), "), 1, "Nested function call must pop when closed");
+});
+
+test("SQL Issue 12: hover tooltips for tables, functions, types, keywords, and columns", () => {
+  const doc = `CREATE TABLE students (
+    id INT PRIMARY KEY,
+    name VARCHAR(50)
+);
+SELECT s.name FROM students s;`;
+
+  // Function hover
+  const fnH = sqlHover("SELECT COUNT(*)", posOf("SELECT COUNT(*)", "COUNT"));
+  assert.ok(fnH && fnH[0].includes("COUNT"), "COUNT function hover contains detail");
+
+  // Type hover
+  const typeH = sqlHover("INT", posOf("INT", "INT"));
+  assert.ok(typeH && typeH[0].includes("type INT"), "INT hover contains type detail");
+
+  // Keyword hover
+  const kwH = sqlHover("SELECT 1", posOf("SELECT 1", "SELECT"));
+  assert.ok(kwH && kwH[0].includes("keyword SELECT"), "SELECT hover contains keyword detail");
+
+  // Table hover
+  const tblH = sqlHover(doc, posOf(doc, "students s"));
+  assert.ok(tblH && tblH[0].includes("CREATE TABLE students"), "students table hover shows schema");
+
+  // Dotted column hover: s.name
+  const colH = sqlHover(doc, posOf(doc, "s.name"));
+  assert.ok(
+    colH && colH[0].includes("students.name: VARCHAR(50)"),
+    "s.name hover shows column type",
+  );
+
+  // Unknown dotted column hover returns null
+  const unkH = sqlHover(doc, posOf("SELECT s.unknown", "unknown"));
+  assert.equal(unkH, null, "Unknown column hover returns null");
+});
+
+test("SQL Issue 13: multi-dialect parity across mysql and pgsql", () => {
+  const doc = `CREATE TABLE users ( id INT, name VARCHAR(50) );\nSELECT u. FROM users u;`;
+
+  const mysqlLabels = sqlLabels(doc, "mysql");
+  const pgsqlLabels = sqlLabels(doc, "pgsql");
+
+  assert.ok(mysqlLabels.includes("id") && mysqlLabels.includes("name"), "MySQL suggests columns");
+  assert.ok(
+    pgsqlLabels.includes("id") && pgsqlLabels.includes("name"),
+    "PostgreSQL suggests columns",
+  );
+
+  assert.equal(sqlSig("SUBSTRING('hello', ", "mysql"), 1, "MySQL signature help works");
+  assert.equal(sqlSig("SUBSTRING('hello', ", "pgsql"), 1, "PostgreSQL signature help works");
+});
+
+test("SQL Issue 14: advanced robustness for strings with comment markers, outer joins, and default strings with commas", () => {
+  const doc = `CREATE TABLE logs (
+    id INT PRIMARY KEY,
+    msg VARCHAR(100) DEFAULT 'warning, error -- not a comment',
+    created_at TIMESTAMP
+);
+CREATE TABLE audit (
+    audit_id INT,
+    action TEXT
+);
+SELECT * FROM logs l LEFT OUTER JOIN audit a ON l.id = a.audit_id WHERE l.`;
+
+  const labels = sqlLabels(doc);
+  assert.ok(labels.includes("id"), "id column suggested");
+  assert.ok(labels.includes("msg"), "msg column with comma in default suggested as single column");
+  assert.ok(labels.includes("created_at"), "created_at suggested");
+  assert.ok(!labels.includes("action"), "LEFT OUTER JOIN alias l. does not leak audit.action");
+
+  // Audit alias
+  const auditLabels = sqlLabels(doc.replace("WHERE l.", "WHERE a."));
+  assert.ok(auditLabels.includes("action"), "a. suggests audit.action");
+  assert.ok(!auditLabels.includes("msg"), "a. does not suggest logs.msg");
+});
+
+test("SQL Issue 15: tables and aliases ending with digits are not mistaken for numeric literals", () => {
+  const doc = `CREATE TABLE t0 (col0 INT PRIMARY KEY);
+CREATE TABLE table1 (val1 VARCHAR(50));
+SELECT t0.`;
+  const labels0 = sqlLabels(doc);
+  assert.ok(labels0.includes("col0"), "t0. suggests col0 despite ending with digit");
+
+  const labels1 = sqlLabels(`${doc}\nSELECT table1.`);
+  assert.ok(labels1.includes("val1"), "table1. suggests val1 despite ending with digit");
+
+  // Pure numeric literals still return empty
+  assert.deepEqual(sqlLabels("SELECT 10."), [], "Numeric literal 10. returns empty");
+  assert.deepEqual(sqlLabels("SELECT 10.5."), [], "Numeric literal 10.5. returns empty");
+});
+
+test("SQL Issue 16: double-quoted and backtick-quoted table and column identifiers", () => {
+  const doc = `CREATE TABLE "settings" (
+    "key" VARCHAR(50) PRIMARY KEY,
+    "value" TEXT
+);
+CREATE TABLE \`devices\` (
+    \`dev_id\` INT PRIMARY KEY,
+    \`model\` TEXT
+);
+SELECT settings.`;
+  const labels = sqlLabels(doc);
+  assert.ok(labels.includes("key"), "Double-quoted column suggested");
+  assert.ok(labels.includes("value"), "Double-quoted column suggested");
+
+  const devLabels = sqlLabels(`${doc}\nSELECT \`devices\`.`);
+  assert.ok(devLabels.includes("dev_id"), "Backtick-quoted table dot suggests columns");
+  assert.ok(devLabels.includes("model"), "Backtick-quoted table dot suggests model");
+});
+
+// ==========================================
 // C AUTOCOMPLETE, HOVER & SIGNATURE HELP TESTS
 // ==========================================
 
@@ -1810,4 +3219,108 @@ test("C: Signature help keeps function-pointer parameters whole", () => {
 
   const at = cSig("atexit(");
   assert.equal(at.value.signatures[0].parameters.length, 1, "atexit has 1 parameter");
+});
+
+test("Java: a call to a method does not replace its declared signature", () => {
+  const src =
+    "class A {\n  int helper(int x, int y) { return x + y; }\n  int run() {\n    if (true) return helper(1, 2);\n    helper(";
+  assert.equal(javaSig(src)?.value.signatures[0].label, "int helper(int x, int y)");
+  const hoverSrc =
+    "class A {\n  int helper(int x, int y) { return x + y; }\n  int run() {\n    return helper(1, 2);\n  }\n}";
+  assert.equal(
+    javaHover(hoverSrc, 14, 4)?.contents[0].value,
+    "```java\nint helper(int x, int y)\n```",
+  );
+  const newSrc = "class A {\n  void t() {\n    Scanner sc = new Scanner(System.in);\n    Scann";
+  const { mockMonaco, completionProviders } = setupMockMonaco();
+  registerJavaCompletions(mockMonaco);
+  const items = completionProviders["java"].provideCompletionItems(
+    createMockModel(newSrc),
+    endOf(newSrc),
+  ).suggestions;
+  assert.ok(
+    !items.some((s: any) => s.label === "Scanner" && s.insertText === "Scanner()"),
+    "new Scanner(...) is not a method of the class",
+  );
+});
+
+test("Java: a variable named like a library class uses its own type", () => {
+  const arr = javaLabels("class A {\n  void t() {\n    int[] arrays = new int[3];\n    arrays.");
+  assert.ok(arr.includes("length") && !arr.includes("sort"), "int[] arrays gets array members");
+  const str = javaLabels('class A {\n  void t() {\n    String math = "x";\n    math.');
+  assert.ok(str.includes("charAt") && !str.includes("sqrt"), "String math gets String members");
+  assert.ok(javaLabels("Math.").includes("sqrt"), "Math. still gets Math members");
+});
+
+test("Java: // inside a string does not hide a declaration", () => {
+  const labels = javaLabels('class A {\n  void t() {\n    String url = "http://x";\n    url.');
+  assert.ok(labels.includes("charAt") && !labels.includes("add"), "url is a String, not a List");
+});
+
+test("Java: String. suggests only static methods", () => {
+  const labels = javaLabels("String.");
+  assert.ok(labels.includes("valueOf") && labels.includes("join"));
+  assert.ok(!labels.includes("length") && !labels.includes("charAt"));
+});
+
+function cppItems(src: string): any[] {
+  const { mockMonaco, completionProviders } = setupMockMonaco();
+  registerCppCompletions(mockMonaco);
+  return completionProviders["cpp"].provideCompletionItems(createMockModel(src), endOf(src))
+    .suggestions;
+}
+
+test("C++: a variable built with a constructor is a variable, not a function", () => {
+  const src =
+    "int solve(int n) {\n  int total = 0;\n  vector<int> dp(n + 1, 0);\n  for (int i = 0; i < n; i++) {\n    ";
+  const items = cppItems(src);
+  assert.ok(
+    items.some((s) => s.label === "total"),
+    "locals stay visible in later blocks of the same function",
+  );
+  const dp = items.find((s) => s.label === "dp");
+  assert.ok(dp && dp.insertText === "dp", "dp inserts as a variable, not dp()");
+  const proto = cppItems("int helper(int a, int b);\nint main() {\n  ");
+  assert.ok(
+    proto.some((s) => s.label === "helper" && s.insertText.startsWith("helper(")),
+    "a top-level prototype is still a function",
+  );
+});
+
+test("C++: `return v;` does not hide v's declaration", () => {
+  const labels = cppLabels("vector<int> f() {\n  vector<int> v;\n  if (v.empty()) return v;\n  v.");
+  assert.ok(labels.includes("push_back") && !labels.includes("substr"), "v is a vector");
+});
+
+const SQL_SCHEMA =
+  "CREATE TABLE students (id INT, name VARCHAR(50));\nCREATE TABLE staff (sid INT, salary INT);\n";
+
+function sqlItemsAt(src: string, upTo: string, context?: unknown): string[] {
+  const { mockMonaco, completionProviders } = setupMockMonaco();
+  registerSqlCompletions(mockMonaco);
+  return completionProviders["mysql"]
+    .provideCompletionItems(createMockModel(src), endOf(upTo), context)
+    .suggestions.map((s: any) => s.label);
+}
+
+test("SQL: an alias resolves within its own statement", () => {
+  const first = SQL_SCHEMA + "SELECT * FROM students s WHERE s.";
+  const labels = sqlItemsAt(first + "\nSELECT * FROM staff s;", first);
+  assert.deepEqual(labels, ["id", "name"], "s is students here, not staff from the next query");
+  const selectFirst = SQL_SCHEMA + "SELECT s.";
+  const later = sqlItemsAt(selectFirst + "\nFROM staff s\nWHERE s.sid > 1;", selectFirst);
+  assert.deepEqual(later, ["sid", "salary"], "FROM on a later line of the same query still counts");
+});
+
+test("SQL: a space only opens the list after FROM, JOIN and similar", () => {
+  const space = { triggerKind: 1, triggerCharacter: " " };
+  const mid = SQL_SCHEMA + "SELECT * FROM students WHERE id = 1 AND ";
+  assert.equal(sqlItemsAt(mid, mid, space).length, 0, "no list after an ordinary space");
+  const from = SQL_SCHEMA + "SELECT * FROM ";
+  assert.deepEqual(sqlItemsAt(from, from, space), ["students", "staff"]);
+});
+
+test("SQL: every CTE in a WITH list is a table", () => {
+  const src = "WITH a AS (SELECT 1), b AS (SELECT 2)\nSELECT * FROM ";
+  assert.deepEqual(sqlItemsAt(src, src), ["a", "b"]);
 });

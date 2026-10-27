@@ -38,8 +38,13 @@ async function fetchSections(): Promise<Section[]> {
     .order("position")
     .order("position", { referencedTable: "categories" });
   if (error) throw new Error(error.message);
+  type FetchedSection = {
+    slug: string;
+    title: string;
+    categories: Omit<Category, "premium">[];
+  };
   // There are no paid categories yet.
-  return data.map((section) => ({
+  return (data as unknown as FetchedSection[]).map((section) => ({
     ...section,
     categories: section.categories.map((category) => ({ ...category, premium: false })),
   }));
