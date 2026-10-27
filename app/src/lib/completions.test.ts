@@ -4,6 +4,7 @@ import test from "node:test";
 import { registerCCompletions } from "./c-completions.ts";
 import { registerCppCompletions } from "./cpp-completions.ts";
 import { registerCSharpCompletions } from "./csharp-completions.ts";
+import { GO_SIGNATURES, goParamOffsets, registerGoCompletions } from "./go-completions.ts";
 import { registerJavaCompletions } from "./java-completions.ts";
 import { registerPythonCompletions } from "./python-completions.ts";
 import { registerSqlCompletions } from "./sql-completions.ts";
@@ -728,6 +729,613 @@ test("C# Issue 9: no made-up signature for keywords or unknown methods", () => {
     1,
     "WriteLine(object? value) has one parameter",
   );
+});
+
+// ==========================================
+// GO AUTOCOMPLETE, SIGNATURE HELP & HOVER TESTS
+// ==========================================
+
+function goLabels(src: string): string[] {
+  const { mockMonaco, completionProviders } = setupMockMonaco();
+  registerGoCompletions(mockMonaco);
+  const r = completionProviders["go"].provideCompletionItems(createMockModel(src), endOf(src));
+  return r.suggestions.map((s: any) => s.label);
+}
+
+function goSig(src: string): number | null {
+  const { mockMonaco, sigHelpProviders } = setupMockMonaco();
+  registerGoCompletions(mockMonaco);
+  const r = sigHelpProviders["go"].provideSignatureHelp(createMockModel(src), endOf(src));
+  return r ? r.value.activeParameter : null;
+}
+
+function goHover(src: string, word: string): string | null {
+  const { mockMonaco, hoverProviders } = setupMockMonaco();
+  registerGoCompletions(mockMonaco);
+  const lines = src.split("\n");
+  const lastLine = lines[lines.length - 1];
+  const col = lastLine.lastIndexOf(word) + 1;
+  const r = hoverProviders["go"].provideHover(createMockModel(src), {
+    lineNumber: lines.length,
+    column: col + 1,
+  });
+  return r ? r.contents[0].value : null;
+}
+
+test("Go Issue 1: Standard library package completions", () => {
+  // fmt package
+  const fmtItems = goLabels("fmt.");
+  assert.ok(fmtItems.includes("Println"), "fmt. should suggest Println");
+  assert.ok(fmtItems.includes("Printf"), "fmt. should suggest Printf");
+  assert.ok(fmtItems.includes("Sprintf"), "fmt. should suggest Sprintf");
+  assert.ok(!fmtItems.includes("Split"), "fmt. should not suggest strings.Split");
+  assert.ok(!fmtItems.includes("func"), "fmt. should not suggest keyword func");
+
+  // strings package
+  const strItems = goLabels("strings.");
+  assert.ok(strItems.includes("Split"), "strings. should suggest Split");
+  assert.ok(strItems.includes("Join"), "strings. should suggest Join");
+  assert.ok(strItems.includes("Contains"), "strings. should suggest Contains");
+  assert.ok(!strItems.includes("Println"), "strings. should not suggest Println");
+
+  // strconv package
+  const strconvItems = goLabels("strconv.");
+  assert.ok(strconvItems.includes("Atoi"), "strconv. should suggest Atoi");
+  assert.ok(strconvItems.includes("Itoa"), "strconv. should suggest Itoa");
+  assert.ok(strconvItems.includes("ParseInt"), "strconv. should suggest ParseInt");
+
+  // math package
+  const mathItems = goLabels("math.");
+  assert.ok(mathItems.includes("Sqrt"), "math. should suggest Sqrt");
+  assert.ok(mathItems.includes("Abs"), "math. should suggest Abs");
+  assert.ok(mathItems.includes("Max"), "math. should suggest Max");
+  assert.ok(mathItems.includes("Pi"), "math. should suggest Pi");
+
+  // slices package
+  const slicesItems = goLabels("slices.");
+  assert.ok(slicesItems.includes("Sort"), "slices. should suggest Sort");
+  assert.ok(slicesItems.includes("Contains"), "slices. should suggest Contains");
+  assert.ok(slicesItems.includes("Index"), "slices. should suggest Index");
+  assert.ok(slicesItems.includes("Reverse"), "slices. should suggest Reverse");
+
+  // maps package
+  const mapsItems = goLabels("maps.");
+  assert.ok(mapsItems.includes("Keys"), "maps. should suggest Keys");
+  assert.ok(mapsItems.includes("Values"), "maps. should suggest Values");
+  assert.ok(mapsItems.includes("Clone"), "maps. should suggest Clone");
+});
+
+test("Go Issue 2: Deduplication and clean suggestions", () => {
+  const items = goLabels("var x = 1\n");
+  const uniqueItems = new Set(items);
+  assert.equal(items.length, uniqueItems.size, "Completions must not contain duplicate items");
+  assert.ok(items.includes("fmt"), "Top-level suggestions should include package fmt");
+  assert.ok(items.includes("append"), "Top-level suggestions should include builtin append");
+  assert.ok(items.includes("func"), "Top-level suggestions should include keyword func");
+});
+
+test("Go Issue 3: Comment and string masking & suppression", () => {
+  // Inside single-line comment
+  assert.deepEqual(goLabels("// fmt."), [], "Inside line comment must return no suggestions");
+  assert.deepEqual(goLabels("x := 1 // fmt."), [], "After line comment must return no suggestions");
+
+  // Inside block comment
+  assert.deepEqual(goLabels("/* fmt."), [], "Inside block comment must return no suggestions");
+  assert.deepEqual(
+    goLabels("/* multiline\ncomment\nfmt."),
+    [],
+    "Inside multiline block comment must return no suggestions",
+  );
+
+  // Inside interpreted string literal
+  assert.deepEqual(
+    goLabels('msg := "fmt.'),
+    [],
+    "Inside interpreted string must return no suggestions",
+  );
+
+  // Inside raw multiline string literal
+  const rawCode = "raw := `\nmultiline\nfmt.";
+  assert.deepEqual(goLabels(rawCode), [], "Inside raw string must return no suggestions");
+
+  // After closed raw string, completions work normally and lines are not desynced
+  const afterRaw = "raw := `line1\nline2`\nfmt.";
+  const afterItems = goLabels(afterRaw);
+  assert.ok(
+    afterItems.includes("Println"),
+    "After closed raw string, fmt. completions work normally",
+  );
+});
+
+test("Go Issue 4: Numeric literal & empty dot protection", () => {
+  assert.deepEqual(goLabels("100."), [], "Numeric literal 100. must not trigger member completion");
+  assert.deepEqual(goLabels("1.0."), [], "Float literal 1.0. must not trigger member completion");
+  assert.deepEqual(goLabels("x := 1 + ."), [], "Operator + . must not trigger member completion");
+  assert.deepEqual(goLabels("."), [], "Lone . must not trigger member completion");
+  assert.deepEqual(
+    goLabels("func f() {\n\t."),
+    [],
+    "Indented lone . must not trigger member completion",
+  );
+});
+
+test("Go Issue 5: Block scoping isolation", () => {
+  const src = `package main
+
+func foo() {
+	secretFoo := 42
+	_ = secretFoo
+}
+
+func bar() {
+	sec`;
+  const items = goLabels(src);
+  assert.ok(!items.includes("secretFoo"), "Variable declared in foo() must not leak into bar()");
+
+  const innerScopeSrc = `package main
+
+func main() {
+	outerVar := 10
+	if true {
+		innerVar := 20
+		out`;
+  const innerItems = goLabels(innerScopeSrc);
+  assert.ok(
+    innerItems.includes("outerVar"),
+    "Outer variable must be visible inside nested if block",
+  );
+
+  const outerAfterBlockSrc = `package main
+
+func main() {
+	if true {
+		scopedVal := 99
+		_ = scopedVal
+	}
+	scop`;
+  const outerAfterItems = goLabels(outerAfterBlockSrc);
+  assert.ok(
+    !outerAfterItems.includes("scopedVal"),
+    "Variable scoped to if block must not leak outside if block",
+  );
+});
+
+test("Go Issue 6: Type inference & pointer dereferencing", () => {
+  // bufio.Scanner inference
+  const scannerSrc = `package main
+import "bufio"; import "os"
+func main() {
+	scanner := bufio.NewScanner(os.Stdin)
+	scanner.`;
+  const scannerItems = goLabels(scannerSrc);
+  assert.ok(scannerItems.includes("Scan"), "bufio.Scanner should offer Scan");
+  assert.ok(scannerItems.includes("Text"), "bufio.Scanner should offer Text");
+  assert.ok(scannerItems.includes("Bytes"), "bufio.Scanner should offer Bytes");
+  assert.ok(scannerItems.includes("Err"), "bufio.Scanner should offer Err");
+
+  // sync.WaitGroup inference
+  const wgSrc = `package main
+import "sync"
+func main() {
+	var wg sync.WaitGroup
+	wg.`;
+  const wgItems = goLabels(wgSrc);
+  assert.ok(wgItems.includes("Add"), "sync.WaitGroup should offer Add");
+  assert.ok(wgItems.includes("Done"), "sync.WaitGroup should offer Done");
+  assert.ok(wgItems.includes("Wait"), "sync.WaitGroup should offer Wait");
+
+  // time.Time inference
+  const timeSrc = `package main
+import "time"
+func main() {
+	now := time.Now()
+	now.`;
+  const timeItems = goLabels(timeSrc);
+  assert.ok(timeItems.includes("Format"), "time.Time should offer Format");
+  assert.ok(timeItems.includes("Unix"), "time.Time should offer Unix");
+  assert.ok(timeItems.includes("Year"), "time.Time should offer Year");
+
+  // User defined struct and method
+  const structSrc = `package main
+
+type Person struct {
+	Name string
+	Age  int
+}
+
+func (p *Person) Greet() string {
+	return "Hello"
+}
+
+func main() {
+	p := Person{}
+	p.`;
+  const structItems = goLabels(structSrc);
+  assert.ok(structItems.includes("Name"), "Person struct should offer Name field");
+  assert.ok(structItems.includes("Age"), "Person struct should offer Age field");
+  assert.ok(structItems.includes("Greet"), "Person struct should offer Greet method");
+
+  // Pointer dereferencing
+  const ptrSrc = `package main
+
+type Person struct {
+	Name string
+}
+
+func (p *Person) Greet() string {
+	return "Hello"
+}
+
+func main() {
+	p := &Person{}
+	p.`;
+  const ptrItems = goLabels(ptrSrc);
+  assert.ok(ptrItems.includes("Name"), "Pointer to struct should offer Name field");
+  assert.ok(ptrItems.includes("Greet"), "Pointer to struct should offer Greet method");
+});
+
+test("Go Issue 7: Signature Help argument tracking and varargs", () => {
+  // Builtin append
+  assert.equal(goSig("append(mySlice, "), 1, "append(slice, elems) param 1");
+  assert.equal(goSig("append(mySlice, 1, 2, 3, "), 1, "append varargs stays on param 1");
+
+  // fmt.Println varargs
+  assert.equal(goSig("fmt.Println("), 0, "fmt.Println param 0");
+  assert.equal(goSig("fmt.Println(1, 2, 3, "), 0, "fmt.Println varargs stays on param 0");
+
+  // fmt.Printf format string and varargs
+  assert.equal(goSig('fmt.Printf("%d %s", '), 1, "fmt.Printf second arg is param 1");
+  assert.equal(goSig('fmt.Printf("%d %s", 1, 2, '), 1, "fmt.Printf varargs stays on param 1");
+
+  // strings.Split
+  assert.equal(goSig('strings.Split("hello", '), 1, "strings.Split second arg is sep");
+
+  // Nested delimiters & composite literals
+  assert.equal(
+    goSig("strings.Split(make([]string, 2)[0], "),
+    1,
+    "Comma inside make([]string, 2) must not count as top-level arg",
+  );
+
+  // Multiline call
+  const multilineCall = `
+fmt.Printf(
+	"%s %d",
+	"score",
+`;
+  assert.equal(goSig(multilineCall), 1, "Multiline call argument index should be 1");
+
+  // Control flow keywords must not produce signature help
+  assert.equal(goSig("if ("), null, "if ( must not produce signature help");
+  assert.equal(goSig("for ("), null, "for ( must not produce signature help");
+  assert.equal(goSig("switch ("), null, "switch ( must not produce signature help");
+
+  // User defined function signature help
+  const userFnCall = `
+func Add(a int, b int) int { return a + b }
+
+func main() {
+	Add(1, 
+`;
+  assert.equal(goSig(userFnCall), 1, "User function Add second parameter should be 1");
+});
+
+test("Go Issue 8: Hover matching & boundaries", () => {
+  // Package hover
+  const pkgHover = goHover("package main\nfmt", "fmt");
+  assert.ok(pkgHover?.includes("package fmt"), "fmt hover should display package description");
+
+  // Package member hover
+  const memberHover = goHover("package main\nfmt.Println", "Println");
+  assert.ok(
+    memberHover?.includes("func fmt.Println"),
+    "fmt.Println hover should display signature",
+  );
+
+  // Boundary check: "format" should not match "fmt"
+  const falseHover = goHover("package main\nformat", "format");
+  assert.ok(!falseHover?.includes("package fmt"), "word 'format' must not match 'fmt'");
+
+  // Local variable hover
+  const varHover = goHover("count := 10\ncount", "count");
+  assert.ok(varHover?.includes("var count int"), "Hover on count should infer int");
+});
+
+test("Go Issue 9: Advanced Go type inference and multi-return tuples", () => {
+  // val, err := strconv.Atoi(...)
+  const errSrc = `package main
+import "strconv"
+func main() {
+	val, err := strconv.Atoi("123")
+	_ = val
+	err.`;
+  const errItems = goLabels(errSrc);
+  assert.ok(
+    errItems.includes("Error"),
+    "err from (val, err :=) should infer error interface and suggest Error()",
+  );
+
+  // val hover
+  const valHover = goHover(
+    `package main
+import "strconv"
+func main() {
+	val, err := strconv.Atoi("123")
+	val`,
+    "val",
+  );
+  assert.ok(valHover?.includes("var val int"), "val from strconv.Atoi should infer int");
+
+  // val, ok := map lookup
+  const okHover = goHover(
+    `package main
+func main() {
+	val, ok := myMap["key"]
+	ok`,
+    "ok",
+  );
+  assert.ok(okHover?.includes("var ok bool"), "ok from comma-ok idiom should infer bool");
+
+  // for idx, item := range items
+  const forLoopSrc = `package main
+func main() {
+	words := []string{"hello", "world"}
+	for idx, item := range words {
+		idx`;
+  const idxHover = goHover(forLoopSrc, "idx");
+  assert.ok(idxHover?.includes("var idx int"), "loop index in for range should infer int");
+
+  // Multi-var declaration
+  const multiVarHover = goHover(
+    `package main
+func main() {
+	var width, height int
+	width`,
+    "width",
+  );
+  assert.ok(
+    multiVarHover?.includes("var width int"),
+    "var width, height int should infer int for width",
+  );
+
+  // Signature help with composite literal inside call
+  assert.equal(
+    goSig('append([]string{"a", "b"}, '),
+    1,
+    "append([]string{...}, ...) parameter should be 1",
+  );
+  assert.equal(
+    goSig("make(map[string]int, "),
+    1,
+    "make(map[string]int, ...) parameter should be 1",
+  );
+});
+
+test("Go Issue 10: Grouped parameters & multiline function headers", () => {
+  // Grouped parameters in single-line function
+  const src = `package main
+func sum(a, b int, name string) int {
+	`;
+  const items = goLabels(src);
+  assert.ok(items.includes("a"), "Grouped parameter 'a' should be suggested");
+  assert.ok(items.includes("b"), "Grouped parameter 'b' should be suggested");
+  assert.ok(items.includes("name"), "Parameter 'name' should be suggested");
+
+  const aHover = goHover(src + "a", "a");
+  assert.ok(aHover?.includes("var a int"), "Grouped parameter 'a' should infer int");
+  const bHover = goHover(src + "b", "b");
+  assert.ok(bHover?.includes("var b int"), "Grouped parameter 'b' should infer int");
+
+  // Multiline function header
+  const multilineSrc = `package main
+func process(
+	first, second int,
+	label string,
+) {
+	`;
+  const multiItems = goLabels(multilineSrc);
+  assert.ok(multiItems.includes("first"), "Multiline parameter 'first' should be suggested");
+  assert.ok(multiItems.includes("second"), "Multiline parameter 'second' should be suggested");
+  assert.ok(multiItems.includes("label"), "Multiline parameter 'label' should be suggested");
+
+  const firstHover = goHover(multilineSrc + "first", "first");
+  assert.ok(firstHover?.includes("var first int"), "Multiline parameter 'first' should infer int");
+});
+
+test("Go Issue 11: Multi-dimensional slice indexing & struct slice inference", () => {
+  // Multi-dimensional slice: matrix[0][0]
+  const matrixSrc = `package main
+func main() {
+	matrix := [][]int{}
+	matrix[0][0]`;
+  const mHover = goHover(matrixSrc, "matrix[0][0]");
+  assert.ok(mHover?.includes("int"), "matrix[0][0] should infer int");
+
+  // Slice of structs: people[0].
+  const structSliceSrc = `package main
+type Person struct {
+	Name string
+	Age  int
+}
+func main() {
+	people := []Person{}
+	people[0].`;
+  const pItems = goLabels(structSliceSrc);
+  assert.ok(pItems.includes("Name"), "people[0]. should offer Name");
+  assert.ok(pItems.includes("Age"), "people[0]. should offer Age");
+
+  // make([][]int, 5)
+  const makeMatrixSrc = `package main
+func main() {
+	grid := make([][]int, 5)
+	grid[0][0]`;
+  const gridHover = goHover(makeMatrixSrc, "grid[0][0]");
+  assert.ok(gridHover?.includes("int"), "grid[0][0] from make([][]int, 5) should infer int");
+});
+
+test("Go Issue 12: Receiver method calls in Signature Help & keyword exclusions", () => {
+  // sync.WaitGroup method
+  const wgSrc = `package main
+import "sync"
+func main() {
+	var wg sync.WaitGroup
+	wg.Add(`;
+  assert.equal(goSig(wgSrc), 0, "wg.Add( should offer signature help on param 0");
+
+  // User defined struct method
+  const calcSrc = `package main
+type Calculator struct{}
+func (c *Calculator) Add(a, b int) int { return a + b }
+func main() {
+	calc := Calculator{}
+	calc.Add(1, `;
+  assert.equal(goSig(calcSrc), 1, "calc.Add(1,  should highlight param 1");
+
+  // func keyword must not trigger signature help
+  assert.equal(goSig("go func("), null, "go func( must not trigger signature help");
+  assert.equal(goSig("func ("), null, "func ( must not trigger signature help");
+  assert.equal(goSig("defer func("), null, "defer func( must not trigger signature help");
+});
+
+test("Go Issue 13: Practice question starters & competitive programming libraries", () => {
+  // Standard coding problem template
+  const cpSrc = `package main
+
+import (
+	"bufio"
+	"fmt"
+	"os"
+	"sort"
+)
+
+func solve(n int, arr []int) int {
+	sort.`;
+  const sortItems = goLabels(cpSrc);
+  assert.ok(sortItems.includes("Ints"), "sort. should suggest Ints");
+  assert.ok(sortItems.includes("Slice"), "sort. should suggest Slice");
+  assert.ok(sortItems.includes("Strings"), "sort. should suggest Strings");
+
+  // Inside solve(): n and arr are suggested
+  const solveBody = `package main
+func solve(n int, arr []int) int {
+	`;
+  const solveItems = goLabels(solveBody);
+  assert.ok(solveItems.includes("n"), "Parameter n should be suggested");
+  assert.ok(solveItems.includes("arr"), "Parameter arr should be suggested");
+
+  // sort.Slice signature help
+  assert.equal(goSig("sort.Slice(arr, "), 1, "sort.Slice second arg is less func");
+
+  // bufio.NewScanner signature help
+  assert.equal(goSig("bufio.NewScanner("), 0, "bufio.NewScanner param 0");
+});
+
+const GO_NODE = `package main
+type Node struct {
+  Val int
+  Next *Node
+  Children []*Node
+}
+`;
+
+test("Go: a comparison is not taken for an assignment", () => {
+  const fn = `${GO_NODE}func walk(node *Node, other *Node) {\n`;
+  for (const line of ["  if node == nil { return }", "  same := node == other"]) {
+    const items = goLabels(`${fn}${line}\n  node.`);
+    assert.ok(items.includes("Val") && items.includes("Next"), `after "${line.trim()}"`);
+  }
+});
+
+test("Go: reassignment keeps the declared type, copies and fields are followed", () => {
+  const fn = `${GO_NODE}func last(head *Node) {\n`;
+  const fields = (src: string) => {
+    const items = goLabels(fn + src);
+    return items.includes("Val") && items.includes("Next");
+  };
+  assert.ok(fields("  cur := head\n  cur."), "cur := head");
+  assert.ok(
+    fields("  cur := head\n  for cur.Next != nil {\n    cur = cur.Next\n  }\n  cur."),
+    "cur = cur.Next",
+  );
+  assert.ok(fields("  next := head.Next\n  next."), "next := head.Next");
+  assert.ok(fields("  head.Next."), "head.Next.");
+  assert.ok(fields("  head.Children[0]."), "[]*Node field element");
+  assert.ok(fields("  p := &head\n  x := 1\n  _ = x\n  head."), "unrelated lines in between");
+});
+
+test("Go: map values from literals and if headers", () => {
+  const src = `package main
+type Person struct {
+  Name string
+}
+func main() {
+  people := map[string]Person{}
+  if p, ok := people["a"]; ok {
+    p.`;
+  assert.ok(goLabels(src).includes("Name"), "p from people[...] in an if header");
+  const byPtr = `${GO_NODE}func main() {\n  seen := make(map[int]*Node)\n  n := seen[1]\n  n.`;
+  assert.ok(goLabels(byPtr).includes("Next"), "make(map[int]*Node) value");
+});
+
+test("Go: loop and if/switch header variables are suggested", () => {
+  const forI = goLabels("package main\nfunc main() {\n  for i := 0; i < 3; i++ {\n    ");
+  assert.ok(forI.includes("i"), "for i := 0");
+  const rangeV = goLabels(
+    "package main\nfunc main() {\n  nums := []int{1}\n  for _, num := range nums {\n    ",
+  );
+  assert.ok(rangeV.includes("num"), "range value");
+  assert.ok(!rangeV.includes("_"), "blank identifier is not a variable");
+  const ifInit = goLabels(
+    'package main\nfunc main() {\n  m := map[string]int{}\n  if v, ok := m["a"]; ok {\n    ',
+  );
+  assert.ok(ifInit.includes("v") && ifInit.includes("ok"), "if v, ok := ...");
+  const after = goLabels("package main\nfunc main() {\n  for i := 0; i < 3; i++ {\n  }\n  ");
+  assert.ok(!after.includes("i"), "loop variable is gone after the loop");
+});
+
+test("Go: package-level var and const with or without a type", () => {
+  const items = goLabels(
+    "package main\nvar count = 0\nconst limit = 10\nvar total int\nvar a, b int\nfunc main() {\n  ",
+  );
+  for (const name of ["count", "limit", "total", "a", "b"]) {
+    assert.ok(items.includes(name), name);
+  }
+});
+
+test("Go: the active parameter can be highlighted in the signature", () => {
+  const at = (label: string, offsets: [number, number][]) =>
+    offsets.map(([s, e]) => label.slice(s, e));
+  const append = "func append(slice []Type, elems ...Type) []Type";
+  assert.deepEqual(at(append, goParamOffsets(append, ["slice: []Type", "elems ...Type"])), [
+    "slice []Type",
+    "elems ...Type",
+  ]);
+  const copyLabel = "func copy(dst, src []Type) int";
+  assert.deepEqual(at(copyLabel, goParamOffsets(copyLabel, ["dst: []Type", "src: []Type"])), [
+    "dst",
+    "src []Type",
+  ]);
+  const method = "func (s *Stack) Push(s2 int, v int)";
+  assert.deepEqual(at(method, goParamOffsets(method, ["s2: int", "v: int"])), ["s2 int", "v int"]);
+
+  const { mockMonaco, sigHelpProviders } = setupMockMonaco();
+  registerGoCompletions(mockMonaco);
+  const src = "package main\nfunc add(a, b int) int {\n  return a + b\n}\nfunc main() {\n  add(1, ";
+  const r = sigHelpProviders["go"].provideSignatureHelp(createMockModel(src), endOf(src));
+  const sig = r.value.signatures[0];
+  assert.equal(r.value.activeParameter, 1);
+  assert.equal(at(sig.label, [sig.parameters[1].label])[0], "b int", "user function param");
+  let found = 0;
+  let total = 0;
+  for (const s of Object.values(GO_SIGNATURES)) {
+    const offsets = goParamOffsets(
+      s.label,
+      s.params.map((p) => p.label),
+    );
+    total += offsets.length;
+    found += offsets.filter(([a, b]) => b > a).length;
+  }
+  assert.ok(found / total > 0.9, `${found}/${total} built-in parameters found in their signatures`);
 });
 
 // ==========================================
