@@ -11,6 +11,7 @@ import { JobsScreen } from "@/components/jobs-screen";
 import { McqScreen, type McqProgress } from "@/components/mcq-screen";
 import { PracticeScreen } from "@/components/practice-screen";
 import { QuestionsScreen } from "@/components/questions-screen";
+import { SqlQuestionScreen } from "@/components/sql-question-screen";
 import { RepoSetupSteps } from "@/components/repo-setup";
 import { SaveStatus } from "@/components/save-status";
 import { UnsyncedDialog } from "@/components/unsynced-dialog";
@@ -70,6 +71,7 @@ import { useFilesQuery, useSolvedQuery, useSyncStatusQuery } from "@/lib/queries
 import type { Category } from "@/lib/practice";
 import { sendMcqEvents } from "@/lib/mcq";
 import { useCategoryQuestionsQuery, type Question } from "@/lib/questions";
+import { SQL_QUESTION_SUMMARIES, SQL_QUESTIONS } from "@/lib/sql-questions";
 import { unsyncedCount } from "@/lib/sync";
 import logo from "@/assets/logo.png";
 
@@ -107,19 +109,32 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
   const questionList = categoryQuestions.data ?? [];
   const selectedQuestion =
     practice?.question ?? questionList.find((question) => !question.locked)?.slug ?? null;
+  // The SQL preview's open question (temporary, see the sidebar's SQL item).
+  const [sqlQuestion, setSqlQuestion] = useState(SQL_QUESTIONS[0].slug);
   const questionColumn: QuestionColumn | null =
-    view === "Practice" && practice && !mcqCategory
+    view === "SQL"
       ? {
-          title: practice.category.title,
-          list: questionList,
-          loading: categoryQuestions.isPending,
-          error: categoryQuestions.isError,
-          onRetry: () => void categoryQuestions.refetch(),
-          solved: solved.data ?? new Set(),
-          selected: selectedQuestion,
-          onSelect: (slug) => setPractice({ ...practice, question: slug }),
+          title: "SQL questions",
+          list: SQL_QUESTION_SUMMARIES,
+          loading: false,
+          error: false,
+          onRetry: () => {},
+          solved: new Set(),
+          selected: sqlQuestion,
+          onSelect: setSqlQuestion,
         }
-      : null;
+      : view === "Practice" && practice && !mcqCategory
+        ? {
+            title: practice.category.title,
+            list: questionList,
+            loading: categoryQuestions.isPending,
+            error: categoryQuestions.isError,
+            onRetry: () => void categoryQuestions.refetch(),
+            solved: solved.data ?? new Set(),
+            selected: selectedQuestion,
+            onSelect: (slug) => setPractice({ ...practice, question: slug }),
+          }
+        : null;
   const flushEditorRef = useRef<() => Promise<void> | void>(() => {});
   const discardEditorRef = useRef<() => void>(() => {});
   const hasUnsavedEditorRef = useRef<() => boolean>(() => false);
@@ -398,6 +413,13 @@ export function WorkspaceScreen({ session, onLogout }: { session: Session; onLog
               setPractice({ category, question: null });
               setSidebarOpen(true);
             }}
+          />
+        ) : view === "SQL" ? (
+          <SqlQuestionScreen
+            userId={session.id}
+            questions={SQL_QUESTIONS}
+            selectedQuestion={sqlQuestion}
+            onSelectQuestion={setSqlQuestion}
           />
         ) : view === "Jobs" ? (
           // A guest logs in by logging out of the guest session.

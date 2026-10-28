@@ -13,6 +13,7 @@
 
 mod mysql;
 mod postgres;
+pub mod practice;
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -75,10 +76,12 @@ impl Servers {
     }
 
     /// Interrupts the statement running now and skips the rest of the file.
+    /// Between statements (e.g. while practice sets up a case's tables) there
+    /// is nothing to interrupt, but the rest is still skipped.
     async fn interrupt(&self) -> Result<(), String> {
+        self.stop.store(true, Ordering::Relaxed);
         let running = self.running.lock().unwrap_or_else(|e| e.into_inner()).clone();
         let Some(cancel) = running else { return Ok(()) };
-        self.stop.store(true, Ordering::Relaxed);
         cancel.cancel().await.map_err(|e| format!("Could not stop: {e}"))
     }
 
@@ -250,6 +253,24 @@ impl Session {
         }
     }
 
+    /// A session of its own on the same server, in the practice database
+    /// (see practice.rs). The shared session is left as it was.
+    async fn open_practice(&self) -> Result<Session, String> {
+        Ok(match self {
+            Session::Mysql(session) => Session::Mysql(session.open_another().await?),
+            Session::Postgres(session) => {
+                Session::Postgres(Box::new(session.open_practice(practice::DATABASE).await?))
+            }
+        })
+    }
+
+    async fn close(self) {
+        match self {
+            Session::Mysql(session) => session.close().await,
+            Session::Postgres(session) => drop(session),
+        }
+    }
+
     /// All of a table's rows (up to MAX_ROWS shown).
     async fn table_rows(&mut self, table: &str) -> Result<StatementResult, String> {
         let sql = match self {
@@ -347,7 +368,21 @@ pub async fn run_queries(
     let text =
         tokio::fs::read_to_string(&source).await.map_err(|e| format!("Could not read {filename}: {e}"))?;
     let extension = split_extension(&filename).map(|(_, ext)| ext).unwrap_or_default();
-    let (language, runtime, engine) = db.with(|conn| {
+    let (language, runtime, engine) = database_language(&db, extension)?;
+    let mut statements = split_statements(engine, &text);
+    if let Some(line) = line {
+        statements = statement_at(statements, line).into_iter().collect();
+    }
+
+    let mut guard = servers.servers.lock().await;
+    let server = running_server(&app, &account, &language, &runtime, engine, &mut guard).await?;
+    servers.stop.store(false, Ordering::Relaxed);
+    Ok(run_file(&mut server.session, &statements, &servers, &language.name).await)
+}
+
+/// The database with this extension (e.g. "mysql.sql"), its runtime and engine.
+fn database_language(db: &Db, extension: &str) -> Result<(Language, Runtime, Engine), String> {
+    db.with(|conn| {
         let language = catalog::language(conn, extension)?
             .filter(|language| language.kind == Kind::Database && language.server.is_some())
             .ok_or_else(|| format!("Can't run .{extension} files."))?;
@@ -357,15 +392,20 @@ pub async fn run_queries(
         }
         let runtime = catalog::runtime(conn, &language.runtime)?;
         Ok((language, runtime, engine))
-    })?;
-    let mut statements = split_statements(engine, &text);
-    if let Some(line) = line {
-        statements = statement_at(statements, line).into_iter().collect();
-    }
+    })
+}
 
-    let mut guard = servers.servers.lock().await;
+/// The account's server for `language`, started if it isn't running.
+async fn running_server<'a>(
+    app: &AppHandle,
+    account: &str,
+    language: &Language,
+    runtime: &Runtime,
+    engine: Engine,
+    guard: &'a mut Vec<Server>,
+) -> Result<&'a mut Server, String> {
     // Servers belong to the signed-in account: another account's go first.
-    let (mine, others) = std::mem::take(&mut *guard).into_iter().partition(|s| s.account == account);
+    let (mine, others) = std::mem::take(guard).into_iter().partition(|s| s.account == account);
     *guard = mine;
     for server in others {
         server.stop().await;
@@ -384,14 +424,12 @@ pub async fn run_queries(
             if let Some(i) = found {
                 guard.remove(i);
             }
-            let server = start(&app, &account, &language, &runtime, engine).await;
+            let server = start(app, account, language, runtime, engine).await;
             guard.push(server.inspect_err(|e| log::error!("Could not start {}: {e}", runtime.id))?);
             guard.len() - 1
         }
     };
-    let server = &mut guard[index];
-    servers.stop.store(false, Ordering::Relaxed);
-    Ok(run_file(&mut server.session, &statements, &servers, &language.name).await)
+    Ok(&mut guard[index])
 }
 
 /// Runs the statements in order until one fails or Stop is pressed.

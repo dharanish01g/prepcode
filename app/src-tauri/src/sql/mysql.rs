@@ -58,6 +58,19 @@ impl Session {
         Ok(())
     }
 
+    /// A connection of its own to the same server, for SQL practice, so a
+    /// check never changes the database the shared session has selected.
+    pub async fn open_another(&self) -> Result<Session, String> {
+        let conn = Conn::new(self.opts.clone()).await.map_err(|e| format!("Could not connect: {e}"))?;
+        Ok(Session { opts: self.opts.clone(), conn: Some(conn) })
+    }
+
+    pub async fn close(mut self) {
+        if let Some(conn) = self.conn.take() {
+            let _ = conn.disconnect().await;
+        }
+    }
+
     fn conn(&mut self) -> Result<&mut Conn, Failure> {
         self.conn.as_mut().ok_or_else(|| Failure::Lost("Not connected.".into()))
     }
