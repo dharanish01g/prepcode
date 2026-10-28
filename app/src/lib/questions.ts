@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { VALUE_TYPES, type Param, type Signature, type ValueType } from "@/lib/drivers";
-import { supabase } from "@/lib/supabase";
+import { fromBackend } from "@/lib/backend";
 
 export type Difficulty = "Easy" | "Medium" | "Hard";
 
@@ -48,13 +48,13 @@ export type Example = {
   note: string;
 };
 
-// The rows as the database returns them.
+// As the backend returns them.
 type SummaryRow = {
   slug: string;
   title: string;
   difficulty: string;
   topic: string;
-  access: string;
+  locked: boolean;
 };
 type QuestionRow = {
   slug: string;
@@ -154,37 +154,22 @@ function toQuestion(row: QuestionRow): Question {
 
 /** A category's published questions, in order; private ones come locked. */
 async function fetchCategoryQuestions(category: string): Promise<QuestionSummary[]> {
-  const { data, error } = await supabase.rpc("pc_category_questions", {
-    p_category_slug: category,
-  });
-  if (error) throw new Error(error.message);
-  return (data as SummaryRow[]).map((row) => ({
-    slug: row.slug,
-    title: row.title,
+  const rows = await fromBackend<SummaryRow[]>("list_category_questions", { category });
+  return rows.map((row) => ({
+    ...row,
     difficulty: parseDifficulty(row.difficulty, row.slug),
-    topic: row.topic,
-    locked: row.access !== "public",
   }));
 }
 
 /**
- * A question with its examples. Hidden test cases never come: the database
+ * A question with its examples. Hidden test cases never come: the backend
  * only gives students the examples.
  */
 async function fetchQuestion(slug: string): Promise<Question> {
-  const { data, error } = await supabase
-    .from("pc_questions")
-    .select(
-      "slug, title, difficulty, topic, description, constraints, explanation, method, params, returns, examples:pc_test_cases (inputs, expected, note)",
-    )
-    .eq("slug", slug)
-    .eq("examples.visibility", "example")
-    .order("position", { referencedTable: "examples" })
-    .maybeSingle();
-  if (error) throw new Error(error.message);
+  const row = await fromBackend<QuestionRow | null>("get_question", { slug });
   // Unpublished since the list loaded, or private.
-  if (!data) throw new Error("This question isn't available.");
-  return toQuestion(data as QuestionRow);
+  if (!row) throw new Error("This question isn't available.");
+  return toQuestion(row);
 }
 
 // Questions change more often than categories, as the content team

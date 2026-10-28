@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { jobsSupabase } from "@/lib/supabase";
+import { fromBackend } from "@/lib/backend";
 
 export const WORK_MODES = ["onsite", "remote", "hybrid"] as const;
 export const JOB_TYPES = ["full-time", "part-time", "internship", "contract"] as const;
@@ -50,16 +50,8 @@ function today() {
 }
 
 /** Published jobs still open to applications, newest first. */
-async function fetchJobs(): Promise<Job[]> {
-  const { data, error } = await jobsSupabase
-    .from("jobs")
-    .select(
-      "slug, title, company, logoUrl:logo_url, location, workMode:work_mode, jobType:job_type, experience, salary, skills, description, applyUrl:apply_url, postedAt:posted_at, deadline, source, branch",
-    )
-    .or(`deadline.is.null,deadline.gte.${today()}`)
-    .order("posted_at", { ascending: false });
-  if (error) throw new Error(error.message);
-  return data as Job[];
+function fetchJobs(): Promise<Job[]> {
+  return fromBackend<Job[]>("list_jobs", { today: today() });
 }
 
 /** Guests never fetch jobs: pass `enabled: false` for them. */

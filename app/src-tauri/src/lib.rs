@@ -1,6 +1,7 @@
-mod account;
 mod auth;
+mod backend;
 mod catalog;
+mod content;
 mod databases;
 mod db;
 mod files;
@@ -88,6 +89,11 @@ pub fn run() {
             auth::guest_login,
             auth::logout,
             catalog::list_languages,
+            content::list_practice_sections,
+            content::list_category_questions,
+            content::get_question,
+            content::list_category_mcqs,
+            content::list_jobs,
             files::list_files,
             files::list_file_history,
             files::create_file,

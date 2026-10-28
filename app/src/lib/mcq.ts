@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
-import { supabase } from "@/lib/supabase";
+import { fromBackend } from "@/lib/backend";
 
 /** An option of an MCQ. Its body and explanation are markdown. */
 export type McqOption = {
@@ -29,20 +29,11 @@ export type Mcq = {
 
 /**
  * An MCQ category's questions, in order, with their options and hints. The
- * database returns only the open ones (published and Public), so private
+ * backend returns only the open ones (published and Public), so private
  * questions and their answers never reach the app.
  */
-async function fetchCategoryMcqs(category: string): Promise<Mcq[]> {
-  const { data, error } = await supabase
-    .from("pc_questions")
-    .select(
-      "id, slug, title, difficulty, topic, description, hints, options:pc_question_options (id, body, explanation, is_correct), category:pc_categories!inner (slug)",
-    )
-    .eq("category.slug", category)
-    .order("position")
-    .order("position", { referencedTable: "options" });
-  if (error) throw new Error(error.message);
-  return data.map(({ category: _, ...mcq }) => mcq as Mcq);
+function fetchCategoryMcqs(category: string): Promise<Mcq[]> {
+  return fromBackend<Mcq[]>("list_category_mcqs", { category });
 }
 
 /** A category's MCQs, by its slug; null while none is open. */

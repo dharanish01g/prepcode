@@ -1,18 +1,17 @@
 //! What students do on Practice MCQs: each submit and each hint opened.
 //!
 //! An event is saved on this computer first, so nothing is lost offline or if
-//! the app closes, then sent to Supabase's `pc_mcq_events` as the signed-in
-//! student, with the same id: sending one twice keeps it once. A guest's are
-//! never sent, and go with the guest's files.
+//! the app closes, then sent to the backend as the signed-in student, with
+//! the same id: sending one twice keeps it once. A guest's are never
+//! sent, and go with the guest's files.
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Deserialize;
-use serde_json::{json, Value};
 use tauri::{AppHandle, Manager, State};
 
-use crate::account::{self, AccountError};
 use crate::auth::{self, AccessToken, CurrentUser, GUEST_PREFIX};
+use crate::backend::{self, Backend, BackendError, McqEventRecord};
 use crate::db::Db;
 
 /// Held while sending, so two sends never post the same events at once.
@@ -33,9 +32,9 @@ enum Kind {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct McqEvent {
-    /// The question's id in Supabase.
+    /// The question's id in the backend.
     question_id: String,
-    /// Its slug, to count what's solved without asking Supabase.
+    /// Its slug, to count what's solved without asking the backend.
     question: String,
     kind: Kind,
     /// A submit's option, and whether it was the right one.
@@ -132,9 +131,8 @@ pub async fn send_mcq_events(app: AppHandle, current: State<'_, CurrentUser>) ->
     send_waiting(&app, &user).await
 }
 
-/// Up to `BATCH` of a student's events not yet in Supabase, oldest first, as
-/// `pc_mcq_events` rows.
-fn waiting(db: &Db, user: &str) -> Result<Vec<(String, Value)>, String> {
+/// Up to `BATCH` of a student's events not yet sent, oldest first.
+fn waiting(db: &Db, user: &str) -> Result<Vec<McqEventRecord>, String> {
     let err = |e: rusqlite::Error| format!("Could not read the MCQ answers: {e}");
     db.with(|conn| {
         let mut stmt = conn
@@ -146,16 +144,14 @@ fn waiting(db: &Db, user: &str) -> Result<Vec<(String, Value)>, String> {
             .map_err(err)?;
         let rows = stmt
             .query_map(rusqlite::params![user, BATCH], |row| {
-                let id: String = row.get(0)?;
-                let event = json!({
-                    "id": id,
-                    "question_id": row.get::<_, String>(1)?,
-                    "kind": row.get::<_, String>(2)?,
-                    "option_id": row.get::<_, Option<String>>(3)?,
-                    "hint_index": row.get::<_, Option<i64>>(4)?,
-                    "at": row.get::<_, String>(5)?,
-                });
-                Ok((id, event))
+                Ok(McqEventRecord {
+                    id: row.get(0)?,
+                    question_id: row.get(1)?,
+                    kind: row.get(2)?,
+                    option_id: row.get(3)?,
+                    hint_index: row.get(4)?,
+                    at: row.get(5)?,
+                })
             })
             .map_err(err)?;
         rows.collect::<rusqlite::Result<Vec<_>>>().map_err(err)
@@ -177,7 +173,7 @@ fn mark_sent(db: &Db, ids: &[String]) -> Result<(), String> {
 
 /// Sends a student's waiting events in batches until none are left. Stops at
 /// the first error worth retrying (offline, signed out), leaving the rest for
-/// next time. Events Supabase refuses for good (e.g. the question was made
+/// next time. Events the backend refuses for good (e.g. the question was made
 /// private meanwhile) are marked sent, so they aren't retried forever.
 async fn send_waiting(app: &AppHandle, user: &str) -> Result<(), String> {
     let sender = app.state::<McqSender>();
@@ -193,20 +189,20 @@ async fn send_waiting(app: &AppHandle, user: &str) -> Result<(), String> {
             return Ok(());
         }
         let token = auth::access_token(&db, &app.state::<AccessToken>()).await?;
-        let (ids, rows): (Vec<String>, Vec<Value>) = events.into_iter().unzip();
-        match account::add_mcq_events(&token, &Value::Array(rows.clone())).await {
+        let ids: Vec<String> = events.iter().map(|event| event.id.clone()).collect();
+        match backend::get().add_mcq_events(&token, &events).await {
             Ok(()) => mark_sent(&db, &ids)?,
             // One bad event refuses the whole batch: send them one by one to keep the rest.
-            Err(AccountError::Rejected(_)) => {
-                for (id, row) in ids.iter().zip(rows) {
-                    match account::add_mcq_events(&token, &Value::Array(vec![row])).await {
+            Err(BackendError::Rejected(_)) => {
+                for event in &events {
+                    match backend::get().add_mcq_events(&token, std::slice::from_ref(event)).await {
                         Ok(()) => {}
-                        Err(AccountError::Rejected(reason)) => {
+                        Err(BackendError::Rejected(reason)) => {
                             log::warn!("An MCQ answer was refused, so it won't be sent: {reason}")
                         }
                         Err(e) => return Err(e.message()),
                     }
-                    mark_sent(&db, std::slice::from_ref(id))?;
+                    mark_sent(&db, std::slice::from_ref(&event.id))?;
                 }
             }
             Err(e) => return Err(e.message()),
@@ -215,7 +211,7 @@ async fn send_waiting(app: &AppHandle, user: &str) -> Result<(), String> {
 }
 
 /// The MCQs the student has answered right, by slug: those recorded here, and
-/// for a student those in Supabase too (e.g. from another computer). Offline,
+/// for a student those in the backend too (e.g. from another computer). Offline,
 /// just those recorded here.
 #[tauri::command]
 pub async fn list_mcq_solved(
@@ -237,7 +233,7 @@ pub async fn list_mcq_solved(
     })?;
     if is_student(&user) {
         let remote = match auth::access_token(&db, &access).await {
-            Ok(token) => account::mcq_solved(&token).await.map_err(|e| e.message()),
+            Ok(token) => backend::get().mcq_solved(&token).await.map_err(|e| e.message()),
             Err(e) => Err(e),
         };
         match remote {

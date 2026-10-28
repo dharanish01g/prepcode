@@ -40,8 +40,8 @@ use serde_json::json;
 use sha1::{Digest, Sha1};
 use tauri::{AppHandle, Manager, State};
 
-use crate::account::{self, AccountError, RepoToken, SetupNeeded};
 use crate::auth::{self, workspace_dir, AccessToken, CurrentUser, GUEST_PREFIX};
+use crate::backend::{self, Backend, BackendError, RepoToken, SetupNeeded};
 use crate::catalog;
 use crate::db::Db;
 use crate::files::{self, split_extension, WorkspaceFile, WorkspaceLock};
@@ -289,7 +289,7 @@ async fn repo_token(app: &AppHandle, db: &Db, user: &str) -> Result<RepoToken, S
     fetch_repo_token(app, db, user).await.map_err(|e| e.message())
 }
 
-async fn fetch_repo_token(app: &AppHandle, db: &Db, user: &str) -> Result<RepoToken, AccountError> {
+async fn fetch_repo_token(app: &AppHandle, db: &Db, user: &str) -> Result<RepoToken, BackendError> {
     let tokens = app.state::<RepoTokens>();
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
     if let Some((owner, token)) = tokens.0.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
@@ -297,8 +297,8 @@ async fn fetch_repo_token(app: &AppHandle, db: &Db, user: &str) -> Result<RepoTo
             return Ok(token.clone());
         }
     }
-    let access = auth::access_token(db, &app.state::<AccessToken>()).await.map_err(AccountError::Other)?;
-    let token = account::repo_token(&access).await?;
+    let access = auth::access_token(db, &app.state::<AccessToken>()).await.map_err(BackendError::Other)?;
+    let token = backend::get().repo_token(&access).await?;
     *tokens.0.lock().unwrap_or_else(|e| e.into_inner()) = Some((user.to_owned(), token.clone()));
     Ok(token)
 }
@@ -312,7 +312,7 @@ async fn fetch_repo_token(app: &AppHandle, db: &Db, user: &str) -> Result<RepoTo
 pub async fn check_github(app: &AppHandle, db: &Db, user: &str) -> bool {
     match fetch_repo_token(app, db, user).await {
         Ok(_) => true,
-        Err(AccountError::NotSetUp(needed)) => {
+        Err(BackendError::NotSetUp(needed)) => {
             log::info!("GitHub isn't set up for syncing yet: {needed:?}");
             false
         }
@@ -370,7 +370,7 @@ pub async fn repo_setup(
     let user = require_student(&current)?;
     let needed = match fetch_repo_token(&app, &db, &user).await {
         Ok(_) => return Ok(RepoSetup::Ready),
-        Err(AccountError::NotSetUp(needed)) => needed,
+        Err(BackendError::NotSetUp(needed)) => needed,
         Err(e) => return Ok(RepoSetup::Unknown { message: e.message() }),
     };
     let account = auth::saved_account(&db)?.ok_or("You're not logged in.")?;
@@ -517,7 +517,7 @@ async fn sync(
     let repo = github::get_repo(&token, &owner).await.map_err(msg)?.ok_or_else(|| {
         format!(
             "{} give prepcode access to your {} repository on GitHub.",
-            account::CONNECT_GITHUB,
+            backend::CONNECT_GITHUB,
             github::REPO
         )
     })?;
