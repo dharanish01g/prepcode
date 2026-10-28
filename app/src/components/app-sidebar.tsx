@@ -61,8 +61,9 @@ const data: { navMain: { title: View; icon: React.ReactNode }[] } = {
     // Openings to search and apply to. Also takes the whole main area.
     { title: "Jobs", icon: <BriefcaseBusinessIcon /> },
     // Temporary: SQL questions with dummy data, while their screen is built.
-    // They move into Practice once they run.
-    { title: "SQL", icon: <FlaskConicalIcon /> },
+    // They move into Practice once they run. Dev builds only: the questions
+    // start with their answers filled in.
+    ...(import.meta.env.DEV ? [{ title: "SQL" as const, icon: <FlaskConicalIcon /> }] : []),
   ],
 };
 

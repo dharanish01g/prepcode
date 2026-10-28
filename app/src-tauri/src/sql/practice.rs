@@ -8,9 +8,11 @@
 //! Practice has a connection of its own, so it never changes the database the
 //! Database view's session has selected. On MySQL the practice area is a
 //! database; on PostgreSQL, a schema in a database of its own, since a
-//! session can't switch databases.
+//! session can't switch databases. The student can make an area of that
+//! name in Database too, so a check only ever empties one prepcode made.
 
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
@@ -97,19 +99,27 @@ pub async fn check_sql_practice(
     // Held for the whole check, so it takes turns with Database runs.
     let mut guard = servers.servers.lock().await;
     let server = running_server(&app, &account, &language, &runtime, engine, &mut guard).await?;
-    check(&server.session, engine, &question, &statements, &servers).await
+    // Beside the data folder, like the server's log, e.g. `mysql.practice`.
+    let marker = server.data.with_extension("practice");
+    check(&server.session, engine, &question, &statements, &servers, &marker).await
 }
 
 /// Runs the statements on each case, on a session of its own beside `shared`.
+/// `marker` is there while the practice area may be prepcode's (see `claim_area`).
 async fn check(
     shared: &Session,
     engine: Engine,
     question: &Question,
     statements: &[Statement],
     servers: &Servers,
+    marker: &Path,
 ) -> Result<Vec<CaseRun>, String> {
     let mut session = shared.open_practice().await?;
     servers.stop.store(false, Ordering::Relaxed);
+    if let Err(e) = claim_area(&mut session, engine, marker).await {
+        session.close().await;
+        return Err(e);
+    }
 
     let mut runs = Vec::new();
     let mut outcome = Ok(());
@@ -128,9 +138,45 @@ async fn check(
         runs.push(run_query(&mut session, statements, servers).await);
     }
     // Leaves nothing behind for the student to find in Database.
-    let _ = run_all(&mut session, &clear_statements(engine)).await;
+    if run_all(&mut session, &clear_statements(engine)).await.is_ok() {
+        let _ = std::fs::remove_file(marker);
+    }
     session.close().await;
     outcome.map(|()| runs)
+}
+
+/// Makes sure the practice area is prepcode's to empty, and marks it so until
+/// it's gone. One there without `marker` is the student's own, made in
+/// Database; one with it, a check's that was left behind (e.g. the app closed
+/// during it).
+async fn claim_area(session: &mut Session, engine: Engine, marker: &Path) -> Result<(), String> {
+    if !marker.exists() && area_exists(session, engine).await? {
+        let area = match engine {
+            Engine::Mysql => format!("a database named {DATABASE}"),
+            _ => format!("a schema named {SCHEMA} in the database {DATABASE}"),
+        };
+        return Err(format!(
+            "SQL practice uses {area}, and you have one already. Rename or drop yours in Database, then try again."
+        ));
+    }
+    std::fs::write(marker, "").map_err(|e| format!("Could not start the check: {e}"))
+}
+
+/// Whether the practice area is there.
+async fn area_exists(session: &mut Session, engine: Engine) -> Result<bool, String> {
+    let sql = match engine {
+        Engine::Mysql => {
+            format!("SELECT COUNT(*) FROM information_schema.schemata WHERE schema_name = '{DATABASE}'")
+        }
+        _ => format!("SELECT COUNT(*) FROM pg_namespace WHERE nspname = '{SCHEMA}'"),
+    };
+    let count = run_one(session, &sql).await?.into_iter().find_map(|result| match result.outcome {
+        Outcome::Table { rows, .. } => {
+            rows.into_iter().next().and_then(|row| row.into_iter().next().flatten())
+        }
+        Outcome::Status { .. } => None,
+    });
+    Ok(count.is_some_and(|count| count != "0"))
 }
 
 /// Empties the practice area and fills it with the case's tables.
@@ -143,15 +189,20 @@ async fn set_up(session: &mut Session, engine: Engine, tables: &[Table], case: &
 /// Runs prepcode's own statements, stopping at the first that fails.
 async fn run_all(session: &mut Session, statements: &[String]) -> Result<(), String> {
     for sql in statements {
-        let mut results = Vec::new();
-        match session.run(&Statement::new(0, sql.clone()), &mut results).await {
-            Ok(()) => {}
-            Err(Failure::Error { message, .. }) => return Err(message),
-            Err(Failure::Lost(e)) => return Err(format!("Lost the connection: {e}")),
-            Err(Failure::Stopped) => return Err("Stopped.".into()),
-        }
+        run_one(session, sql).await?;
     }
     Ok(())
+}
+
+/// Runs one of prepcode's own statements, for its results.
+async fn run_one(session: &mut Session, sql: &str) -> Result<Vec<StatementResult>, String> {
+    let mut results = Vec::new();
+    match session.run(&Statement::new(0, sql.to_owned()), &mut results).await {
+        Ok(()) => Ok(results),
+        Err(Failure::Error { message, .. }) => Err(message),
+        Err(Failure::Lost(e)) => Err(format!("Lost the connection: {e}")),
+        Err(Failure::Stopped) => Err("Stopped.".into()),
+    }
 }
 
 /// Runs the student's statements in order; the last one that returned rows
@@ -456,9 +507,11 @@ mod tests {
             let (process, mut session) = launch(language, runtime, engine, &exe, &data, vars).await.unwrap();
             let before = session.database().await;
             let servers = Servers::default();
+            let marker = dir.join("practice-in-use");
             let check_query = async |query: &str| {
                 let runs =
-                    check(&session, engine, &question, &split_statements(engine, query), &servers).await;
+                    check(&session, engine, &question, &split_statements(engine, query), &servers, &marker)
+                        .await;
                 serde_json::to_value(runs.unwrap()).unwrap()
             };
 
@@ -537,6 +590,25 @@ WHERE m.subject = 'Maths' AND m.score > 80 ORDER BY m.score DESC;";
                 matches!(&results[0].outcome, Outcome::Table { total: 0, .. }),
                 "{extension}: the practice area was left behind"
             );
+            assert!(!marker.exists(), "{extension}: the mark was left behind");
+
+            // An area the student made themselves is refused, and kept.
+            let mut practice = session.open_practice().await.unwrap();
+            let make = match engine {
+                Engine::Mysql => format!("CREATE DATABASE `{DATABASE}`"),
+                _ => format!("CREATE SCHEMA \"{SCHEMA}\""),
+            };
+            run_all(&mut practice, &[make]).await.unwrap();
+            let statements = split_statements(engine, answer);
+            let refused = check(&session, engine, &question, &statements, &servers, &marker).await;
+            assert!(refused.is_err_and(|e| e.contains("Rename or drop yours")), "{extension}");
+            assert!(area_exists(&mut practice, engine).await.unwrap(), "{extension}: theirs was dropped");
+            // One a check left behind (still marked) is emptied as usual.
+            std::fs::write(&marker, "").unwrap();
+            assert!(check(&session, engine, &question, &statements, &servers, &marker).await.is_ok());
+            assert!(!area_exists(&mut practice, engine).await.unwrap(), "{extension}");
+            assert!(!marker.exists(), "{extension}");
+            practice.close().await;
 
             let (account, extension) = (String::new(), String::new());
             Server { account, extension, process, session, exe: exe.clone(), data: data.clone() }
