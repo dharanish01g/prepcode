@@ -62,7 +62,9 @@ pub trait Backend: Sync {
     fn user(&self, access_token: &str) -> impl Future<Output = Result<Account, BackendError>> + Send;
 
     /// The signed-in account's roles (staff roles, "faculty", "tpo",
-    /// "student"), as the staff tools see them.
+    /// "student"), as the staff tools see them. Empty for a student not yet
+    /// enrolled. An answer that isn't a list of roles must be an error, not
+    /// an empty list: an empty list lets the account in as a student.
     fn role_ids(&self, access_token: &str) -> impl Future<Output = Result<Vec<String>, BackendError>> + Send;
 
     /// Deletes the signed-in account while it's still waiting for GitHub,

@@ -79,7 +79,7 @@ impl Project {
         let url = Url::parse_with_params(&format!("{}/rest/v1/{table}", self.url), query.iter().map(compact))
             .map_err(|e| BackendError::Other(e.to_string()))?;
         let request = client()?.get(url).header("apikey", self.key);
-        parse(send(request).await?)
+        parse(send_as(request, &READING).await?)
     }
 }
 
@@ -168,13 +168,9 @@ impl Backend for Supabase {
 
     async fn role_ids(&self, access_token: &str) -> Result<Vec<String>, BackendError> {
         let request = self.post("/rest/v1/rpc/my_role_ids")?.bearer_auth(access_token).json(&json!({}));
-        let body = send(request).await?;
-        Ok(body
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|role| role.as_str().map(str::to_owned))
-            .collect())
+        // Anything but a list of names is an error, never "no roles": that
+        // would let a staff account in as a student.
+        parse(send(request).await?)
     }
 
     /// See the `discard-pending-account` function.
@@ -315,7 +311,7 @@ impl Backend for Supabase {
         }
         let request =
             self.post("/rest/v1/rpc/pc_category_questions")?.json(&json!({ "p_category_slug": category }));
-        let rows: Vec<Row> = parse(send(request).await?)?;
+        let rows: Vec<Row> = parse(send_as(request, &READING).await?)?;
         Ok(rows
             .into_iter()
             .map(|row| QuestionSummary {
@@ -397,15 +393,24 @@ impl Backend for Supabase {
         }
     }
 
+    /// Page by page: PostgREST answers at most its `max_rows` (1000 on
+    /// Supabase) at a time, so one read would drop the rest without saying.
     async fn mcq_solved(&self, access_token: &str) -> Result<Vec<String>, BackendError> {
-        let path = "/rest/v1/pc_mcq_events?select=question:pc_questions(slug)&kind=eq.submit&correct=is.true";
-        let body = send(self.request(Method::GET, path)?.bearer_auth(access_token)).await?;
-        let mut slugs: Vec<String> = body
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|row| row["question"]["slug"].as_str().map(str::to_owned))
-            .collect();
+        let mut slugs = Vec::new();
+        let mut offset = 0;
+        loop {
+            let path = format!(
+                "/rest/v1/pc_mcq_events?select=question:pc_questions(slug)&kind=eq.submit&correct=is.true\
+                 &order=id&offset={offset}"
+            );
+            let body = send(self.request(Method::GET, &path)?.bearer_auth(access_token)).await?;
+            let rows = body.as_array().map(Vec::as_slice).unwrap_or_default();
+            if rows.is_empty() {
+                break;
+            }
+            offset += rows.len();
+            slugs.extend(rows.iter().filter_map(|row| row["question"]["slug"].as_str().map(str::to_owned)));
+        }
         slugs.sort();
         slugs.dedup();
         Ok(slugs)
@@ -436,14 +441,40 @@ impl Backend for Supabase {
 
 // --- Answers -----------------------------------------------------------------------------
 
+/// What to say when a failed answer doesn't say why itself.
+struct Wording {
+    /// Too many requests.
+    busy: &'static str,
+    /// Refused, without a message.
+    refused: &'static str,
+}
+
+/// For signing in and the signed-in account.
+const SIGNING_IN: Wording = Wording {
+    // A college lab shares one internet address, so many PCs signing in at
+    // once can hit Supabase's per-address limits.
+    busy: "Too many sign-ins from this network right now. Please try again in a few minutes.",
+    refused: "The sign-in didn't work. Please try again.",
+};
+
+/// For reading Practice and Jobs.
+const READING: Wording = Wording {
+    busy: "Too many requests from this network right now. Please try again in a few minutes.",
+    refused: "Could not load this from prepcode's servers. Please try again.",
+};
+
 async fn send(request: RequestBuilder) -> Result<Value, BackendError> {
+    send_as(request, &SIGNING_IN).await
+}
+
+async fn send_as(request: RequestBuilder, wording: &Wording) -> Result<Value, BackendError> {
     let response = request.send().await.map_err(|_| BackendError::Offline)?;
     let status = response.status();
     let body: Value = response.json().await.unwrap_or(Value::Null);
     if status.is_success() {
         return Ok(body);
     }
-    Err(error_of(status, &body))
+    Err(error_of(status, &body, wording))
 }
 
 /// An answer as `T`, or an error saying it wasn't what prepcode expects.
@@ -453,21 +484,17 @@ fn parse<T: DeserializeOwned>(body: Value) -> Result<T, BackendError> {
 }
 
 /// What a failed answer from Supabase means.
-fn error_of(status: reqwest::StatusCode, body: &Value) -> BackendError {
+fn error_of(status: reqwest::StatusCode, body: &Value, wording: &Wording) -> BackendError {
     if status.is_server_error() || status == reqwest::StatusCode::REQUEST_TIMEOUT {
         return BackendError::Offline;
     }
-    // A college lab shares one internet address, so many PCs signing in at
-    // once can hit Supabase's per-address limits.
     if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
-        return BackendError::Rejected(
-            "Too many sign-ins from this network right now. Please try again in a few minutes.".into(),
-        );
+        return BackendError::Rejected(wording.busy.into());
     }
     let message = ["msg", "error_description", "message", "error"]
         .iter()
         .find_map(|key| body[*key].as_str())
-        .unwrap_or("The sign-in didn't work. Please try again.")
+        .unwrap_or(wording.refused)
         .to_owned();
     if body["error_code"].as_str().is_some_and(|code| SIGNED_OUT_CODES.contains(&code)) {
         return BackendError::SignedOut(message);
@@ -565,11 +592,35 @@ mod tests {
             "error_code": "refresh_token_not_found",
             "msg": "Invalid Refresh Token: Refresh Token Not Found"
         });
-        assert!(matches!(error_of(StatusCode::BAD_REQUEST, &gone), BackendError::SignedOut(_)));
+        assert!(matches!(error_of(StatusCode::BAD_REQUEST, &gone, &SIGNING_IN), BackendError::SignedOut(_)));
         let limited = json!({ "code": 429, "error_code": "over_request_rate_limit", "msg": "Rate limit" });
-        assert!(matches!(error_of(StatusCode::TOO_MANY_REQUESTS, &limited), BackendError::Rejected(_)));
-        assert!(matches!(error_of(StatusCode::BAD_GATEWAY, &Value::Null), BackendError::Offline));
-        assert!(matches!(error_of(StatusCode::FORBIDDEN, &Value::Null), BackendError::Rejected(_)));
+        assert!(matches!(
+            error_of(StatusCode::TOO_MANY_REQUESTS, &limited, &SIGNING_IN),
+            BackendError::Rejected(_)
+        ));
+        assert!(matches!(
+            error_of(StatusCode::BAD_GATEWAY, &Value::Null, &SIGNING_IN),
+            BackendError::Offline
+        ));
+        assert!(matches!(
+            error_of(StatusCode::FORBIDDEN, &Value::Null, &SIGNING_IN),
+            BackendError::Rejected(_)
+        ));
+    }
+
+    #[test]
+    fn reading_failures_dont_talk_about_signing_in() {
+        use reqwest::StatusCode;
+        for status in [StatusCode::TOO_MANY_REQUESTS, StatusCode::NOT_FOUND] {
+            let message = error_of(status, &Value::Null, &READING).message();
+            assert!(!message.contains("sign-in"), "{message}");
+        }
+        // PostgREST's own message still comes through.
+        let denied = json!({ "code": "42501", "message": "permission denied for table pc_questions" });
+        assert_eq!(
+            error_of(StatusCode::FORBIDDEN, &denied, &READING).message(),
+            "permission denied for table pc_questions"
+        );
     }
 
     #[test]
