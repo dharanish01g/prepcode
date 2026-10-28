@@ -22,7 +22,7 @@ use tauri::{AppHandle, Manager, State};
 use tauri_plugin_opener::OpenerExt;
 use tokio::net::TcpListener;
 
-use crate::account::{self, Account, AccountError, EmailCode, Provider, Tokens};
+use crate::backend::{self, browser, Account, Backend, BackendError, EmailCode, Provider, Tokens};
 use crate::catalog;
 use crate::databases;
 use crate::db::Db;
@@ -267,13 +267,13 @@ pub async fn access_token(db: &Db, access: &AccessToken) -> Result<String, Strin
     let expired = || "Your sign-in has expired. Log out and sign in again.".to_owned();
     let saved = saved_account(db)?.ok_or_else(expired)?;
     let refresh_token = keyring_get(KEYRING_REFRESH_TOKEN).await?.ok_or_else(expired)?;
-    match account::refresh(&refresh_token).await {
+    match backend::get().refresh(&refresh_token).await {
         Ok(tokens) if same_github(&tokens, &saved) => {
             let token = tokens.access_token.clone();
             save_session(db, access, tokens).await?;
             Ok(token)
         }
-        Ok(_) | Err(AccountError::SignedOut(_)) => Err(expired()),
+        Ok(_) | Err(BackendError::SignedOut(_)) => Err(expired()),
         Err(e) => Err(e.message()),
     }
 }
@@ -307,12 +307,12 @@ pub async fn restore_session(
     };
     // Offline, the GitHub check below would only wait for the network again.
     let mut online = true;
-    match account::refresh(&refresh_token).await {
+    match backend::get().refresh(&refresh_token).await {
         // The username or picture may have changed; the GitHub id never does.
         Ok(tokens) if same_github(&tokens, &account) => {
             account = save_session(&db, &access, tokens).await?;
         }
-        Ok(_) | Err(AccountError::SignedOut(_)) => {
+        Ok(_) | Err(BackendError::SignedOut(_)) => {
             log::info!("The saved sign-in no longer works; signed out");
             forget_sign_in(&db, &access).await?;
             return Ok(None);
@@ -425,7 +425,7 @@ where
     // isn't one (e.g. Linux without a secret service), not after the student
     // has approved prepcode in the browser.
     keyring_get(KEYRING_REFRESH_TOKEN).await?;
-    let pkce = account::pkce()?;
+    let pkce = browser::pkce()?;
     let listener =
         TcpListener::bind(("127.0.0.1", 0)).await.map_err(|e| format!("Could not start signing in: {e}"))?;
     let port = listener.local_addr().map_err(|e| format!("Could not start signing in: {e}"))?.port();
@@ -446,7 +446,7 @@ where
 pub async fn start_github_sign_in(app: AppHandle, sign_in: State<'_, SignIn>) -> Result<SignInLink, String> {
     let purpose = Purpose::SignIn;
     start_in_browser(&app, &sign_in, purpose, |port, challenge| async move {
-        Ok(account::authorize_url(Provider::GitHub, port, &challenge))
+        Ok(backend::get().authorize_url(Provider::GitHub, port, &challenge))
     })
     .await
 }
@@ -457,7 +457,7 @@ pub async fn start_github_sign_in(app: AppHandle, sign_in: State<'_, SignIn>) ->
 pub async fn start_google_sign_in(app: AppHandle, sign_in: State<'_, SignIn>) -> Result<SignInLink, String> {
     let purpose = Purpose::SignIn;
     start_in_browser(&app, &sign_in, purpose, |port, challenge| async move {
-        Ok(account::authorize_url(Provider::Google, port, &challenge))
+        Ok(backend::get().authorize_url(Provider::Google, port, &challenge))
     })
     .await
 }
@@ -475,7 +475,7 @@ pub async fn start_google_link(
     let token = access_token(&db, &access).await?;
     let purpose = Purpose::LinkGoogle { account_id: account.id };
     start_in_browser(&app, &sign_in, purpose, |port, challenge| async move {
-        account::link_url(&token, Provider::Google, port, &challenge).await.map_err(|e| e.message())
+        backend::get().link_url(&token, Provider::Google, port, &challenge).await.map_err(|e| e.message())
     })
     .await
 }
@@ -495,7 +495,7 @@ pub async fn start_github_connect(
         .ok_or("Sign in again to connect GitHub.")?;
     let purpose = Purpose::ConnectGitHub { account_id, email };
     start_in_browser(&app, &sign_in, purpose, |port, challenge| async move {
-        account::link_url(&token, Provider::GitHub, port, &challenge).await.map_err(|e| e.message())
+        backend::get().link_url(&token, Provider::GitHub, port, &challenge).await.map_err(|e| e.message())
     })
     .await
 }
@@ -505,7 +505,7 @@ pub async fn start_github_connect(
 #[tauri::command]
 pub async fn discard_waiting_account(waiting: State<'_, WaitingAccount>) -> Result<(), String> {
     let Some(w) = waiting.lock().take() else { return Ok(()) };
-    account::discard_waiting(&w.access_token).await.map_err(|e| e.message())
+    backend::get().discard_waiting(&w.access_token).await.map_err(|e| e.message())
 }
 
 /// Waits for the browser to come back after the student approves, then
@@ -534,7 +534,7 @@ pub async fn finish_sign_in(
         }
     };
     let came_back = tokio::select! {
-        came_back = account::wait_for_code(&listener) => came_back,
+        came_back = browser::wait_for_code(&listener) => came_back,
         () = cancelled => return Ok(None),
         () = tokio::time::sleep(SIGN_IN_TIMEOUT) => {
             *sign_in.lock() = None;
@@ -557,7 +557,7 @@ pub async fn finish_sign_in(
         (Err(e), _) => return Err(e),
     };
 
-    let tokens = account::exchange_code(&code, &verifier).await.map_err(|e| e.message())?;
+    let tokens = backend::get().exchange_code(&code, &verifier).await.map_err(|e| e.message())?;
     let expected = match &purpose {
         Purpose::SignIn => None,
         Purpose::LinkGoogle { account_id } | Purpose::ConnectGitHub { account_id, .. } => Some(account_id),
@@ -583,7 +583,7 @@ pub async fn finish_sign_in(
         let workspace = tokens.account.as_ref().map(student_id);
         let still_signed_in = || current.get().ok() == workspace;
         if !still_signed_in() {
-            if let Err(e) = account::sign_out(&tokens.access_token).await {
+            if let Err(e) = backend::get().sign_out(&tokens.access_token).await {
                 log::warn!("Could not end an unused session: {e:?}");
             }
             return Ok(None);
@@ -629,11 +629,11 @@ async fn complete_sign_in(app: &AppHandle, tokens: Tokens) -> Result<SignInResul
 /// which Supabase links to them by email) don't get GitHub and don't use
 /// prepcode: end that session and say so.
 async fn refuse_staff(tokens: &Tokens) -> Result<(), String> {
-    let roles = account::role_ids(&tokens.access_token).await.map_err(|e| e.message())?;
+    let roles = backend::get().role_ids(&tokens.access_token).await.map_err(|e| e.message())?;
     if roles.iter().all(|role| role == "student") {
         return Ok(());
     }
-    if let Err(e) = account::sign_out(&tokens.access_token).await {
+    if let Err(e) = backend::get().sign_out(&tokens.access_token).await {
         log::warn!("Could not end a staff session: {e:?}");
     }
     Err("This is a staff account. It can't sign in here.".into())
@@ -678,12 +678,12 @@ pub async fn email_sign_up(email: String, password: String, name: Option<String>
     let email = clean_email(&email)?;
     check_new_password(&password)?;
     let name = name.as_deref().map(str::trim).filter(|name| !name.is_empty());
-    account::sign_up(&email, &password, name).await.map_err(|e| e.message())
+    backend::get().sign_up(&email, &password, name).await.map_err(|e| e.message())
 }
 
 #[tauri::command]
 pub async fn email_resend_code(email: String) -> Result<(), String> {
-    account::resend_sign_up_code(&clean_email(&email)?).await.map_err(|e| e.message())
+    backend::get().resend_sign_up_code(&clean_email(&email)?).await.map_err(|e| e.message())
 }
 
 /// Checks the code from the sign-up email, which signs the student in. Next
@@ -691,22 +691,24 @@ pub async fn email_resend_code(email: String) -> Result<(), String> {
 #[tauri::command]
 pub async fn email_verify_code(app: AppHandle, email: String, code: String) -> Result<SignInResult, String> {
     let email = clean_email(&email)?;
-    let tokens =
-        account::verify_email_code(&email, code.trim(), EmailCode::SignUp).await.map_err(|e| e.message())?;
+    let tokens = backend::get()
+        .verify_email_code(&email, code.trim(), EmailCode::SignUp)
+        .await
+        .map_err(|e| e.message())?;
     complete_sign_in(&app, tokens).await
 }
 
 #[tauri::command]
 pub async fn email_sign_in(app: AppHandle, email: String, password: String) -> Result<SignInResult, String> {
     let email = clean_email(&email)?;
-    match account::sign_in_with_password(&email, &password).await {
+    match backend::get().sign_in_with_password(&email, &password).await {
         Ok(tokens) => complete_sign_in(&app, tokens).await,
         // Signed up but never entered the code: send a new one.
-        Err(AccountError::Rejected(message)) if message.to_lowercase().contains("not confirmed") => {
-            account::resend_sign_up_code(&email).await.map_err(|e| e.message())?;
+        Err(BackendError::Rejected(message)) if message.to_lowercase().contains("not confirmed") => {
+            backend::get().resend_sign_up_code(&email).await.map_err(|e| e.message())?;
             Ok(SignInResult::NeedsEmailCode { email })
         }
-        Err(AccountError::Rejected(message)) if message.to_lowercase().contains("invalid login") => {
+        Err(BackendError::Rejected(message)) if message.to_lowercase().contains("invalid login") => {
             Err("Wrong email or password.".into())
         }
         Err(e) => Err(e.message()),
@@ -717,7 +719,7 @@ pub async fn email_sign_in(app: AppHandle, email: String, password: String) -> R
 /// the email has an account.
 #[tauri::command]
 pub async fn email_send_reset_code(email: String) -> Result<(), String> {
-    account::send_reset_code(&clean_email(&email)?).await.map_err(|e| e.message())
+    backend::get().send_reset_code(&clean_email(&email)?).await.map_err(|e| e.message())
 }
 
 /// Checks the reset code, sets the new password and signs the student in.
@@ -730,11 +732,13 @@ pub async fn email_reset_password(
 ) -> Result<SignInResult, String> {
     let email = clean_email(&email)?;
     check_new_password(&password)?;
-    let tokens =
-        account::verify_email_code(&email, code.trim(), EmailCode::Reset).await.map_err(|e| e.message())?;
+    let tokens = backend::get()
+        .verify_email_code(&email, code.trim(), EmailCode::Reset)
+        .await
+        .map_err(|e| e.message())?;
     // Staff change their password in the staff tools, not here.
     refuse_staff(&tokens).await?;
-    account::set_password(&tokens.access_token, &password).await.map_err(|e| e.message())?;
+    backend::get().set_password(&tokens.access_token, &password).await.map_err(|e| e.message())?;
     complete_sign_in(&app, tokens).await
 }
 
@@ -785,8 +789,8 @@ pub async fn unlink_google(
     let saved = saved_account(&db)?.ok_or("Sign in with GitHub first.")?;
     let Some(google) = &saved.google else { return Ok(AccountDetails::of(Some(&saved))) };
     let token = access_token(&db, &access).await?;
-    account::unlink(&token, &google.identity_id).await.map_err(|e| e.message())?;
-    let fresh = account::user(&token).await.map_err(|e| e.message())?;
+    backend::get().unlink(&token, &google.identity_id).await.map_err(|e| e.message())?;
+    let fresh = backend::get().user(&token).await.map_err(|e| e.message())?;
     save_account(&db, &fresh)?;
     Ok(AccountDetails::of(Some(&fresh)))
 }
@@ -845,7 +849,7 @@ pub async fn logout(
     // effort: if it fails, the session just stays unused on the server.
     if let Some((token, _)) = token {
         tauri::async_runtime::spawn(async move {
-            if let Err(e) = account::sign_out(&token).await {
+            if let Err(e) = backend::get().sign_out(&token).await {
                 log::warn!("Could not end the session on the server: {e:?}");
             }
         });
