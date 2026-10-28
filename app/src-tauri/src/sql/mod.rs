@@ -76,10 +76,12 @@ impl Servers {
     }
 
     /// Interrupts the statement running now and skips the rest of the file.
+    /// Between statements (e.g. while practice sets up a case's tables) there
+    /// is nothing to interrupt, but the rest is still skipped.
     async fn interrupt(&self) -> Result<(), String> {
+        self.stop.store(true, Ordering::Relaxed);
         let running = self.running.lock().unwrap_or_else(|e| e.into_inner()).clone();
         let Some(cancel) = running else { return Ok(()) };
-        self.stop.store(true, Ordering::Relaxed);
         cancel.cancel().await.map_err(|e| format!("Could not stop: {e}"))
     }
 

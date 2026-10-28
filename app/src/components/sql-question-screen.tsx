@@ -133,9 +133,8 @@ export function SqlQuestionScreen({
   const checking = Object.values(checks).some((state) => state?.status === "checking");
 
   /**
-   * Run checks the examples, Submit every case. For now it pretends to run:
-   * each case is set up fresh on the student's own server, and the query
-   * runs on it.
+   * Run checks the examples, Submit every case. Each case is set up fresh on
+   * the student's own server, and the query runs on it.
    */
   async function handleCheck(kind: "run" | "submit") {
     if (!question || !engine || !checkKey) return;

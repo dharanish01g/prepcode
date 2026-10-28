@@ -1,7 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { Difficulty, QuestionSummary } from "@/lib/questions";
 
-/**ns here are dummy data, run on the
+/**
+ * SQL practice questions. The questions here are dummy data, run on the
  * student's own server. Later they come from the database, and move into
  * Practice.
  */

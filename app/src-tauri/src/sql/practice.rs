@@ -12,12 +12,14 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
 
 use super::{
-    database_language, running_server, split_statements, Failure, Outcome, Servers, Session, Statement,
+    database_language, running_server, split_statements, Cancel, Failure, Outcome, Servers, Session,
+    Statement, StatementResult,
 };
 use crate::auth::CurrentUser;
 use crate::catalog::Engine;
@@ -28,8 +30,10 @@ pub const DATABASE: &str = "prepcode_practice";
 /// PostgreSQL's practice schema.
 const SCHEMA: &str = "practice";
 /// How long one statement of the student's may run, so a runaway join
-/// doesn't hang the check.
-const TIMEOUT_MS: u32 = 10_000;
+/// doesn't hang the check (and the Database view, which waits its turn).
+const TIMEOUT: Duration = Duration::from_secs(10);
+/// The server's own limit, a little later, in case interrupting fails.
+const SERVER_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// What a check needs of the question: its tables, and its test cases.
 #[derive(Deserialize)]
@@ -110,6 +114,13 @@ async fn check(
     let mut runs = Vec::new();
     let mut outcome = Ok(());
     for case in &question.cases {
+        // Stop (or logging out) ends the whole check, not just this case.
+        // Every case still gets a run, as the app expects one per case.
+        if servers.stop.load(Ordering::Relaxed) {
+            let line = statements.first().map_or(1, |statement| statement.line);
+            runs.push(CaseRun::Error { line, message: "Stopped.".into() });
+            continue;
+        }
         if let Err(e) = set_up(&mut session, engine, &question.tables, case).await {
             outcome = Err(e);
             break;
@@ -148,10 +159,21 @@ async fn run_all(session: &mut Session, statements: &[String]) -> Result<(), Str
 async fn run_query(session: &mut Session, statements: &[Statement], servers: &Servers) -> CaseRun {
     let mut results = Vec::new();
     for statement in statements {
-        servers.set_running(session.cancel());
-        let ran = session.run(statement, &mut results).await;
-        servers.set_running(None);
         let error = |message| CaseRun::Error { line: statement.line, message };
+        if servers.stop.load(Ordering::Relaxed) {
+            return error("Stopped.".into());
+        }
+        let cancel = session.cancel();
+        servers.set_running(cancel.clone());
+        let (ran, timed_out) = run_timed(session, statement, &mut results, cancel).await;
+        servers.set_running(None);
+        // Checked first: an interrupted MySQL SLEEP() just returns.
+        if timed_out {
+            return error(format!(
+                "Your query took longer than {} seconds, so it was stopped.",
+                TIMEOUT.as_secs()
+            ));
+        }
         match ran {
             Ok(()) => {}
             Err(Failure::Error { line, message }) => return CaseRun::Error { line, message },
@@ -160,6 +182,11 @@ async fn run_query(session: &mut Session, statements: &[Statement], servers: &Se
         }
     }
     let answer = results.into_iter().rev().find_map(|result| match result.outcome {
+        // Only the first MAX_ROWS come back, which could match by chance.
+        Outcome::Table { total, ref rows, .. } if total > rows.len() => Some(CaseRun::Error {
+            line: result.line,
+            message: format!("Your query returned {total} rows; at most {} can be checked.", rows.len()),
+        }),
         Outcome::Table { columns, rows, .. } => Some(CaseRun::Rows { columns, rows }),
         Outcome::Status { .. } => None,
     });
@@ -169,33 +196,58 @@ async fn run_query(session: &mut Session, statements: &[Statement], servers: &Se
     })
 }
 
-/// Empties the practice area, and limits how long each statement may run.
-/// The ROLLBACK first ends a transaction the last query left open: on
-/// PostgreSQL, after an error in one, nothing else would run.
+/// Runs one statement of the student's, interrupting it once it has run for
+/// TIMEOUT. Also says whether it had to.
+async fn run_timed(
+    session: &mut Session,
+    statement: &Statement,
+    results: &mut Vec<StatementResult>,
+    cancel: Option<Cancel>,
+) -> (Result<(), Failure>, bool) {
+    let run = session.run(statement, results);
+    tokio::pin!(run);
+    tokio::select! {
+        ran = &mut run => (ran, false),
+        () = tokio::time::sleep(TIMEOUT) => {
+            if let Some(cancel) = cancel {
+                if let Err(e) = cancel.cancel().await {
+                    log::warn!("Could not interrupt a practice query: {e}");
+                }
+            }
+            (run.await, true)
+        }
+    }
+}
+
+/// Empties the practice area, and sets the server's own time limit: a
+/// backup for `run_timed`, as MySQL's covers only SELECT.
 fn reset_statements(engine: Engine) -> Vec<String> {
-    let mut statements = vec!["ROLLBACK".to_owned()];
-    statements.extend(clear_statements(engine));
+    let mut statements = clear_statements(engine);
+    let limit = SERVER_TIMEOUT.as_millis();
     match engine {
         Engine::Mysql => statements.extend([
             format!("CREATE DATABASE `{DATABASE}`"),
             format!("USE `{DATABASE}`"),
-            format!("SET SESSION max_execution_time = {TIMEOUT_MS}"),
+            format!("SET SESSION max_execution_time = {limit}"),
         ]),
         _ => statements.extend([
             format!("CREATE SCHEMA \"{SCHEMA}\""),
             format!("SET search_path TO \"{SCHEMA}\""),
-            format!("SET statement_timeout = {TIMEOUT_MS}"),
+            format!("SET statement_timeout = {limit}"),
         ]),
     }
     statements
 }
 
-/// Drops the practice area and everything in it.
+/// Drops the practice area and everything in it. The ROLLBACK first ends a
+/// transaction the query left open: on PostgreSQL, after an error in one,
+/// nothing else would run.
 fn clear_statements(engine: Engine) -> Vec<String> {
-    match engine {
-        Engine::Mysql => vec![format!("DROP DATABASE IF EXISTS `{DATABASE}`")],
-        _ => vec![format!("DROP SCHEMA IF EXISTS \"{SCHEMA}\" CASCADE")],
-    }
+    let drop = match engine {
+        Engine::Mysql => format!("DROP DATABASE IF EXISTS `{DATABASE}`"),
+        _ => format!("DROP SCHEMA IF EXISTS \"{SCHEMA}\" CASCADE"),
+    };
+    vec!["ROLLBACK".to_owned(), drop]
 }
 
 /// CREATE TABLE for each table, then one INSERT of the case's rows for each.
@@ -271,8 +323,9 @@ fn literal(engine: Engine, value: Option<&str>) -> String {
     format!("'{escaped}'")
 }
 
-/// A type like `INT`, `VARCHAR(50)` or `DECIMAL(4, 1)`: nothing that could
-/// end the CREATE TABLE early.
+/// A type like `INT`, `VARCHAR(50)` or `DECIMAL(4, 1)`. No quotes,
+/// semicolons or comments, so it can't start another statement; a `)` could
+/// still end the column list early, which only spoils the question's tables.
 fn is_column_type(sql_type: &str) -> bool {
     !sql_type.trim().is_empty()
         && sql_type.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, ' ' | '_' | '(' | ')' | ','))
@@ -322,6 +375,14 @@ mod tests {
                 "INSERT INTO \"students\" (\"id\", \"name\") VALUES ('1', 'O''Neil'), ('2', NULL)",
             ]
         );
+    }
+
+    #[test]
+    fn clearing_ends_an_open_transaction_first() {
+        for engine in [Engine::Mysql, Engine::Postgres] {
+            assert_eq!(clear_statements(engine)[0], "ROLLBACK");
+            assert_eq!(reset_statements(engine)[0], "ROLLBACK");
+        }
     }
 
     #[test]
@@ -424,6 +485,37 @@ WHERE m.subject = 'Maths' AND m.score > 80 ORDER BY m.score DESC;";
                 (json!("error"), json!(3)),
                 "{wrong}"
             );
+
+            // A slow statement is stopped at TIMEOUT, whatever it is (MySQL's
+            // own limit covers only SELECT), and says why.
+            let slow = match engine {
+                Engine::Mysql => "DO SLEEP(30);\nSELECT 1;",
+                _ => "DO $$ BEGIN PERFORM pg_sleep(30); END $$;\nSELECT 1;",
+            };
+            let started = std::time::Instant::now();
+            let timed_out = check_query(slow).await;
+            assert!(started.elapsed() < TIMEOUT * 2 + Duration::from_secs(5), "{extension}");
+            for run in timed_out.as_array().unwrap() {
+                assert!(run["message"].as_str().unwrap().contains("longer than"), "{extension}: {run}");
+            }
+
+            // Stop ends the whole check, not just the case running.
+            let started = std::time::Instant::now();
+            let (stopped, _) = tokio::join!(check_query(slow), async {
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                servers.interrupt().await.unwrap();
+            });
+            assert!(started.elapsed() < Duration::from_secs(5), "{extension}");
+            assert!(stopped.as_array().unwrap().iter().all(|run| run["message"] == "Stopped."), "{stopped}");
+
+            // More rows than come back can't be checked (3 students, 3^7 rows).
+            let many = check_query(
+                "SELECT 1 FROM students a, students b, students c, students d, students e, \
+                 students f, students g;",
+            )
+            .await;
+            assert!(many[0]["message"].as_str().unwrap().contains("2187 rows"), "{many}");
+            assert_eq!(many[1]["kind"], "rows", "{extension}");
 
             let nothing = check_query("CREATE TABLE t (x INT);").await;
             assert_eq!(
