@@ -115,6 +115,33 @@ impl Session {
         })
     }
 
+    /// A session of its own in `database`, made if it isn't there yet, for
+    /// SQL practice: a check never changes what the shared session uses.
+    pub async fn open_practice(&self, database: &str) -> Result<Session, String> {
+        let password = self.password.as_deref();
+        let could_not = |e: tokio_postgres::Error| format!("Could not set up practice: {e}");
+        let (client, _) = open(self.port, password, FIRST_DATABASE).await.map_err(could_not)?;
+        let exists = client
+            .query_opt("SELECT 1 FROM pg_database WHERE datname = $1", &[&database])
+            .await
+            .map_err(could_not)?
+            .is_some();
+        if !exists {
+            let sql = format!("CREATE DATABASE \"{}\"", database.replace('"', "\"\""));
+            client.batch_execute(&sql).await.map_err(could_not)?;
+        }
+        drop(client);
+        let (client, notices) = open(self.port, password, database).await.map_err(could_not)?;
+        Ok(Session {
+            port: self.port,
+            password: self.password.clone(),
+            database: database.into(),
+            client: Some(client),
+            notices,
+            gate: Arc::default(),
+        })
+    }
+
     pub async fn reconnect(&mut self) -> Result<(), String> {
         if self.client.as_ref().is_some_and(|client| !client.is_closed()) {
             return Ok(());

@@ -35,6 +35,7 @@ import {
   BookCheckIcon,
   CodeXmlIcon,
   DatabaseIcon,
+  FlaskConicalIcon,
   PlusIcon,
   MoonIcon,
   RefreshCwIcon,
@@ -44,7 +45,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { useTheme } from "@/hooks/use-theme";
 import logo from "@/assets/logo.png";
 
-export type View = "Programs" | "Database" | "Sync" | "Practice" | "Jobs";
+export type View = "Programs" | "Database" | "Sync" | "Practice" | "Jobs" | "SQL";
 
 const data: { navMain: { title: View; icon: React.ReactNode }[] } = {
   navMain: [
@@ -59,6 +60,9 @@ const data: { navMain: { title: View; icon: React.ReactNode }[] } = {
     { title: "Practice", icon: <BookCheckIcon /> },
     // Openings to search and apply to. Also takes the whole main area.
     { title: "Jobs", icon: <BriefcaseBusinessIcon /> },
+    // Temporary: SQL questions with dummy data, while their screen is built.
+    // They move into Practice once they run.
+    { title: "SQL", icon: <FlaskConicalIcon /> },
   ],
 };
 

@@ -120,6 +120,7 @@ pub fn run() {
             sql::stop_queries,
             sql::list_tables,
             sql::table_rows,
+            sql::practice::check_sql_practice,
             sync::sync_status,
             sync::sync_now,
             sync::sync_practice,
